@@ -1,0 +1,92 @@
+{
+ "comment": "Generic shape rules + sha256 of exact known-private strings. No raw values here; add new private tokens by appending sha256(lower(value)). Shape rules (PUBLIC-AUDIT §3): email/phone/international-number forms, labelled 17-19 digit platform IDs, credential assignments with nonempty values, concrete home-user directory components. credential-value hits for exactly documented synthetic test values are skipped via allow_values below; empty values are never hits.",
+ "regex": [
+  {
+   "id": "cgnat-ipv4",
+   "pattern": "\\b100\\.(?:6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\\.\\d{1,3}\\.\\d{1,3}\\b"
+  },
+  {
+   "id": "tailnet-domain",
+   "pattern": "\\b[A-Za-z0-9._-]+\\.ts\\.net\\b"
+  },
+  {
+   "id": "session-slug-shape",
+   "pattern": "\\b\\d{8}_\\d{6}_[0-9a-f]{8}\\b"
+  },
+  {
+   "id": "email-shape",
+   "pattern": "[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\\.[A-Za-z0-9-]+)+"
+  },
+  {
+   "id": "phone-shape",
+   "pattern": "(?<![\\w.])\\+\\d{1,2}(?:[ .()\\t-]*\\d{2,4}){3,}"
+  },
+  {
+   "id": "platform-id-labelled",
+   "pattern": "(?i)\\b(?:discord|snowflake|guild|channel|webhook)(?:[ _-]?id)?s?\\b(?:[\\s_-]+(?:id|channel|guild|user|member|message|server))?\\b[ \\t:=#_-]*\\d{17,19}(?![0-9])|\\b(?:discord|snowflake)(?:[\\s_-]+(?:id|channel|guild|user|member|message|server))?\\b[ \\t:=#_-]*\\d{17,19}(?![0-9])"
+  }
+ ],
+ "extract": [
+  {
+   "id": "home-user",
+   "pattern": "/home/([A-Za-z0-9._-]+)",
+   "group": 1
+  },
+  {
+   "id": "windows-user-path",
+   "pattern": "(?i)\\b[a-z]:[/\\\\]{1,2}users[/\\\\]+([^\\\\/\"'<>|?*\\s]+)",
+   "group": 1
+  },
+  {
+   "id": "credential-value",
+   "pattern": "(?m)^[ \\t]*(?:export[ \\t]+)?[A-Z0-9_]*(?:KEY|SECRET|TOKEN|PASSWD|PASSWORD|CREDENTIAL)[A-Z0-9_]*[ \\t]*=[ \\t]*(\"[^\"\\n]*\"|'[^'\\n]*'|[^\\s#\"']+)?",
+   "group": 1
+  },
+  {
+   "id": "ipv4-exact",
+   "pattern": "\\b(?:\\d{1,3}\\.){3}\\d{1,3}\\b"
+  },
+  {
+   "id": "fqdn",
+   "pattern": "\\b[A-Za-z0-9][A-Za-z0-9._-]*\\.[A-Za-z]{2,}\\b"
+  },
+  {
+   "id": "session-slug",
+   "pattern": "\\b\\d{8}_\\d{6}_[0-9a-f]{8}\\b"
+  }
+ ],
+ "allow_values": [
+  {
+   "value_sha256": "d985e9a9c2ab37434ab5f22d37c9bd37b80dc280edc65a340f7986707592e40c",
+   "reason": "scripts/runtime_config.py: constant holding the NAME of the env var, not a secret value"
+  },
+  {
+   "value_sha256": "b5a7320179fdb1d42ee54dcd12cf1a0f07c9f7ab6ed475a9f4f034df7debfca1",
+   "reason": "web/test_serve_activity.py: synthetic literal test key (never a real credential)"
+  },
+  {
+   "value_sha256": "a80947a0adcf8221a13e779b987b274f97bd4c4a54ad15acd579b2a9afb0e924",
+   "reason": "web/test_serve_memories.py: synthetic literal test key (never a real credential)"
+  },
+  {
+   "value_sha256": "0d62f396c1317066f55a96086517047c737087c61eb2bf016b72e6298927b15b",
+   "reason": "web/test_serve_skills.py: synthetic literal test key (never a real credential)"
+  },
+  {
+   "value_sha256": "e5265e7d3528fa432155dd0dcdc8e33cd4377c58c15fc044d6b2217d18394acf",
+   "reason": "tools/compat_probe_cases/offline.py: documented compat-probe-only dummy key"
+  }
+ ],
+ "hashes": [
+  "00b734b064ffc96c0f11466b11ff33006a7b37d7bc4562d6087b2090ec2c4fa0",
+  "119bbc444e3a4ad4e3915b5d7b927b6f4899f8674277a7836e8d8d100dc4341f",
+  "14c29d4b4bd37d7a19419e2bd6104844935bfd3e8d137abb4a7613f0e6bf33cb",
+  "1660cd7ef1bbdf43670f8cd117905c6605aedb3c38a49c520744c9fbaba6f046",
+  "23167f46c84de022110c6d1a412d17d9fbc481c7c4b1e2c721c9568ac7a026a3",
+  "76d6155cdd7e46bb2e95ca2e7f71294fd1e955c98a3f6d37c08c9c8be8f85d1f",
+  "7fddd7e34fe4b5e813b8c171ea292179c00aa15618b0ef7faf3ef68277fbec46",
+  "9d74932bdb6f21dc7ab21d6fc5260f474e0d538571fba7a82b74ffe47e6f9a10",
+  "d51631f18ece53a1601313ba8a49fc60734a0f138111e0b25322946ea708ec20",
+  "f08395b9f6c3f518e7aeadcffe74e8e47c5760cd21d5608a18d60d8e54230095"
+ ]
+}

@@ -1,0 +1,59 @@
+{
+ "data": [
+  {
+   "id": "301",
+   "session_id": "fixture",
+   "role": "user",
+   "content": "",
+   "tool_calls": null,
+   "tool_call_id": null,
+   "tool_name": null,
+   "timestamp": 1700000001.0,
+   "display_kind": "hidden"
+  },
+  {
+   "id": "302",
+   "session_id": "fixture",
+   "role": "assistant",
+   "content": "先存進 memory 再收尾。",
+   "tool_calls": [
+    {
+     "id": "call-c",
+     "call_id": "call-c",
+     "type": "function",
+     "function": {
+      "name": "memory",
+      "arguments": "{\"action\": \"add\"}"
+     }
+    }
+   ],
+   "tool_call_id": null,
+   "tool_name": null,
+   "timestamp": 1700000002.0,
+   "display_kind": null,
+   "reasoning": "synthetic narration reasoning"
+  },
+  {
+   "id": "303",
+   "session_id": "fixture",
+   "role": "tool",
+   "content": "[memory] add ok",
+   "tool_calls": null,
+   "tool_call_id": "call-c",
+   "tool_name": "memory",
+   "timestamp": 1700000003.0,
+   "display_kind": null
+  },
+  {
+   "id": "304",
+   "session_id": "fixture",
+   "role": "assistant",
+   "content": "全部搞定",
+   "tool_calls": null,
+   "tool_call_id": null,
+   "tool_name": null,
+   "timestamp": 1700000004.0,
+   "display_kind": null
+  }
+ ]
+}

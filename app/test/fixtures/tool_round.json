@@ -1,0 +1,58 @@
+{
+ "data": [
+  {
+   "id": "101",
+   "session_id": "fixture",
+   "role": "user",
+   "content": "run the fixture",
+   "tool_calls": null,
+   "tool_call_id": null,
+   "tool_name": null,
+   "timestamp": 1700000001.0,
+   "display_kind": null
+  },
+  {
+   "id": "102",
+   "session_id": "fixture",
+   "role": "assistant",
+   "content": "",
+   "tool_calls": [
+    {
+     "id": "call-a",
+     "call_id": "call-a",
+     "type": "function",
+     "function": {
+      "name": "terminal",
+      "arguments": "{\"command\": \"printf fixture\"}"
+     }
+    }
+   ],
+   "tool_call_id": null,
+   "tool_name": null,
+   "timestamp": 1700000002.0,
+   "display_kind": null
+  },
+  {
+   "id": "103",
+   "session_id": "fixture",
+   "role": "tool",
+   "content": "fixture",
+   "tool_calls": null,
+   "tool_call_id": "call-a",
+   "tool_name": "terminal",
+   "timestamp": 1700000003.0,
+   "display_kind": null
+  },
+  {
+   "id": "104",
+   "session_id": "fixture",
+   "role": "assistant",
+   "content": "done: fixture",
+   "tool_calls": null,
+   "tool_call_id": null,
+   "tool_name": null,
+   "timestamp": 1700000004.0,
+   "display_kind": null
+  }
+ ]
+}
