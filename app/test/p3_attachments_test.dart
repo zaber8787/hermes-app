@@ -2,8 +2,12 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:crypto/crypto.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_app/l10n/message_key.dart';
+import 'package:hermes_app/l10n/ui_message.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
+import 'package:hermes_app/l10n/app_strings.dart';
+import 'package:hermes_app/l10n/app_locale.dart';
 import 'package:hermes_app/features/attachments/attachment.dart';
 import 'package:hermes_app/features/attachments/attachment_controller.dart';
 import 'package:hermes_app/features/settings/local_store.dart';
@@ -101,7 +105,7 @@ void main() {
     ]);
     final c = AttachmentController(repo, store, 's');
     await expectLater(c.prepare('text'), throwsA(isA<ApiException>()));
-    expect(c.error, contains('未啟用'));
+    expect((c.error! as UiLocal).key, MessageKey.apiM015);
     expect(uploads, 0);
     expect(store.attachments(repo.baseUrl, 's').single.localPath, file.path);
     expect(await file.exists(), isTrue);
@@ -118,7 +122,8 @@ void main() {
             isA<ApiException>()
                 .having((e) => e.status, 'status', status)
                 .having(
-                  (e) => e.message,
+                  (e) =>
+                      AppStrings.forLocale(AppLocale.zhHant).render(e.uiMessage),
                   'safe Chinese',
                   allOf(isNot(contains('SECRET')), contains('附件')),
                 ),
@@ -204,9 +209,9 @@ void main() {
       repo.uploadAttachment(StreamAttachmentSource(() => file.openRead()), 'note.txt'),
       throwsA(
         isA<ApiException>().having(
-          (e) => e.message,
-          'message',
-          contains('校驗失敗'),
+          (e) => (e.uiMessage as UiLocal).key,
+          'uiMessage.key',
+          MessageKey.apiM025,
         ),
       ),
     );
@@ -221,9 +226,9 @@ void main() {
       repo.downloadAttachment(id),
       throwsA(
         isA<ApiException>().having(
-          (e) => e.message,
-          'message',
-          contains('校驗失敗'),
+          (e) => (e.uiMessage as UiLocal).key,
+          'uiMessage.key',
+          MessageKey.apiM026,
         ),
       ),
     );

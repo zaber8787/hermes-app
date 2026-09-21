@@ -1,4 +1,13 @@
+import '../l10n/app_strings.dart';
+import '../l10n/message_key.dart';
+import '../l10n/ui_message.dart';
 import 'message.dart';
+
+/// Display-only untitled fallback (I18N-PLAN §4.4). Titles themselves stay
+/// RAW in storage/models: a server title literally equal to an old fallback
+/// is server data and is never rewritten here.
+String displaySessionTitle(AppStrings strings, String raw) =>
+    raw.isEmpty ? strings.resolve(MessageKey.sessionsUntitled) : raw;
 
 class Session {
   const Session({
@@ -18,7 +27,7 @@ class Session {
     final start = (json['started_at'] as num?)?.toDouble() ?? 0;
     return Session(
       id: textOf(json['id']),
-      title: textOf(json['title']).isEmpty ? '未命名對話' : textOf(json['title']),
+      title: textOf(json['title']),
       count: (json['message_count'] as num?)?.toInt() ?? 0,
       startedAt: start,
       activity:
@@ -40,7 +49,7 @@ class Session {
   );
   Session withTitle(String newTitle) => Session(
     id: id,
-    title: newTitle.isEmpty ? '未命名對話' : newTitle,
+    title: newTitle,
     count: count,
     startedAt: startedAt,
     activity: activity,
@@ -79,20 +88,21 @@ const essentialSkillNames = {'hermes-agent'};
 
 /// gateway 內建、app 沒實作的指令：原文直通給模型（api_server 不做 slash
 /// 攔截，模型看得到 slash 語意會解釋/代辦）。列進清單與放行，避免指令
-/// 「看不到也不能用」。
-const gatewayPassthroughCommands = <(String, String)>[
-  ('help', '所有可用指令說明'),
-  ('sessions', '列出對話'),
-  ('resume', '接回某個對話'),
-  ('title', '修改對話標題'),
-  ('compress', '壓縮脈絡'),
-  ('retry', '重跑最後一輪'),
-  ('usage', 'token 用量'),
-  ('memory', '記憶相關'),
-  ('skills', '技能清單'),
-  ('approvals', '審核模式'),
-  ('verbose', '詳細輸出'),
-  ('version', '伺服器版本'),
+/// 「看不到也不能用」。Descriptions are catalog keys (I18N-PLAN §4.4): the
+/// slash names stay literal; each description resolves at render time.
+const gatewayPassthroughCommands = <(String, MessageKey)>[
+  ('help', MessageKey.sessionM001),
+  ('sessions', MessageKey.sessionM002),
+  ('resume', MessageKey.sessionM003),
+  ('title', MessageKey.sessionM004),
+  ('compress', MessageKey.sessionM005),
+  ('retry', MessageKey.sessionM006),
+  ('usage', MessageKey.sessionM007),
+  ('memory', MessageKey.sessionM008),
+  ('skills', MessageKey.sessionM009),
+  ('approvals', MessageKey.sessionM010),
+  ('verbose', MessageKey.sessionM011),
+  ('version', MessageKey.sessionM012),
 ];
 
 /// app 端攔下執行的指令名（chat_page 先行處理；若落到 rewrite 代表用法
@@ -119,7 +129,9 @@ String rewriteSkills(String input, List<Skill> skills) {
   while (i < tokens.length && tokens[i].startsWith('/')) {
     final name = tokens[i].substring(1);
     if (appHandledCommands.contains(name)) {
-      throw const FormatException('此指令由介面端處理，不能與 skills 堆疊或當訊息送出。');
+      throw const AppFormatException(
+        UiMessage.local(MessageKey.sessionM013),
+      );
     }
     // 不是 skill 名稱：gateway 內建指令原文直通（api_server 不做 slash 攔截，
     // 模型看得到 slash 語意會解釋/代辦）；對不上的當錯字擋掉。
@@ -128,15 +140,24 @@ String rewriteSkills(String input, List<Skill> skills) {
           gatewayPassthroughCommands.any((c) => c.$1 == name)) {
         return trimmed;
       }
-      throw FormatException('未知指令：/$name');
+      throw AppFormatException(
+        UiMessage.local(MessageKey.sessionM014, args: {'name': name}),
+      );
     }
     names.add(name);
-    if (names.length > 5) throw const FormatException('最多堆疊 5 個 skills。');
+    if (names.length > 5) {
+      throw const AppFormatException(
+        UiMessage.local(MessageKey.sessionM015),
+      );
+    }
     i++;
   }
   final args = tokens.skip(i).join(' ');
   return names
       .map(
+        // i18n-exempt: protocol prompt (model-facing bytes, identical in
+        // both locales) — see I18N-PLAN §5.
+        // i18n-exempt
         (name) =>
             '[用戶明確 invoke skill：$name。請用 skill_view 載入該 skill 並遵循其指示。使用者指令：$args]',
       )

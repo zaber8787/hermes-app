@@ -6,6 +6,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
 import 'package:hermes_app/api/transport.dart';
 import 'package:hermes_app/api/transport_io.dart';
+import 'package:hermes_app/l10n/message_key.dart';
+import 'package:hermes_app/l10n/ui_message.dart';
 
 /// AUDIT-10 regression: application-layer deadlines on the IO transport.
 /// Real loopback sockets — a peer that accepts but never answers headers,
@@ -80,9 +82,9 @@ void main() {
       repo.runStatus('r1'),
       throwsA(
         isA<ApiException>().having(
-          (e) => e.message,
-          'message',
-          contains('逾時'),
+          (e) => (e.uiMessage as UiLocal).key,
+          'uiMessage.key',
+          MessageKey.apiM005,
         ),
       ),
     );
@@ -134,9 +136,9 @@ void main() {
       repo.runStatus('r1'),
       throwsA(
         isA<ApiException>().having(
-          (e) => e.message,
-          'message',
-          contains('資料未傳完'),
+          (e) => (e.uiMessage as UiLocal).key,
+          'uiMessage.key',
+          MessageKey.apiM008,
         ),
       ),
     );

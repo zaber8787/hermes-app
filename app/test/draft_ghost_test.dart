@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/localized_app.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
@@ -62,7 +64,7 @@ void main() {
 
   Widget app(Session session) => UncontrolledProviderScope(
     container: container,
-    child: MaterialApp(home: ChatPage(session: session)),
+    child: localizedWrap(ChatPage(session: session)),
   );
 
   final sessionA = Session(

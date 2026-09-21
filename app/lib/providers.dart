@@ -5,9 +5,14 @@ import 'package:flutter_riverpod/legacy.dart';
 import 'api/hermes_repository.dart';
 import 'features/settings/local_store.dart';
 import 'features/chat/chat_controller.dart';
+import 'l10n/message_key.dart';
 import 'models/session.dart';
 import 'features/attachments/attachment_controller.dart';
 import 'features/chat/viewers.dart';
+
+// The locale state lives in l10n/locale_provider.dart; re-exported here so
+// every surface imports providers.dart as before (network graph untouched).
+export 'l10n/locale_provider.dart';
 
 final localStoreProvider = Provider<LocalStore>(
   (ref) => throw UnimplementedError(),
@@ -36,7 +41,7 @@ final repositoryProvider = Provider<HermesRepository>((ref) {
 });
 final compatibilityProvider = FutureProvider<void>((ref) async {
   if (!ref.watch(settingsProvider).configured) {
-    throw const ApiException('請先設定有效 Server URL 與 API key');
+    throw const ApiException.local(MessageKey.connectionM001);
   }
   await ref.watch(repositoryProvider).checkCapabilities();
 });

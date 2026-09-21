@@ -3,6 +3,9 @@ import 'dart:convert';
 import 'package:flutter/widgets.dart';
 import '../../diagnostics/diagnostics.dart';
 import '../../api/hermes_repository.dart';
+import '../../l10n/app_strings.dart';
+import '../../l10n/message_key.dart';
+import '../../l10n/ui_message.dart';
 import '../../models/message.dart';
 import '../../models/session_activity.dart';
 import '../settings/local_store.dart';
@@ -10,6 +13,48 @@ import 'live_turn.dart';
 import 'viewers.dart';
 
 enum ChatPhase { idle, sending, recovering, uncertain }
+
+/// Provenance of the stop-notice banner (I18N-PLAN §4.4). The stored JSON
+/// stop record keeps its exact schema; this enum replaces the old
+/// "does it start with '{'" display heuristic, and [stopNoticeMessage] is a
+/// descriptor resolved at render time — never a stored translation.
+enum StopNotice {
+  none,
+
+  /// A persisted record adopted at construction (before this session's
+  /// actions): the page shows the generic "you asked to stop" banner.
+  previousStopRecord,
+
+  /// Stop POST issued, server confirmation outstanding.
+  requested,
+
+  /// Terminal reached and the stop was the user's own hand.
+  accepted,
+
+  /// The run ended by itself (server-side cancel).
+  serverEnded,
+
+  /// A connection drop may have left the previous turn unfinished.
+  lost,
+
+  /// The gateway forgot the run; history was reconciled instead.
+  notFound,
+
+  /// The stop request itself failed; the error rides as a nested arg.
+  failed,
+}
+
+/// Projection row for a remote observation (I18N-PLAN §4.4): the raw
+/// observed Message plus a SEPARATE hint kind. The localized note never
+/// enters durable Message content, so fold, fingerprint, copied payload,
+/// draft and POST bytes stay locale-independent.
+enum RemoteHint { none, unconfirmed, truncated }
+
+class RemoteMessageRow {
+  const RemoteMessageRow(this.message, [this.hint = RemoteHint.none]);
+  final Message message;
+  final RemoteHint hint;
+}
 
 class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   ChatController(
@@ -22,8 +67,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     this.leaseInterval = const Duration(seconds: 15),
   }) : wait = wait ?? ((duration) => Future<void>.delayed(duration)),
        serverUrl = serverUrl ?? repo.baseUrl,
-       detailed = store.detailed(serverUrl ?? repo.baseUrl, sid),
-       stopNotice = store.stopRecord(serverUrl ?? repo.baseUrl, sid) {
+       detailed = store.detailed(serverUrl ?? repo.baseUrl, sid) {
+    // A persisted stop record from BEFORE this session shows the generic
+    // provenance banner; its JSON schema and contents are data, untouched.
+    if (store.stopRecord(serverUrl ?? repo.baseUrl, sid) != null) {
+      stopNoticeKind = StopNotice.previousStopRecord;
+    }
     WidgetsBinding.instance.addObserver(this);
     // AUDIT-16: join the alive ledger the idle-LRU eviction pass reads.
     ChatViewers.register(sid, this);
@@ -197,7 +246,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       }
     } catch (_) {
       if (_owns(token)) {
-        error = '回前景核對失敗，請檢查連線並重新核對。';
+        error = const UiMessage.local(MessageKey.chatStateM001);
         if (busy) unawaited(recover());
       }
     }
@@ -205,7 +254,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   int _offset = 0;
-  String? error, stopNotice;
+
+  /// Locale-independent descriptor state (I18N-PLAN §4.3): UI resolves it
+  /// with the CURRENT locale; overlays resolve at build, never pre-rendered.
+  UiMessage? error;
+  StopNotice stopNoticeKind = StopNotice.none;
+  UiMessage? stopNoticeMessage;
   ChatPhase phase = ChatPhase.idle;
   LiveTurn? live;
   String? pendingInput;
@@ -265,7 +319,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   DateTime? lastActivitySuccess;
   ActivityFreshness activityFreshness = ActivityFreshness.unknown;
   HistoryRevision? _appliedHistoryRevision, _pendingHistoryRev;
-  final _remoteRows = <String, Message>{}; // epoch+obs widget key -> row
+  final _remoteRows = <String, RemoteMessageRow>{}; // epoch+obs key -> row
   final _claimedRows = <String, String>{}; // observation_id -> durable row id
 
   /// Public entry for /status's retry button and every internal caller.
@@ -325,7 +379,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       // page; the claim ledger (obs -> durable id) starts over.
       _appliedHistoryRevision = null;
       _claimedRows.clear();
-      error = '歷史已更新（工作階段歷史被改寫），已重新載入最新頁面。';
+      error = const UiMessage.local(MessageKey.chatStateM002);
     }
     final remoteGone =
         prev != null &&
@@ -425,14 +479,18 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         continue;
       }
       final raw = text ?? '';
-      final note = r.isTerminal
-          ? '⋯（尚未於歷史確認）'
-          : (r.user!.truncated ? '⋯（內容較長，歷史同步後顯示全文）' : '');
-      _remoteRows['remote:${snap.serverEpoch}:${r.observationId}'] = Message(
-        id: 'remote:${snap.serverEpoch}:${r.observationId}',
-        role: 'user',
-        content: note.isEmpty ? raw : '$raw $note',
-      );
+      final hint = r.isTerminal
+          ? RemoteHint.unconfirmed
+          : (r.user!.truncated ? RemoteHint.truncated : RemoteHint.none);
+      _remoteRows['remote:${snap.serverEpoch}:${r.observationId}'] =
+          RemoteMessageRow(
+            Message(
+              id: 'remote:${snap.serverEpoch}:${r.observationId}',
+              role: 'user',
+              content: raw,
+            ),
+            hint,
+          );
     }
   }
 
@@ -440,6 +498,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// drop the platform's attachment-tag decoration. Text is only ever
   /// COMPARED with this form; nothing rendered or sent is altered.
   static String _foldObservationText(String s) =>
+      // i18n-exempt: history-matching regex (cross-device protocol) — see
+      // I18N-PLAN §5.
       s.replaceAll(RegExp(r'\[附件: [^\]]*\]'), '').replaceAll(
         RegExp(r'\s+'),
         ' ',
@@ -447,22 +507,40 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// Remote user rows shown under the timeline (never part of `messages`, so
   /// loadOlder offsets and pendingDelivered fingerprints never see them).
-  List<Message> get remoteRows => _remoteRows.values.toList();
+  /// Raw Message + separate hint (I18N-PLAN §4.4): the localized note is
+  /// rendered at the UI boundary, never stored in the row's content.
+  List<RemoteMessageRow> get remoteRows => _remoteRows.values.toList();
 
-  String remoteRunLabel(ActivityRun r) {
-    final who = r.runId == null
-        ? '同步 API 回合'
+  /// Pure presentation formatter (I18N-PLAN §4.4): accepts AppStrings so
+  /// both the chat banner and /status render the SAME label; raw status and
+  /// run-ID shortening stay literal data.
+  static String formatRemoteRunLabel(AppStrings strings, ActivityRun r) =>
+      strings.render(remoteRunDescriptor(r));
+
+  /// Descriptor twin of [formatRemoteRunLabel] for dialog/SnackBar
+  /// composition — raw status rides as an explicit raw arg.
+  static UiMessage remoteRunDescriptor(ActivityRun r) {
+    final short = r.runId == null
+        ? null
         : 'run ${r.runId!.length > 8 ? r.runId!.substring(0, 8) : r.runId}';
+    final who = r.runId == null
+        ? const UiMessage.local(MessageKey.chatStateM003)
+        : UiMessage.raw(short!);
     final what = !r.statusKnown
-        ? '狀態待確認（${r.status}）'
+        ? UiMessage.local(MessageKey.chatStateM004, args: {'status': r.status})
         : switch (r.status) {
-            'queued' => '排隊中',
-            'running' => '正在執行',
-            'waiting_for_approval' => '等待另一端核准',
-            'stopping' => '停止中',
-            _ => r.status,
+            'queued' => const UiMessage.local(MessageKey.chatStateM005),
+            'running' => const UiMessage.local(MessageKey.chatStateM006),
+            'waiting_for_approval' => const UiMessage.local(
+              MessageKey.chatStateM007,
+            ),
+            'stopping' => const UiMessage.local(MessageKey.chatStateM008),
+            _ => UiMessage.raw(r.status),
           };
-    return '$who：$what';
+    return UiMessage.local(
+      MessageKey.chatStateRunLabel,
+      args: {'who': who, 'what': what},
+    );
   }
 
   // ---- reload recovery (bootstrap) ----------------------------------------
@@ -598,7 +676,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           _watchTimer?.cancel();
           _watchTimer = null;
           phase = ChatPhase.uncertain;
-          error = '背景任務狀態查不到，請「重新核對」確認結果。';
+          error = const UiMessage.local(MessageKey.chatStateM009);
           notifyListeners();
           return;
         }
@@ -612,14 +690,17 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       status = await repo.runStatus(runId);
     } on ApiException catch (e) {
       if (!_owns(token)) return; // stale response: the new turn owns everything
-      if (e.status == 404) {
-        if (_isStoppedRun(runId)) {
-          _watchTimer?.cancel();
-          _watchTimer = null;
-          stopNotice = '已由你停止';
-          await _finish(soft: true, token: token); // AUDIT-05③
-          return;
-        }
+        if (e.status == 404) {
+          if (_isStoppedRun(runId)) {
+            _watchTimer?.cancel();
+            _watchTimer = null;
+            _setStop(
+              StopNotice.accepted,
+              const UiMessage.local(MessageKey.chatStateStoppedByYou),
+            );
+            await _finish(soft: true, token: token); // AUDIT-05③
+            return;
+          }
         // The gateway forgot this run — fall back to a history reconciliation
         // pass, and if no final materialised, tell the user instead of polling
         // a dead id forever.
@@ -634,7 +715,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         if (settled || !_owns(token)) return;
         if (!busy) return;
         phase = ChatPhase.uncertain;
-        error = '背景任務狀態已失蹤，請「重新核對」確認結果。';
+        error = const UiMessage.local(MessageKey.chatStateM010);
         notifyListeners();
       } else {
         _ensurePollTimer(token); // AUDIT-05: transient HTTP keeps polling
@@ -650,7 +731,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         _watchTimer = null;
         _pollCapped = true;
         phase = ChatPhase.uncertain;
-        error = '背景任務進度暫時查不到，請按「重新核對」重試。';
+        error = const UiMessage.local(MessageKey.chatStateM011);
         notifyListeners();
       } else {
         _ensurePollTimer(token);
@@ -664,9 +745,14 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _watchTimer?.cancel();
       _watchTimer = null;
       if (state == 'cancelled') {
-        stopNotice = _stopRequestedFor(runId)
-            ? '已由你停止'
-            : '該回合已由伺服器結束';
+        _setStop(
+          _stopRequestedFor(runId) ? StopNotice.accepted : StopNotice.serverEnded,
+          UiMessage.local(
+            _stopRequestedFor(runId)
+                ? MessageKey.chatStateStoppedByYou
+                : MessageKey.chatStateM012,
+          ),
+        );
       }
       await _finish(soft: true, token: token); // AUDIT-05③
       return;
@@ -750,7 +836,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       turn.approval = null;
       turn.approvalChoice = choice;
     } catch (e) {
-      if (_owns(token)) turn.approvalError = '回覆失敗：$e';
+      if (_owns(token)) {
+        turn.approvalError = UiMessage.local(
+          MessageKey.chatStateM013,
+          args: {'error': messageForError(e)},
+        );
+      }
     } finally {
       approvalBusy = false;
       notifyListeners();
@@ -788,8 +879,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void dismissStopNotice() {
-    stopNotice = null;
+    _setStop(StopNotice.none);
     notifyListeners();
+  }
+
+  void _setStop(StopNotice kind, [UiMessage? message]) {
+    stopNoticeKind = kind;
+    stopNoticeMessage = message;
   }
 
   Future<void> toggleDetail() async {
@@ -807,7 +903,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     try {
       await _latest(token);
     } catch (e) {
-      error = '無法載入歷史：$e';
+      error = UiMessage.local(
+        MessageKey.chatStateM014,
+        args: {'error': messageForError(e)},
+      );
     } finally {
       loading = false;
       notifyListeners();
@@ -872,7 +971,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       await _latest();
     } catch (e) {
       loading = false;
-      error = '無法載入歷史：$e';
+      error = UiMessage.local(
+        MessageKey.chatStateM014,
+        args: {'error': messageForError(e)},
+      );
       notifyListeners();
       return;
     } finally {
@@ -932,7 +1034,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         _cancelBootstrapWaiting();
         phase = ChatPhase.uncertain;
         // 保留 pending：逾時不等於中斷，之後「重新核對」可再觀察一輪。
-        error = '結果尚未確認，可「重新核對」或重送';
+        error = const UiMessage.local(MessageKey.chatStateM015);
         notifyListeners();
         return;
       }
@@ -948,7 +1050,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
               // A stopped run is never resurrected by observation: the user
               // ended it, the gateway already forgot it. Settle now instead
               // of parking the page in busy forever (input locked).
-              stopNotice = '已由你停止';
+              _setStop(
+                StopNotice.accepted,
+                const UiMessage.local(MessageKey.chatStateStoppedByYou),
+              );
               await _bootstrapSettled(token);
               return;
             }
@@ -958,14 +1063,14 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
             return;
           }
           if (++_bootFails > 12) {
-            error = '背景任務進度暫時查不到，回本頁或下拉重試。';
+            error = const UiMessage.local(MessageKey.chatStateM016);
             notifyListeners();
           }
           return; // Transient: retry on the next tick.
         } catch (_) {
           if (!_owns(token) || epoch != _recoveryEpoch) return;
           if (++_bootFails > 12) {
-            error = '背景任務進度暫時查不到，回本頁或下拉重試。';
+            error = const UiMessage.local(MessageKey.chatStateM016);
             notifyListeners();
           }
           return;
@@ -982,16 +1087,31 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         if (state == 'cancelled') {
           // A cancelled run with this session's stop record is the user's
           // hand, not the server's own end — keep the provenance.
-          stopNotice = _stopRequestedFor(runId)
-              ? '已由你停止'
-              : '該回合已由伺服器結束';
+          _setStop(
+            _stopRequestedFor(runId)
+                ? StopNotice.accepted
+                : StopNotice.serverEnded,
+            UiMessage.local(
+              _stopRequestedFor(runId)
+                  ? MessageKey.chatStateStoppedByYou
+                  : MessageKey.chatStateM012,
+            ),
+          );
           await _bootstrapSettled(token);
           return;
         }
         if (state == 'failed') {
           await _bootstrapSettled(token);
           if (!_owns(token)) return;
-          error = '背景任務失敗：${(status['error'] as String?) ?? '打開 App 看細節'}';
+          // Server-provided error text stays raw; only the wrapper is local.
+          error = UiMessage.local(
+            MessageKey.chatStateM018,
+            args: {
+              'detail': status['error'] is String
+                  ? UiMessage.raw(status['error'] as String)
+                  : const UiMessage.local(MessageKey.chatStateM017),
+            },
+          );
           notifyListeners();
           return;
         }
@@ -1061,7 +1181,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _offset += page.length; // Raw page size, NOT de-duplicated rendered rows.
       hasOlder = page.length == 200;
     } catch (e) {
-      error = '較早訊息載入失敗：$e';
+      error = UiMessage.local(
+        MessageKey.chatStateM019,
+        args: {'error': messageForError(e)},
+      );
     } finally {
       loadingOlder = false;
       notifyListeners();
@@ -1086,7 +1209,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final turn = live!;
     phase = ChatPhase.sending;
     error = null;
-    stopNotice = null;
+    _setStop(StopNotice.none);
     _lastEventAt = DateTime.now();
     _pendingStart = true; // claim in flight: detach defers to the mint point
     _detachArmed = false;
@@ -1115,7 +1238,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         live = null;
         pendingInput = null;
         phase = ChatPhase.idle;
-        error = '這個對話已在另一個分頁執行中；本頁不會重複送出。';
+        error = const UiMessage.local(MessageKey.chatStateM020);
         notifyListeners();
       }
       return;
@@ -1185,7 +1308,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           if (_disposed || !identical(_turnToken, token)) return;
           if (!held) {
             _losePendingOwnership(
-              '此對話的共用紀錄已由其他分頁接手，本頁轉為唯讀觀察。',
+              const UiMessage.local(MessageKey.chatStateM021),
             );
           }
         }
@@ -1193,7 +1316,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       }
       if (_disposed || !identical(live, turn)) return;
       if (_detached) return; // socket cut on purpose; _pollRun owns the outcome
-      if (!turn.completed) throw const ApiException('串流提早結束');
+      if (!turn.completed) {
+        throw const ApiException.local(MessageKey.chatStateM022);
+      }
       await _finish(token: token);
     } on ApiException catch (e) {
       if (_disposed || !identical(live, turn) || _detached) return;
@@ -1201,7 +1326,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         // 4xx = the server rejected the POST outright: nothing to recover.
         // Settle through the gate so the send gate stays shut until the
         // pending record is really cleared (AUDIT-12/04).
-        await _settleTurn(token, errorText: '訊息未送出：$e');
+        await _settleTurn(
+          token,
+          errorMessage: UiMessage.local(
+            MessageKey.chatStateM023,
+            args: {'error': e.uiMessage},
+          ),
+        );
         // Keep input visible to the user; no automatic retry of a mutation.
       } else {
         await recover();
@@ -1220,7 +1351,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// watching is server-side truth and keeps streaming — the page just
   /// stops pretending to own the ledger (settle's clear then compares
   /// against `null` and leaves the other tab's record alone).
-  void _losePendingOwnership(String message) {
+  void _losePendingOwnership(UiMessage message) {
     _leaseTimer?.cancel();
     _leaseTimer = null;
     _pendingToken = null;
@@ -1239,7 +1370,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final held = await store.touchPending(serverUrl, sid, token);
     if (_disposed) return;
     if (!held) {
-      _losePendingOwnership('此對話的共用紀錄已由其他分頁接手，本頁轉為唯讀觀察。');
+      _losePendingOwnership(
+        const UiMessage.local(MessageKey.chatStateM021),
+      );
     }
   }
 
@@ -1259,7 +1392,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     await _settleTurn(
       t,
       page: page,
-      errorText: pageError == null ? null : '歷史載入失敗，下拉可重試。',
+      errorMessage: pageError == null
+          ? null
+          : const UiMessage.local(MessageKey.chatStateM024),
     );
   }
 
@@ -1275,7 +1410,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _settleTurn(
     Object? token, {
     List<Message>? page,
-    String? errorText,
+    UiMessage? errorMessage,
   }) async {
     if (_disposed) return;
     if (identical(_settledTurn, token)) {
@@ -1284,7 +1419,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     }
     if (!identical(_turnToken, token)) return; // not my turn anymore: no-op
     _settledTurn = token;
-    final gate = _settleCore(token, page: page, errorText: errorText);
+    final gate = _settleCore(token, page: page, errorMessage: errorMessage);
     _settleGate = gate;
     return gate;
   }
@@ -1292,7 +1427,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> _settleCore(
     Object? token, {
     List<Message>? page,
-    String? errorText,
+    UiMessage? errorMessage,
   }) async {
     // 1) Kill every scheduler/stream of this turn while busy still holds.
     _watchTimer?.cancel();
@@ -1346,7 +1481,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     pendingInput = null;
     _turnToken = null; // retire every late continuation of this turn
     phase = ChatPhase.idle;
-    error = cleanupFailed ? '本機清理未完成，下次進入會自動重試。' : errorText;
+    error = cleanupFailed
+        ? const UiMessage.local(MessageKey.chatStateM025)
+        : errorMessage;
     notifyListeners(); // AUDIT-04: terminals always notify
   }
 
@@ -1373,7 +1510,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     phase = ChatPhase.recovering;
     for (final seconds in [1, 2, 4, 8, 16, 30]) {
       if (!_owns(token) || epoch != _recoveryEpoch) return;
-      error = '連線中斷，${seconds}s 後重連並核對歷史；不會重送訊息。';
+      error = UiMessage.local(
+        MessageKey.chatStateM026,
+        args: {'seconds': seconds},
+      );
       notifyListeners();
       await wait(Duration(seconds: seconds));
       if (!_owns(token) || epoch != _recoveryEpoch) return;
@@ -1397,7 +1537,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       await store.markLost(serverUrl, sid);
     } catch (_) {}
     if (!_owns(token) || epoch != _recoveryEpoch) return;
-    error = '連線中斷，該回合可能未完成。請「重新核對」確認，或重送訊息。';
+    error = const UiMessage.local(MessageKey.chatStateM027);
     notifyListeners();
   }
 
@@ -1451,10 +1591,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       if (_disposed) return;
       // The final is here: the stale interruption banner must die with the
       // flag (stale-banner defect — clearing lost used to leave the notice).
-      stopNotice = null;
+      _setStop(StopNotice.none);
       return;
     }
-    stopNotice = '上次連線中斷，該回合可能未完成';
+    _setStop(
+      StopNotice.lost,
+      const UiMessage.local(MessageKey.chatStateM028),
+    );
   }
 
   Future<void> retryReconcile() async {
@@ -1522,13 +1665,16 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final token = _turnToken; // stop belongs to a TURN (AUDIT-12)
     final run = activeRunId;
     if (run == null) {
-      error = '目前沒有可停止的進行中回合';
+      error = const UiMessage.local(MessageKey.chatStateM029);
       notifyListeners();
       return false;
     }
     stopBusy = true;
     error = null;
-    stopNotice = '已要求停止，等待伺服器確認';
+    _setStop(
+      StopNotice.requested,
+      const UiMessage.local(MessageKey.chatStateM030),
+    );
     notifyListeners();
     var settled = false; // result known → hand the run to the stopping watch
     try {
@@ -1536,7 +1682,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       if (!identical(_turnToken, token)) return true; // turn settled under us
       await repo.stop(run);
       if (!identical(_turnToken, token)) return true;
-      stopNotice = '已由你停止';
+      _setStop(
+        StopNotice.accepted,
+        const UiMessage.local(MessageKey.chatStateStoppedByYou),
+      );
       await store.saveStop(serverUrl, sid, run, 'accepted');
       if (!identical(_turnToken, token)) return true;
       // A stopped turn is over — the reload-recovery record must die with it,
@@ -1558,19 +1707,34 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         // The gateway forgot the run: nothing to wait for. Settle from
         // history now; do not claim the POST itself killed anything, and do
         // NOT upgrade the record to a confirmed user stop.
-        stopNotice = '任務已不存在，已核對歷史';
+        _setStop(
+          StopNotice.notFound,
+          const UiMessage.local(MessageKey.chatStateM031),
+        );
         await store.clearPending(serverUrl, sid, token: _pendingToken);
         if (identical(_turnToken, token)) stopBusy = false;
         await _settleStoppedRun(token);
         return true;
       } else {
-        stopNotice = '停止未確認：$e';
+        _setStop(
+          StopNotice.failed,
+          UiMessage.local(
+            MessageKey.chatStateM032,
+            args: {'error': messageForError(e)},
+          ),
+        );
       }
     } catch (e) {
       if (!identical(_turnToken, token)) return true;
       // Transport-class failure: pending and the current observation stay
       // untouched; the user may retry. Never write accepted here.
-      stopNotice = '停止未確認：$e';
+      _setStop(
+        StopNotice.failed,
+        UiMessage.local(
+          MessageKey.chatStateM032,
+          args: {'error': messageForError(e)},
+        ),
+      );
     }
     if (identical(_turnToken, token)) stopBusy = false;
     if (settled && identical(_turnToken, token) && live == null && !_detached) {
@@ -1618,7 +1782,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           _watchTimer = null;
           if (busy) {
             phase = ChatPhase.uncertain;
-            error = '停止結果暫時查不到，可「重新核對」或稍後再試。';
+            error = const UiMessage.local(MessageKey.chatStateM033);
             notifyListeners();
           }
         }
@@ -1645,7 +1809,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     if (keepStopSource && _stopRunId != null && _stopRequestedFor(_stopRunId!)) {
       // Terminal reached while a stop request was outstanding: that confirms
       // the user's own hand — surface it instead of a silent/generic notice.
-      stopNotice = '已由你停止';
+      _setStop(
+        StopNotice.accepted,
+        const UiMessage.local(MessageKey.chatStateStoppedByYou),
+      );
     }
     _watchTimer?.cancel(); // stop this owner's ticks before the fetch
     _watchTimer = null;
@@ -1659,7 +1826,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     await _settleTurn(
       token,
       page: page,
-      errorText: refreshFailed ? '已結束，但歷史刷新失敗，下拉可重試。' : null,
+      errorMessage: refreshFailed
+          ? const UiMessage.local(MessageKey.chatStateM034)
+          : null,
     );
   }
 
@@ -1672,7 +1841,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     try {
       await repo.steer(live!.runId!, input.trim());
     } catch (e) {
-      if (_owns(token)) error = '插話失敗：$e';
+      if (_owns(token)) {
+        error = UiMessage.local(
+          MessageKey.chatStateM035,
+          args: {'error': messageForError(e)},
+        );
+      }
       rethrow;
     } finally {
       steerBusy = false;

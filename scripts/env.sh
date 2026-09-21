@@ -12,3 +12,4 @@ export JAVA_HOME="$HERMES_APP_ROOT/toolchain/jdk/usr/lib/jvm/java-21-openjdk-amd
 export GRADLE_USER_HOME="$HERMES_APP_ROOT/toolchain/gradle"
 export PUB_CACHE="$HERMES_APP_ROOT/toolchain/pub-cache"
 export PATH="$HERMES_APP_ROOT/toolchain/flutter/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$JAVA_HOME/bin:$PATH"
+export DART_VM_OPTIONS="--max-vm-size=3072m"  # 13G dart frontend OOM (2026-09-21)

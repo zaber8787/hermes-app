@@ -1,3 +1,5 @@
+import '../../l10n/message_key.dart';
+import '../../l10n/ui_message.dart';
 import '../../models/message.dart';
 
 final artifactIdPattern = RegExp(r'^[0-9a-f]{32}$');
@@ -73,7 +75,9 @@ class AttachmentDraft {
   AttachmentDraft withReceipt(Json receipt) {
     final id = receipt['artifact_id'];
     if (id is! String || !artifactIdPattern.hasMatch(id)) {
-      throw const FormatException('附件收據缺少有效 artifact_id，請重試上傳。');
+      throw const AppFormatException(
+        UiMessage.local(MessageKey.attachmentM001),
+      );
     }
     return AttachmentDraft(
       localPath: localPath,
@@ -88,11 +92,14 @@ String composeAttachmentInput(String text, List<AttachmentDraft> attachments) {
   if (attachments.any(
     (a) => a.artifactId == null || !artifactIdPattern.hasMatch(a.artifactId!),
   )) {
-    throw const FormatException('附件尚未上傳完成。');
+    throw const AppFormatException(
+      UiMessage.local(MessageKey.attachmentM002),
+    );
   }
   return [
     if (text.trim().isNotEmpty) text.trim(),
     ...attachments.map(
+      // i18n-exempt: protocol literal (identical in both locales) — see I18N-PLAN §5.
       (a) => '[附件: ${a.artifactId} ${safeFilename(a.filename)}]',
     ),
   ].join('\n');

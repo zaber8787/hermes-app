@@ -1,6 +1,8 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/features/settings/local_store.dart';
+import 'package:hermes_app/l10n/app_locale.dart';
+import 'package:hermes_app/l10n/app_strings.dart';
 import 'package:hermes_app/models/session.dart';
 
 void main() {
@@ -53,8 +55,21 @@ void main() {
       expect(s.title, '新名字');
     });
 
-    test('empty cached title falls back to 未命名對話', () async {
+    test('titles stay raw; the untitled fallback is display-only', () async {
+      // Model/storage never inject a translated string (I18N-PLAN §4.4)…
       expect(Session(id: 'x', title: '', count: 0, startedAt: 0, activity: 0, source: 'api_server').withTitle('').title,
+          '');
+      // …the LIST/HEADER render applies the locale-aware fallback.
+      expect(
+        displaySessionTitle(AppStrings(AppLocale.en), ''),
+        'Untitled conversation',
+      );
+      expect(
+        displaySessionTitle(AppStrings(AppLocale.zhHant), ''),
+        '未命名對話',
+      );
+      // A server title literally equal to the old fallback stays raw:
+      expect(displaySessionTitle(AppStrings(AppLocale.en), '未命名對話'),
           '未命名對話');
     });
 

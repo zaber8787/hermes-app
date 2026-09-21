@@ -2,6 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../api/hermes_repository.dart';
+import '../../l10n/app_strings.dart';
+import '../../l10n/localized_text.dart';
+import '../../l10n/message_key.dart';
+import '../../l10n/ui_message.dart';
 import '../../models/session.dart';
 import '../../providers.dart';
 
@@ -58,35 +62,54 @@ class _ManagementPageState extends ConsumerState<ManagementPage> {
       setState(() => _collapsed[section] = _persisted[section] ?? false);
       ScaffoldMessenger.of(
         context,
-      ).showSnackBar(const SnackBar(content: Text('儲存失敗，摺疊狀態已還原')));
+      ).showSnackBar(
+        const SnackBar(
+          content: LocalizedText(UiMessage.local(MessageKey.managementM001)),
+        ),
+      );
     }
   }
 
-  String _summary<T>(AsyncValue<T> value, String Function(T) f) => value.when(
-    loading: () => '載入中',
-    error: (_, _) => '載入失敗',
+  String _summary<T>(
+    AppStrings strings,
+    AsyncValue<T> value,
+    String Function(T) f,
+  ) => value.when(
+    loading: () => strings.resolve(MessageKey.commonLoading),
+    error: (_, _) => strings.resolve(MessageKey.commonLoadFailed),
     data: f,
   );
 
   @override
   Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
     final server = ref.watch(settingsProvider).url;
     _syncServer(server);
     final models = ref.watch(modelOptionsProvider);
     final skills = ref.watch(skillsProvider);
     return Scaffold(
-      appBar: AppBar(title: const Text('管理')),
+      appBar: AppBar(
+        title: Text(strings.resolve(MessageKey.managementTitle)),
+      ),
       body: ListView(
         padding: const EdgeInsets.all(16),
         children: [
           _Section(
+            // i18n-exempt: section headers are API/product terms kept as-is
+            // in both locales (no catalog keys exist for them).
             title: 'Skills',
             icon: Icons.extension_outlined,
             collapsed: _collapsed['skills'] ?? false,
             summary: _summary(
+              strings,
               skills,
-              (list) =>
-                  '已啟用 ${list.where((s) => s.enabled).length} / 共 ${list.length}',
+              (list) => strings.resolve(
+                MessageKey.managementM002,
+                args: {
+                  'enabled': list.where((s) => s.enabled).length,
+                  'total': list.length,
+                },
+              ),
             ),
             onToggle: () => _toggle('skills'),
             child: const _SkillsBlock(),
@@ -101,8 +124,16 @@ class _ManagementPageState extends ConsumerState<ManagementPage> {
             icon: Icons.memory_outlined,
             collapsed: _collapsed['model'] ?? false,
             summary: _summary(
+              strings,
               models,
-              (c) => '全域目前：${c.global.isEmpty ? '未知' : c.global}',
+              (c) => strings.resolve(
+                MessageKey.managementM003,
+                args: {
+                  'global': c.global.isEmpty
+                      ? const UiMessage.local(MessageKey.commonUnknown)
+                      : c.global,
+                },
+              ),
             ),
             onToggle: () => _toggle('model'),
             child: models.when(
@@ -114,7 +145,16 @@ class _ManagementPageState extends ConsumerState<ManagementPage> {
                   Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      '全域目前：${catalog.global.isEmpty ? '（未知）' : catalog.global}',
+                      strings.resolve(
+                        MessageKey.managementM005,
+                        args: {
+                          'global': catalog.global.isEmpty
+                              ? const UiMessage.local(
+                                  MessageKey.managementM004,
+                                )
+                              : catalog.global,
+                        },
+                      ),
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ),
@@ -123,7 +163,7 @@ class _ManagementPageState extends ConsumerState<ManagementPage> {
                     Padding(
                       padding: const EdgeInsets.only(bottom: 8),
                       child: Text(
-                        '從對話頁開啟才能切換該對話的模型；此處為全域預設模型清單。',
+                        strings.resolve(MessageKey.managementM006),
                         style: Theme.of(context).textTheme.bodySmall,
                       ),
                     ),
@@ -152,8 +192,11 @@ class _ManagementPageState extends ConsumerState<ManagementPage> {
                                     ref.invalidate(modelOptionsProvider);
                                     ScaffoldMessenger.of(context).showSnackBar(
                                       SnackBar(
-                                        content: Text(
-                                          '此對話改用 ${m['model']}',
+                                        content: LocalizedText(
+                                          UiMessage.local(
+                                            MessageKey.managementM007,
+                                            args: {'model': '${m['model']}'},
+                                          ),
                                         ),
                                       ),
                                     );
@@ -161,12 +204,20 @@ class _ManagementPageState extends ConsumerState<ManagementPage> {
                                 } catch (_) {
                                   if (context.mounted) {
                                     ScaffoldMessenger.of(context).showSnackBar(
-                                      const SnackBar(content: Text('換模型失敗')),
+                                      const SnackBar(
+                                        content: LocalizedText(
+                                          UiMessage.local(
+                                            MessageKey.managementM008,
+                                          ),
+                                        ),
+                                      ),
                                     );
                                   }
                                 }
                               },
-                              child: const Text('改用'),
+                              child: Text(strings.resolve(
+                                MessageKey.managementM009,
+                              )),
                             ),
                     ),
                   ),
@@ -203,15 +254,26 @@ class _SkillsBlockState extends ConsumerState<_SkillsBlock> {
     } on ApiException catch (e) {
       if (e.status == 400) setState(() => _lockedByServer.add(s.name));
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('切換失敗：$e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: LocalizedText(
+              UiMessage.local(
+                MessageKey.managementM010,
+                args: {'error': messageForError(e)},
+              ),
+            ),
+          ),
+        );
       }
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('切換失敗')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: LocalizedText(
+              UiMessage.local(MessageKey.managementM011),
+            ),
+          ),
+        );
       }
     } finally {
       if (mounted) setState(() => _toggling.remove(s.name));
@@ -220,6 +282,7 @@ class _SkillsBlockState extends ConsumerState<_SkillsBlock> {
 
   @override
   Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
     final skills = ref.watch(skillsProvider);
     return skills.when(
       loading: () => const _LoadingRow(),
@@ -228,7 +291,11 @@ class _SkillsBlockState extends ConsumerState<_SkillsBlock> {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           Text(
-            '${list.length} 個 skills',
+            strings.resolve(
+              MessageKey.managementM012,
+              args: {'count': list.length},
+              count: list.length,
+            ),
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 8),
@@ -255,7 +322,7 @@ class _SkillsBlockState extends ConsumerState<_SkillsBlock> {
                 if (essential) ...[
                   const SizedBox(height: 6),
                   Text(
-                    '核心 skill：不可停用',
+                    strings.resolve(MessageKey.managementM013),
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ],
@@ -265,7 +332,7 @@ class _SkillsBlockState extends ConsumerState<_SkillsBlock> {
           Padding(
             padding: const EdgeInsets.only(top: 8),
             child: Text(
-              '開關在下個回合生效。',
+              strings.resolve(MessageKey.managementM014),
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
@@ -280,21 +347,24 @@ class _SkillsBlockState extends ConsumerState<_SkillsBlock> {
 class _MemoryBlock extends ConsumerWidget {
   const _MemoryBlock();
 
-  static String _mtime(Object? raw) {
-    if (raw is! num) return '（尚無檔案）';
+  static UiMessage _mtime(Object? raw) {
+    if (raw is! num) return const UiMessage.local(MessageKey.managementM015);
     final t = DateTime.fromMillisecondsSinceEpoch((raw * 1000).round());
     String two(int v) => v.toString().padLeft(2, '0');
-    return '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}';
+    return UiMessage.raw(
+      '${t.year}-${two(t.month)}-${two(t.day)} ${two(t.hour)}:${two(t.minute)}',
+    );
   }
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final strings = AppStrings.of(context);
     final files = ref.watch(memoriesProvider);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
         Text(
-          'memory 在對話中的生效方式：MEMORY.md 每次對話注入；USER.md 同。',
+          strings.resolve(MessageKey.managementM016),
           style: Theme.of(context).textTheme.bodySmall,
         ),
         const SizedBox(height: 8),
@@ -310,7 +380,14 @@ class _MemoryBlock extends ConsumerWidget {
                 leading: const Icon(Icons.description_outlined, size: 18),
                 title: Text('${f['name']}'),
                 subtitle: Text(
-                  '${f['chars']}/${f['limit']} 字元 · 最後修改 ${_mtime(f['mtime'])}',
+                  strings.resolve(
+                    MessageKey.managementM017,
+                    args: {
+                      'chars': f['chars'],
+                      'limit': f['limit'],
+                      'mtime': _mtime(f['mtime']),
+                    },
+                  ),
                 ),
                 trailing: const Icon(Icons.chevron_right),
                 onTap: () async {
@@ -360,9 +437,16 @@ class _MemoryEditorState extends ConsumerState<_MemoryEditor> {
     } catch (e) {
       if (mounted) {
         setState(() => _saving = false);
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('儲存失敗：$e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: LocalizedText(
+              UiMessage.local(
+                MessageKey.managementM018,
+                args: {'error': messageForError(e)},
+              ),
+            ),
+          ),
+        );
       }
     }
   }
@@ -375,6 +459,7 @@ class _MemoryEditorState extends ConsumerState<_MemoryEditor> {
 
   @override
   Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
     final over =
         widget.limit > 0 && _text.text.characters.length > widget.limit;
     return Scaffold(
@@ -389,7 +474,7 @@ class _MemoryEditorState extends ConsumerState<_MemoryEditor> {
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2),
                   )
-                : const Text('儲存'),
+                : Text(strings.resolve(MessageKey.commonSave)),
           ),
         ],
       ),
@@ -402,7 +487,10 @@ class _MemoryEditorState extends ConsumerState<_MemoryEditor> {
                 Padding(
                   padding: const EdgeInsets.only(bottom: 8),
                   child: Text(
-                    '已超過 ${widget.limit} 字元上限（agent 側慣例，非硬性閘門）——仍可強制儲存。',
+                    strings.resolve(
+                      MessageKey.managementM019,
+                      args: {'limit': widget.limit},
+                    ),
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.error,
                     ),
@@ -501,7 +589,12 @@ class _Section extends StatelessWidget {
                     return KeyEventResult.ignored;
                   },
                   child: Tooltip(
-                    message: collapsed ? '展開 $title' : '收合 $title',
+                    message: AppStrings.of(context).resolve(
+                      collapsed
+                          ? MessageKey.managementM020
+                          : MessageKey.managementM021,
+                      args: {'title': title},
+                    ),
                     child: InkWell(onTap: onToggle, child: headerRow),
                   ),
                 ),
@@ -533,10 +626,16 @@ class _ErrorRow extends StatelessWidget {
   const _ErrorRow({required this.retry});
   final VoidCallback retry;
   @override
-  Widget build(BuildContext context) => Row(
-    children: [
-      const Text('載入失敗'),
-      TextButton(onPressed: retry, child: const Text('重試')),
-    ],
-  );
+  Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
+    return Row(
+      children: [
+        Text(strings.resolve(MessageKey.commonLoadFailed)),
+        TextButton(
+          onPressed: retry,
+          child: Text(strings.resolve(MessageKey.commonRetry)),
+        ),
+      ],
+    );
+  }
 }

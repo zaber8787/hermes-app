@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:file_picker/file_picker.dart';
 import '../../api/hermes_repository.dart';
+import '../../l10n/message_key.dart';
+import '../../l10n/ui_message.dart';
 import '../settings/local_store.dart';
 import 'attachment.dart';
 import 'draft_store.dart';
@@ -25,7 +27,15 @@ class AttachmentController extends ChangeNotifier {
   final String sid;
   List<AttachmentDraft> drafts;
   bool busy = false, _disposed = false;
-  String? error;
+  // Descriptors, never pretranslated strings (I18N-PLAN §4.3): consumers
+  // render these with AppStrings.render / LocalizedText.
+  UiMessage? error;
+  /// Per-failure-count parts for the batch addFiles summary; the joined
+  /// {parts} string is locale-dependent (AppStrings.joinParts), so the
+  /// WIDGET renders M005 (batchSucceeded == 0) or M006 (partial success)
+  /// from these — error stays null while batchParts is non-empty.
+  List<UiMessage> batchParts = const [];
+  int batchSucceeded = 0;
   final DraftStore _blobs;
   @override
   void notifyListeners() {
@@ -44,6 +54,8 @@ class AttachmentController extends ChangeNotifier {
     if (busy) return;
     busy = true;
     error = null;
+    batchParts = const [];
+    batchSucceeded = 0;
     notifyListeners();
     try {
       final selected = await FilePicker.pickFiles();
@@ -51,7 +63,9 @@ class AttachmentController extends ChangeNotifier {
         await _stage(picked.readAsByteStream(), picked.name);
       }
     } catch (e) {
-      error = e is ApiException ? e.message : '無法保存附件，請重新選取檔案。';
+      error = e is UiCarriesMessage
+          ? messageForError(e)
+          : const UiMessage.local(MessageKey.attachmentBatchM001);
     } finally {
       busy = false;
       notifyListeners();
@@ -64,11 +78,15 @@ class AttachmentController extends ChangeNotifier {
     if (busy) return;
     busy = true;
     error = null;
+    batchParts = const [];
+    batchSucceeded = 0;
     notifyListeners();
     try {
       await _stageOnly(source, name);
     } catch (e) {
-      error = e is ApiException ? e.message : '無法保存附件，請重新選取檔案。';
+      error = e is UiCarriesMessage
+          ? messageForError(e)
+          : const UiMessage.local(MessageKey.attachmentBatchM001);
     } finally {
       busy = false;
       notifyListeners();
@@ -82,6 +100,8 @@ class AttachmentController extends ChangeNotifier {
     if (busy) return;
     busy = true;
     error = null;
+    batchParts = const [];
+    batchSucceeded = 0;
     notifyListeners();
     var oversize = 0, unreadable = 0, broken = 0, failed = 0;
     for (final f in files) {
@@ -104,14 +124,17 @@ class AttachmentController extends ChangeNotifier {
       }
     }
     if (failed > 0) {
-      final parts = [
-        if (oversize > 0) '$oversize 個檔案太大',
-        if (unreadable > 0) '$unreadable 個檔案讀取失敗',
-        if (broken > 0) '$broken 個檔案附加失敗',
+      // The {parts} join is locale-dependent (AppStrings.joinParts), so the
+      // descriptors + counts are exposed and the widget renders M005/M006.
+      batchParts = [
+        if (oversize > 0)
+          UiMessage.count(MessageKey.attachmentBatchM002, oversize),
+        if (unreadable > 0)
+          UiMessage.count(MessageKey.attachmentBatchM003, unreadable),
+        if (broken > 0)
+          UiMessage.count(MessageKey.attachmentBatchM004, broken),
       ];
-      error = failed == files.length
-          ? '附加失敗（${parts.join('、')}），請改用 + 號選取。'
-          : '${parts.join('、')}，成功 ${files.length - failed} 個。';
+      batchSucceeded = files.length - failed;
     }
     busy = false;
     notifyListeners();
@@ -128,7 +151,7 @@ class AttachmentController extends ChangeNotifier {
       throw const _StageFaultException(_StageFault.unreadable);
     }
     if (known > attachmentMaxBytes) {
-      throw const ApiException('附件超過 500 MiB，請縮小檔案。');
+      throw const ApiException.local(MessageKey.attachmentTooLarge);
     }
     final Stream<List<int>> bytes;
     try {
@@ -178,7 +201,7 @@ class AttachmentController extends ChangeNotifier {
     final counted = raw.map((chunk) {
       seen += chunk.length;
       if (seen > attachmentMaxBytes) {
-        throw const ApiException('附件超過 500 MiB，請縮小檔案。');
+        throw const ApiException.local(MessageKey.attachmentTooLarge);
       }
       return chunk;
     });
@@ -203,9 +226,11 @@ class AttachmentController extends ChangeNotifier {
   }
 
   Future<String> prepare(String text) async {
-    if (busy) throw const ApiException('附件處理中，請稍候。');
+    if (busy) throw const ApiException.local(MessageKey.attachmentBatchM007);
     busy = true;
     error = null;
+    batchParts = const [];
+    batchSucceeded = 0;
     notifyListeners();
     try {
       for (var i = 0; i < drafts.length; i++) {
@@ -217,15 +242,13 @@ class AttachmentController extends ChangeNotifier {
         await _save(); // Save each receipt before issuing the chat POST.
       }
       if (drafts.any((a) => a.expired)) {
-        throw const ApiException('附件收據已過期，請重新傳送以更新上傳。');
+        throw const ApiException.local(MessageKey.attachmentBatchM008);
       }
       return composeAttachmentInput(text, drafts);
     } catch (e) {
-      error = e is ApiException
-          ? e.message
-          : e is FormatException
-          ? e.message
-          : '附件上傳失敗，草稿已保留，請重試。';
+      error = e is UiCarriesMessage || e is FormatException
+          ? messageForError(e)
+          : const UiMessage.local(MessageKey.attachmentBatchM009);
       rethrow;
     } finally {
       busy = false;

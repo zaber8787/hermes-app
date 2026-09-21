@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name" translatable="false">Hermes</string>
+    <string name="notification_channel_replies">Hermes 回覆中</string>
+    <string name="notification_reply_active">Hermes 正在回覆</string>
+</resources>

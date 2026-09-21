@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_app/l10n/app_locale.dart';
+import 'support/localized_app.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:hermes_app/features/chat/message_content.dart';
 import 'package:hermes_app/features/chat/message_timeline.dart';
@@ -62,7 +64,8 @@ void main() {
     );
     await tester.pumpWidget(
       ProviderScope(
-        child: MaterialApp(
+        child: localizedHome(
+          locale: AppLocale.zhHant,
           home: Scaffold(
             body: SingleChildScrollView(
               child: MessageTimeline(
@@ -100,8 +103,9 @@ void main() {
     tester,
   ) async {
     await tester.pumpWidget(
-      const ProviderScope(
-        child: MaterialApp(
+      ProviderScope(
+        child: localizedHome(
+          locale: AppLocale.zhHant,
           home: Scaffold(body: MessageContent('MEDIA:/server/report.pdf')),
         ),
       ),
@@ -117,8 +121,9 @@ void main() {
       const pixel =
           'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aD1sAAAAASUVORK5CYII=';
       await tester.pumpWidget(
-        const ProviderScope(
-          child: MaterialApp(
+        ProviderScope(
+          child: localizedHome(
+          locale: AppLocale.zhHant,
             home: Scaffold(body: MessageContent('![image]($pixel)')),
           ),
         ),
@@ -129,7 +134,8 @@ void main() {
       await tester.pumpAndSettle();
       expect(find.byType(InteractiveViewer), findsOneWidget);
       await tester.pumpWidget(
-        const MaterialApp(
+        localizedHome(
+          locale: AppLocale.zhHant,
           home: Scaffold(body: MessageImage('data:image/png;base64,%%%')),
         ),
       );

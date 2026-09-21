@@ -3,6 +3,8 @@ import 'dart:typed_data';
 
 import 'package:cross_file/cross_file.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_app/l10n/message_key.dart';
+import 'package:hermes_app/l10n/ui_message.dart';
 import 'package:plugin_platform_interface/plugin_platform_interface.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -208,7 +210,7 @@ void main() {
     await pick(() => [huge]);
     expect(controller.drafts, isEmpty);
     expect(blobs.blobs, isEmpty);
-    expect(controller.error, contains('500 MiB'));
+    expect((controller.error! as UiLocal).key, MessageKey.attachmentTooLarge);
   });
 }
 

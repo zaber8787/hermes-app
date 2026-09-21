@@ -1,5 +1,7 @@
 import 'dart:convert';
 
+import '../l10n/message_key.dart';
+
 typedef Json = Map<String, dynamic>;
 
 String textOf(dynamic value) => value == null
@@ -64,31 +66,32 @@ class Message {
 
 /// Contract §3: non-null kinds use a closed rendering whitelist; unknown kinds
 /// remain collapsed system events. Storage itself is NOT a closed enum.
-const systemLabels = {
-  'async_delegation_complete': '委派完成',
-  'auto_continue': '自動續行',
-  'internal_notification': '內部通知',
-  'model_switch': '模型切換',
-  'personality_switch': '風格切換',
-  'skill_invocation': 'Skill 呼叫',
-  'steer': '插話',
+/// The VALUE is a catalog key (I18N-PLAN §4.4) — labels resolve at render
+/// time, never as a stored translation. The KEY set is the unchanged
+/// allowed-kind whitelist.
+const systemLabels = <String, MessageKey>{
+  'async_delegation_complete': MessageKey.systemM001,
+  'auto_continue': MessageKey.systemM002,
+  'internal_notification': MessageKey.systemM003,
+  'model_switch': MessageKey.systemM004,
+  'personality_switch': MessageKey.systemM005,
+  'skill_invocation': MessageKey.systemM006,
+  'steer': MessageKey.chatSteer,
 };
 
 enum EntryKind { user, finalReply, narration, tool, system }
 
 class DisplayEntry {
-  const DisplayEntry(
-    this.kind,
-    this.message, {
-    this.call,
-    this.result,
-    this.label,
-  });
+  const DisplayEntry(this.kind, this.message, {this.call, this.result});
   final EntryKind kind;
   final Message message;
   final ToolCall? call;
   final Message? result;
-  final String? label;
+
+  /// Catalog key for collapsed system-event chips (I18N-PLAN §4.4): derived
+  /// from the raw display kind at render time, never a stored translation.
+  static MessageKey labelKeyFor(Message m) =>
+      systemLabels[m.displayKind] ?? MessageKey.systemGeneric;
 }
 
 /// Contract §3–4. A turn's final is its LAST contentful, tool-free assistant.
@@ -122,13 +125,7 @@ List<DisplayEntry> projectMessages(List<Message> messages) {
   final entries = <DisplayEntry>[];
   for (final m in visible) {
     if (m.displayKind != null || m.role == 'system') {
-      entries.add(
-        DisplayEntry(
-          EntryKind.system,
-          m,
-          label: systemLabels[m.displayKind] ?? '系統事件',
-        ),
-      );
+      entries.add(DisplayEntry(EntryKind.system, m));
     } else if (m.role == 'user') {
       entries.add(DisplayEntry(EntryKind.user, m));
     } else if (m.role == 'assistant') {

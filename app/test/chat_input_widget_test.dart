@@ -3,6 +3,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_app/l10n/app_locale.dart';
+
+import 'support/localized_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
 import 'package:hermes_app/models/session_activity.dart';
@@ -67,7 +70,7 @@ void main() {
   Future<void> openPage(WidgetTester tester) async {
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
-      child: MaterialApp(home: ChatPage(session: sessionA)),
+      child: localizedWrap(ChatPage(session: sessionA), locale: AppLocale.zhHant),
     ));
     await tester.pump();
     await tester.pump();

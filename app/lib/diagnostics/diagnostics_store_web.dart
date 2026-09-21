@@ -23,11 +23,10 @@ class MemoryDiagnosticsStore implements DiagnosticsStore {
   @override
   Future<bool> exportSnapshot() async {
     final snapshot = utf8.encode(_lines.join());
-    return await saveBytesAs(
-          'hermes-diagnostics.jsonl',
-          Uint8List.fromList(snapshot),
-        ) !=
-        null;
+    return (await saveBytesAs(
+      'hermes-diagnostics.jsonl',
+      Uint8List.fromList(snapshot),
+    )).succeeded;
   }
 }
 

@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_app/l10n/message_key.dart';
+import 'package:hermes_app/l10n/ui_message.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
 import 'package:hermes_app/models/session_activity.dart';
@@ -143,7 +145,7 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 10));
     expect(c.phase, ChatPhase.idle);
     expect(c.busy, isFalse); // 輸入解鎖
-    expect(c.stopNotice, contains('已由你停止'));
+    expect(c.stopNoticeKind, StopNotice.accepted);
     expect(store.loadPending(repo.baseUrl, 's'), isNull); // 殭屍紀錄被清
     expect(repo.sends, 0);
     c.dispose();
@@ -237,9 +239,9 @@ void main() {
     ];
     reloadPast();
     final c = reloaded();
-    expect(c.stopNotice, contains('accepted')); // 進頁瞬間 banner 還在
+    expect(c.stopNoticeKind, StopNotice.previousStopRecord); // 進頁瞬間 banner 還在
     await c.bootstrap();
-    expect(c.stopNotice, isNull); // 紅燈點：清 lost 要同時清 banner
+    expect(c.stopNoticeKind, StopNotice.none); // 紅燈點：清 lost 要同時清 banner
     expect(store.lostNotice(repo.baseUrl, 's'), isNull); // lost 清空
     c.dispose();
   });
@@ -257,7 +259,7 @@ void main() {
     expect(await c.stop(), isTrue);
     expect(repo.stopped, 'r1');
     expect(repo.stopCalls, 1);
-    expect(c.stopNotice, contains('已由你停止'));
+    expect(c.stopNoticeKind, StopNotice.accepted);
     expect(store.loadPending(repo.baseUrl, 's'), isNull); // 200 → 清 pending
     expect(c.error, isNull); // 409/失敗都不允許在這裡報錯
     // run 還沒終態：繼續觀察，不提前 idle
@@ -287,7 +289,7 @@ void main() {
     await c.bootstrap();
     expect(await c.stop(), isTrue); // 409 不報錯
     expect(c.error, isNull);
-    expect(c.stopNotice, contains('已要求停止'));
+    expect(c.stopNoticeKind, StopNotice.requested);
     // pending 保留（reload 可續查），觀察輪詢接管
     await Future<void>.delayed(const Duration(milliseconds: 10));
     expect(c.busy, isTrue);
@@ -299,7 +301,7 @@ void main() {
     ];
     await Future<void>.delayed(const Duration(milliseconds: 20));
     expect(c.phase, ChatPhase.idle); // 終態收斂，歷史只有 user 也結案
-    expect(c.stopNotice, contains('已由你停止')); // 使用者來源不被覆寫
+    expect(c.stopNoticeKind, StopNotice.accepted); // 使用者來源不被覆寫
     expect(store.loadPending(repo.baseUrl, 's'), isNull);
     expect(store.stopRecord(repo.baseUrl, 's'), contains('requested'));
     expect(repo.sends, 0);
@@ -318,7 +320,7 @@ void main() {
     expect(c.phase, ChatPhase.idle);
     expect(c.busy, isFalse);
     expect(c.error, isNull);
-    expect(c.stopNotice, contains('任務已不存在'));
+    expect(c.stopNoticeKind, StopNotice.notFound);
     expect(store.loadPending(repo.baseUrl, 's'), isNull);
     expect(repo.sends, 0);
     c.dispose();
@@ -332,7 +334,7 @@ void main() {
     await c.bootstrap();
     expect(c.canStop, isFalse);
     expect(await c.stop(), isFalse);
-    expect(c.error, contains('沒有可停止'));
+    expect((c.error! as UiLocal).key, MessageKey.chatStateM029);
     expect(repo.stopCalls, 0);
     expect(repo.sends, 0);
     expect(c.phase, ChatPhase.idle);

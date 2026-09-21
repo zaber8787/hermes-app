@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Brand stays "Hermes" in every locale (I18N-PLAN §6.3). -->
+    <string name="app_name" translatable="false">Hermes</string>
+    <string name="notification_channel_replies">Hermes replies</string>
+    <string name="notification_reply_active">Hermes is replying</string>
+</resources>

@@ -3,6 +3,8 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_app/l10n/app_locale.dart';
+import 'support/localized_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
 import 'package:hermes_app/features/attachments/attachment.dart';
@@ -26,7 +28,8 @@ void main() {
     String clock(DateTime d) =>
         '${d.hour.toString().padLeft(2, '0')}:${d.minute.toString().padLeft(2, '0')}';
     await tester.pumpWidget(
-      MaterialApp(
+      localizedHome(
+          locale: AppLocale.zhHant,
         home: Scaffold(
           body: Column(
             children: [
@@ -54,7 +57,8 @@ void main() {
     (tester) async {
       await tester.pumpWidget(
         ProviderScope(
-          child: MaterialApp(
+          child: localizedHome(
+          locale: AppLocale.zhHant,
             home: Scaffold(
               body: SingleChildScrollView(
                 child: MessageContent(
@@ -70,7 +74,8 @@ void main() {
       expect(find.text('圖片無法載入'), findsOneWidget);
       await tester.pumpWidget(
         ProviderScope(
-          child: MaterialApp(
+          child: localizedHome(
+          locale: AppLocale.zhHant,
             home: Scaffold(
               body: MessageContent('data:image/png;base64,###'),
             ),

@@ -34,17 +34,15 @@ class FileDiagnosticsStore implements DiagnosticsStore {
               .invokeMethod<bool>('export', snapshot.path) ??
           false;
     } on PlatformException {
-      return await saveBytesAs(
-            'hermes-diagnostics.jsonl',
-            await snapshot.readAsBytes(),
-          ) !=
-          null;
+      return (await saveBytesAs(
+        'hermes-diagnostics.jsonl',
+        await snapshot.readAsBytes(),
+      )).succeeded;
     } on MissingPluginException {
-      return await saveBytesAs(
-            'hermes-diagnostics.jsonl',
-            await snapshot.readAsBytes(),
-          ) !=
-          null;
+      return (await saveBytesAs(
+        'hermes-diagnostics.jsonl',
+        await snapshot.readAsBytes(),
+      )).succeeded;
     }
   }
 }

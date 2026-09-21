@@ -6,9 +6,10 @@ import 'package:path_provider/path_provider.dart';
 
 import 'save_file.dart';
 
-Future<String?> saveBytesAs(String name, Uint8List bytes) async {
+Future<SaveResult> saveBytesAs(String name, Uint8List bytes) async {
   final saved = await FilePicker.saveFile(fileName: name, bytes: bytes);
-  return saved?.toString();
+  final path = saved?.toString();
+  return path == null ? const SaveCancelled() : SavedPath(path);
 }
 
 class IoByteCache implements ByteCache {

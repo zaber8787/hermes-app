@@ -1,4 +1,6 @@
 import '../../api/sse.dart';
+import '../../l10n/message_key.dart';
+import '../../l10n/ui_message.dart';
 import '../../models/message.dart';
 
 class LiveTool {
@@ -22,7 +24,10 @@ class LiveTurn {
 
   /// Pending approval card (approval.request SSE); null when nothing awaits.
   Map<String, dynamic>? approval;
-  String? approvalChoice, approvalError;
+  String? approvalChoice;
+
+  /// Descriptor state (§4.3): the failure renders in the CURRENT locale.
+  UiMessage? approvalError;
   bool approvalBusy = false;
 
   /// R4: the bridge's approval.request carries its OWN run_id; a stream that
@@ -56,7 +61,9 @@ class LiveTurn {
     if (event.type == 'done') return;
     final data = event.json;
     if (data['session_id'] != null && data['session_id'] != sid) {
-      throw const FormatException('串流 session_id 不符');
+      throw const AppFormatException(
+        UiMessage.local(MessageKey.streamM001),
+      );
     }
     final seq = data['seq'];
     if (seq != null && !seenSequences.add('${data['run_id']}:$seq')) return;
@@ -97,7 +104,9 @@ class LiveTurn {
             .toList();
         completed = true;
       case 'error':
-        throw const FormatException('伺服器串流回報錯誤，請刷新歷史確認。');
+        throw const AppFormatException(
+          UiMessage.local(MessageKey.streamM002),
+        );
     }
   }
 }

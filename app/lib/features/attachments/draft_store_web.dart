@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import '../../api/hermes_repository.dart' show ApiException;
+import '../../l10n/message_key.dart';
 import 'attachment.dart';
 import 'draft_store.dart';
 
@@ -15,7 +16,7 @@ class WebDraftStore implements DraftStore {
     final bytes = BytesBuilder(copy: false);
     await for (final chunk in source) {
       if (bytes.length + chunk.length > attachmentMaxBytes) {
-        throw const ApiException('附件超過 500 MiB，請縮小檔案。');
+        throw const ApiException.local(MessageKey.attachmentTooLarge);
       }
       bytes.add(chunk);
     }
@@ -32,7 +33,7 @@ class WebDraftStore implements DraftStore {
   Future<AttachmentSource> open(String ref) async {
     final bytes = _blobs[ref];
     if (bytes == null) {
-      throw const ApiException('附件快取已遺失，請移除後重新選取。');
+      throw const ApiException.local(MessageKey.attachmentCacheMissing);
     }
     return StreamAttachmentSource(() => Stream.value(bytes), bytes.length);
   }

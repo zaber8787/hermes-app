@@ -1,11 +1,15 @@
 name: hermes_app
 description: Hermes Android session browser and streaming chat.
 publish_to: none
-version: 0.13.17+37
+version: 0.14.0+38
 environment:
   sdk: '>=3.10.0 <4.0.0'
 dependencies:
   flutter:
+    sdk: flutter
+  # I18N-PLAN §1: SDK package for Material/Cupertino/Widgets built-in
+  # strings. Transitive `intl` resolution updates pubspec.lock only.
+  flutter_localizations:
     sdk: flutter
   flutter_riverpod: ^3.0.0
   flutter_secure_storage: ^10.0.0

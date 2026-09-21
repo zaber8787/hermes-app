@@ -2,6 +2,10 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:photo_manager/photo_manager.dart';
 
+import '../../l10n/app_strings.dart';
+import '../../l10n/message_key.dart';
+import '../../l10n/ui_message.dart';
+
 /// Telegram-style media picker: bottom sheet full of recent images/videos
 /// thumbnails; tapping one returns its AssetEntity for upload. "其他檔案"
 /// hands control back so the caller can open the system file picker instead.
@@ -106,7 +110,7 @@ class _MediaGridState extends State<_MediaGrid> {
   List<AssetEntity> _assets = const [];
   bool _loading = true;
   bool _loadingMore = false, _hasMore = true;
-  String? _error;
+  UiMessage? _error;
   bool _granted = true, _limited = false;
 
   @override
@@ -168,7 +172,7 @@ class _MediaGridState extends State<_MediaGrid> {
       setState(() {
         _granted = granted;
         _limited = limited;
-        _error = '讀取相簿失敗';
+        _error = const UiMessage.local(MessageKey.galleryM002);
         _assets = const [];
         _hasMore = false;
         _loading = false;
@@ -198,6 +202,7 @@ class _MediaGridState extends State<_MediaGrid> {
 
   @override
   Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
     final scheme = Theme.of(context).colorScheme;
     return Column(
       children: [
@@ -205,14 +210,16 @@ class _MediaGridState extends State<_MediaGrid> {
           padding: const EdgeInsets.fromLTRB(16, 12, 8, 4),
           child: Row(
             children: [
-              Text('相片與影片',
-                  style: Theme.of(context).textTheme.titleMedium),
+              Text(
+                strings.resolve(MessageKey.galleryM003),
+                style: Theme.of(context).textTheme.titleMedium,
+              ),
               const Spacer(),
               if (widget.onPickOther != null)
                 TextButton.icon(
                   onPressed: widget.onPickOther,
                   icon: const Icon(Icons.folder_open_outlined, size: 18),
-                  label: const Text('其他檔案'),
+                  label: Text(strings.resolve(MessageKey.galleryM004)),
                 ),
             ],
           ),
@@ -224,7 +231,7 @@ class _MediaGridState extends State<_MediaGrid> {
                 ListTile(
                   dense: true,
                   leading: const Icon(Icons.info_outline, size: 18),
-                  title: const Text('只顯示部分照片（系統權限設為選取範圍）'),
+                  title: Text(strings.resolve(MessageKey.galleryM005)),
                   trailing: TextButton(
                     onPressed: () async {
                       if (defaultTargetPlatform == TargetPlatform.android) {
@@ -234,7 +241,7 @@ class _MediaGridState extends State<_MediaGrid> {
                       }
                       await _load();
                     },
-                    child: const Text('選更多'),
+                    child: Text(strings.resolve(MessageKey.galleryM006)),
                   ),
                 ),
               Expanded(child: _body(context, scheme)),
@@ -246,6 +253,7 @@ class _MediaGridState extends State<_MediaGrid> {
   }
 
   Widget _body(BuildContext context, ColorScheme scheme) {
+    final strings = AppStrings.of(context);
     if (_loading) return const Center(child: CircularProgressIndicator());
     if (!_granted) {
       return Center(
@@ -254,11 +262,11 @@ class _MediaGridState extends State<_MediaGrid> {
           children: [
             Icon(Icons.photo_library_outlined, size: 40, color: scheme.outline),
             const SizedBox(height: 8),
-            const Text('需要相簿權限才能顯示縮圖'),
+            Text(strings.resolve(MessageKey.galleryM007)),
             TextButton(
               onPressed: () =>
                   _source.openSetting().then((_) => _load()),
-              child: const Text('去開權限'),
+              child: Text(strings.resolve(MessageKey.galleryM008)),
             ),
           ],
         ),
@@ -269,8 +277,11 @@ class _MediaGridState extends State<_MediaGrid> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Text(_error!),
-            TextButton(onPressed: _load, child: const Text('重試')),
+            Text(strings.render(_error!)),
+            TextButton(
+              onPressed: _load,
+              child: Text(strings.resolve(MessageKey.commonRetry)),
+            ),
           ],
         ),
       );

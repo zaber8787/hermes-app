@@ -7,6 +7,10 @@ import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'linkify.dart';
 import '../../api/hermes_repository.dart';
+import '../../l10n/app_strings.dart';
+import '../../l10n/localized_text.dart';
+import '../../l10n/message_key.dart';
+import '../../l10n/ui_message.dart';
 import '../../platform/save_file.dart';
 import '../../providers.dart';
 import '../attachments/attachment.dart';
@@ -67,7 +71,7 @@ class ContentPart {
 
 List<ContentPart> splitMessageContent(String text) {
   final pattern = RegExp(
-    r'''MEDIA:(?:"([^"]+)"|'([^']+)'|([^\s<>]+))|\[附件:\s*([0-9a-f]{32})\s+([^\]\n]+)\]''',
+    r'''MEDIA:(?:"([^"]+)"|'([^']+)'|([^\s<>]+))|\[附件:\s*([0-9a-f]{32})\s+([^\]\n]+)\]''', // i18n-exempt: inbound attachment/media syntax — I18N-PLAN §5
   );
   final parts = <ContentPart>[];
   var offset = 0;
@@ -98,16 +102,20 @@ Future<void> openMessageLink(BuildContext context, String value) async {
     if (!supported ||
         !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
       if (context.mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('無法開啟此連結。')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: LocalizedText(UiMessage.local(MessageKey.contentM001)),
+          ),
+        );
       }
     }
   } catch (_) {
     if (context.mounted) {
-      ScaffoldMessenger.of(
-        context,
-      ).showSnackBar(const SnackBar(content: Text('無法開啟此連結。')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: LocalizedText(UiMessage.local(MessageKey.contentM001)),
+        ),
+      );
     }
   }
 }
@@ -145,7 +153,9 @@ class MessageContent extends StatelessWidget {
                 children: [
                   Expanded(child: Text(language)),
                   IconButton(
-                    tooltip: '複製程式碼',
+                    tooltip: AppStrings.of(
+                      context,
+                    ).resolve(MessageKey.contentM002),
                     icon: const Icon(Icons.copy, size: 18),
                     onPressed: () =>
                         Clipboard.setData(ClipboardData(text: code)),
@@ -177,7 +187,7 @@ class MessageImage extends ConsumerStatefulWidget {
 
 class _MessageImageState extends ConsumerState<MessageImage> {
   bool _saving = false;
-  String? _notice;
+  UiMessage? _notice;
 
   bool get _isDataUrl => widget.source.startsWith('data:image/');
 
@@ -210,26 +220,44 @@ class _MessageImageState extends ConsumerState<MessageImage> {
     try {
       final saved = await saveBytesAs(name, bytes);
       if (mounted) {
-        setState(() =>
-            _notice = saved == null ? '已取消儲存' : '圖片已儲存（$saved）');
+        setState(() => _notice = switch (saved) {
+          // Typed outcome (§4.4): the web path no longer renders a
+          // pseudo-path string.
+          SaveCancelled() => const UiMessage.local(
+            MessageKey.downloadCancelled,
+          ),
+          SavedPath(:final path) => UiMessage.local(
+            MessageKey.contentM003,
+            args: {'saved': UiMessage.raw(path)},
+          ),
+          BrowserStarted() => const UiMessage.local(
+            MessageKey.downloadBrowserStarted,
+          ),
+        });
       }
     } catch (_) {
-      if (mounted) setState(() => _notice = '儲存失敗，請重試');
+      if (mounted) {
+        setState(() => _notice = const UiMessage.local(MessageKey.contentM004));
+      }
     } finally {
       if (mounted) setState(() => _saving = false);
     }
   }
 
   Widget _image() {
-    Widget failure(BuildContext c, Object e, StackTrace? s) =>
-        const Padding(padding: EdgeInsets.all(16), child: Text('圖片無法載入'));
+    Widget local(MessageKey key) =>
+        LocalizedText(UiMessage.local(key));
+    Widget failure(BuildContext c, Object e, StackTrace? s) => Padding(
+      padding: const EdgeInsets.all(16),
+      child: local(MessageKey.contentM005),
+    );
     try {
       if (_isDataUrl) {
         if (widget.source.length > 32 * 1024 * 1024) {
-          return const Text('圖片過大，無法預覽');
+          return local(MessageKey.contentM006);
         }
         final decoded = _decode();
-        if (decoded == null) return const Text('圖片資料無效');
+        if (decoded == null) return local(MessageKey.contentM007);
         return Image.memory(
           decoded.bytes,
           fit: BoxFit.contain,
@@ -240,76 +268,85 @@ class _MessageImageState extends ConsumerState<MessageImage> {
       if (uri == null ||
           !['http', 'https'].contains(uri.scheme) ||
           uri.userInfo.isNotEmpty) {
-        return const Text('圖片連結無法開啟');
+        return local(MessageKey.contentM008);
       }
       return Image.network(widget.source,
           fit: BoxFit.contain, errorBuilder: failure);
     } catch (_) {
-      return const Text('圖片資料無效');
+      return local(MessageKey.contentM007);
     }
   }
 
   @override
-  Widget build(BuildContext context) => Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Semantics(
-            label: '開啟全螢幕圖片',
-            button: true,
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: () => Navigator.push(
-                context,
-                MaterialPageRoute<void>(
-                  builder: (_) => Scaffold(
-                    appBar: AppBar(
-                      title: const Text('圖片'),
-                      actions: [
-                        if (_isDataUrl)
-                          IconButton(
-                            tooltip: '儲存圖片',
-                            onPressed: _saving ? null : _save,
-                            icon: Icon(_saving
-                                ? Icons.hourglass_top
-                                : Icons.download_outlined),
-                          ),
-                      ],
+  Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Semantics(
+          label: strings.resolve(MessageKey.contentM009),
+          button: true,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => Navigator.push(
+              context,
+              MaterialPageRoute<void>(
+                builder: (context) => Scaffold(
+                  appBar: AppBar(
+                    title: Text(
+                      AppStrings.of(context).resolve(MessageKey.contentM010),
                     ),
-                    body: Center(
-                      child: InteractiveViewer(
-                          maxScale: 5, child: _image()),
-                    ),
+                    actions: [
+                      if (_isDataUrl)
+                        IconButton(
+                          tooltip: AppStrings.of(
+                            context,
+                          ).resolve(MessageKey.contentM011),
+                          onPressed: _saving ? null : _save,
+                          icon: Icon(_saving
+                              ? Icons.hourglass_top
+                              : Icons.download_outlined),
+                        ),
+                    ],
+                  ),
+                  body: Center(
+                    child: InteractiveViewer(
+                        maxScale: 5, child: _image()),
                   ),
                 ),
               ),
-              child: SizedBox(
-                width:
-                    (MediaQuery.sizeOf(context).width - 80).clamp(100.0, 480.0),
-                height: 250,
-                child: _image(),
-              ),
+            ),
+            child: SizedBox(
+              width:
+                  (MediaQuery.sizeOf(context).width - 80).clamp(100.0, 480.0),
+              height: 250,
+              child: _image(),
             ),
           ),
-          Row(
-            children: [
-              if (_isDataUrl)
-                IconButton(
-                  tooltip: '儲存圖片',
-                  visualDensity: VisualDensity.compact,
-                  onPressed: _saving ? null : _save,
-                  icon: Icon(Icons.download_outlined,
-                      size: 16,
-                      color: Theme.of(context).colorScheme.onSurfaceVariant),
+        ),
+        Row(
+          children: [
+            if (_isDataUrl)
+              IconButton(
+                tooltip: strings.resolve(MessageKey.contentM011),
+                visualDensity: VisualDensity.compact,
+                onPressed: _saving ? null : _save,
+                icon: Icon(Icons.download_outlined,
+                    size: 16,
+                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+              ),
+            if (_notice != null)
+              Expanded(
+                child: LocalizedText(
+                  _notice!,
+                  style: const TextStyle(fontSize: 11),
                 ),
-              if (_notice != null)
-                Expanded(
-                  child: Text(_notice!,
-                      style: const TextStyle(fontSize: 11)),
-                ),
-            ],
-          ),
-        ],
-      );
+              ),
+          ],
+        ),
+      ],
+    );
+  }
 }
 
 final _downloads = <String, Future<Uint8List>>{};
@@ -343,9 +380,10 @@ class AttachmentTile extends ConsumerStatefulWidget {
 
 class _AttachmentTileState extends ConsumerState<AttachmentTile> {
   bool busy = false;
-  String? notice;
+  UiMessage? notice;
   @override
   Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
     final reference = widget.reference;
     final uri = Uri.tryParse(reference);
     final base = Uri.tryParse(ref.watch(settingsProvider).url);
@@ -376,17 +414,21 @@ class _AttachmentTileState extends ConsumerState<AttachmentTile> {
             ? Icons.insert_drive_file_outlined
             : Icons.attach_file,
       ),
-      title: Text(name.isEmpty ? '附件' : name),
-      subtitle: Text(
-        notice ??
-            (id != null
-                ? '下載附件'
-                : remote
-                ? '開啟外部連結'
-                : serverFile
-                ? '從伺服器下載'
-                : '路徑僅 server 可讀'),
+      title: Text(
+        name.isEmpty ? strings.resolve(MessageKey.contentM012) : name,
       ),
+      subtitle:
+          notice != null
+              ? LocalizedText(notice!)
+              : Text(
+                id != null
+                    ? strings.resolve(MessageKey.contentM013)
+                    : remote
+                    ? strings.resolve(MessageKey.contentM014)
+                    : serverFile
+                    ? strings.resolve(MessageKey.contentM015)
+                    : strings.resolve(MessageKey.contentM016),
+              ),
       trailing: busy
           ? const SizedBox(
               width: 20,
@@ -394,11 +436,12 @@ class _AttachmentTileState extends ConsumerState<AttachmentTile> {
               child: CircularProgressIndicator(),
             )
           : IconButton(
-              tooltip: id != null || serverFile
-                  ? '下載附件'
-                  : remote
-                  ? '開啟連結'
-                  : '複製路徑',
+              tooltip:
+                  id != null || serverFile
+                      ? strings.resolve(MessageKey.contentM013)
+                      : remote
+                      ? strings.resolve(MessageKey.contentM017)
+                      : strings.resolve(MessageKey.contentM018),
               icon: Icon(
                 id != null || serverFile
                     ? Icons.download
@@ -414,7 +457,13 @@ class _AttachmentTileState extends ConsumerState<AttachmentTile> {
                   }
                   if (!serverFile) {
                     await Clipboard.setData(ClipboardData(text: reference));
-                    if (mounted) setState(() => notice = '已複製路徑；路徑僅 server 可讀');
+                    if (mounted) {
+                      setState(
+                        () => notice = const UiMessage.local(
+                          MessageKey.contentM019,
+                        ),
+                      );
+                    }
                     return;
                   }
                   setState(() => busy = true);
@@ -425,21 +474,37 @@ class _AttachmentTileState extends ConsumerState<AttachmentTile> {
                     final saved = await saveBytesAs(name, bytes);
                     if (mounted) {
                       setState(
-                        () => notice = saved == null
-                            ? '已取消儲存，附件仍在伺服器，可再下載。'
-                            : '附件已儲存',
+                        () => notice =
+                            !saved.succeeded
+                                ? const UiMessage.local(
+                                  MessageKey.contentM020,
+                                )
+                                : const UiMessage.local(
+                                  MessageKey.contentM021,
+                                ),
                       );
                     }
                   } on ApiException catch (e) {
                     if (!mounted) return;
                     if (e.status == 404) {
                       await Clipboard.setData(ClipboardData(text: reference));
-                      setState(() => notice = '伺服器不支援檔案下載，已改為複製路徑');
+                      setState(
+                        () => notice = const UiMessage.local(
+                          MessageKey.contentM022,
+                        ),
+                      );
                     } else {
-                      setState(() => notice = e.message);
+                      // Server-origin text stays RAW inside the descriptor.
+                      setState(() => notice = e.uiMessage);
                     }
                   } catch (_) {
-                    if (mounted) setState(() => notice = '附件下載失敗，請重試。');
+                    if (mounted) {
+                      setState(
+                        () => notice = const UiMessage.local(
+                          MessageKey.contentM023,
+                        ),
+                      );
+                    }
                   } finally {
                     if (mounted) setState(() => busy = false);
                   }
@@ -454,17 +519,25 @@ class _AttachmentTileState extends ConsumerState<AttachmentTile> {
                   final saved = await saveBytesAs(name, bytes);
                   if (mounted) {
                     setState(
-                      () => notice = saved == null
-                          ? '已取消儲存，附件保留在本機，可再下載儲存。'
-                          : '附件已儲存',
+                      () => notice =
+                          !saved.succeeded
+                              ? const UiMessage.local(
+                                MessageKey.contentM024,
+                              )
+                              : const UiMessage.local(
+                                MessageKey.contentM021,
+                              ),
                     );
                   }
                 } catch (e) {
                   if (mounted) {
                     setState(
-                      () => notice = e is ApiException
-                          ? e.message
-                          : '附件儲存失敗，請重試。',
+                      () => notice =
+                          e is UiCarriesMessage
+                              ? e.uiMessage
+                              : const UiMessage.local(
+                                MessageKey.contentM025,
+                              ),
                     );
                   }
                 } finally {

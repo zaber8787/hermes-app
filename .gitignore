@@ -72,3 +72,4 @@ key.properties
 # Final public audit: cover all dotenv-style names, including .envrc.
 .env*
 !.env.example
+.i18n-evidence/

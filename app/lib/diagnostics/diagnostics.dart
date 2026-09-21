@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
+import '../l10n/message_key.dart';
+import '../l10n/ui_message.dart';
 import 'diagnostics_store.dart';
 
 /// Metadata only: never persist payloads, URLs, credentials or exception text.
@@ -11,7 +13,10 @@ class Diagnostics {
   final DiagnosticsStore store;
   final String version;
   Future<void> _pending = Future.value();
-  String? failure;
+
+  /// UI-export failure state (§4.4): a descriptor, never a stored
+  // translation. Recorded event lines/JSON fields stay machine data.
+  UiMessage? failure;
   static Future<void> initialize() async {
     try {
       if (kIsWeb) {
@@ -38,14 +43,14 @@ class Diagnostics {
     _pending = _pending
         .then((_) => store.append(line))
         .catchError((Object _) {
-          failure = '診斷檔寫入失敗';
+          failure = const UiMessage.local(MessageKey.diagnosticsM001);
         });
     return _pending;
   }
 
   Future<bool> export() async {
     await _pending;
-    if (failure != null) throw StateError(failure!);
+    if (failure != null) throw AppFormatException(failure!);
     return store.exportSnapshot();
   }
 }

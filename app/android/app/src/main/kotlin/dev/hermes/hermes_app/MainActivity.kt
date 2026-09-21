@@ -19,6 +19,17 @@ class MainActivity : FlutterActivity() {
         val keepalive = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "hermes/stream-keepalive")
         HermesStreamService.reportError = { keepalive.invokeMethod("error", null) }
         keepalive.setMethodCallHandler { call, result ->
+            if (call.method == "setLocale") {
+                // Dispatched BEFORE numeric token validation: locale calls
+                // carry a map, not a stream id (I18N-PLAN §6.1). Only the
+                // two canonical tags are accepted — never free text.
+                val tag = (call.arguments as? Map<*, *>)?.get("tag") as? String
+                if (tag == "en" || tag == "zh-Hant") {
+                    NotificationLocale.set(applicationContext, tag)
+                    result.success(null)
+                } else result.error("argument", "Unknown locale tag", null)
+                return@setMethodCallHandler
+            }
             val id = (call.arguments as? Number)?.toInt()
             if (id == null) result.error("argument", "Missing stream token", null)
             else when (call.method) {

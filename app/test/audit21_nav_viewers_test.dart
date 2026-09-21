@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/localized_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
 import 'package:hermes_app/models/session_activity.dart';
@@ -134,7 +136,7 @@ void main() {
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: const MaterialApp(home: SessionsPage()),
+          child: localizedWrap(const SessionsPage()),
         ),
       );
       // Only clock-free pumps here: SessionsPage runs a 30s periodic
@@ -180,9 +182,9 @@ void main() {
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: MaterialApp(
+          child: localizedWrap(
             navigatorKey: navKey,
-            home: Builder(
+            Builder(
               builder: (context) => Scaffold(
                 body: TextButton(
                   onPressed: () => Navigator.push(

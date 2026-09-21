@@ -131,10 +131,10 @@ void main() {
     await repo.events.close();
     await sending;
     expect(c.phase, ChatPhase.idle);
-    expect(c.stopNotice, contains('已由你停止'));
+    expect(c.stopNoticeKind, StopNotice.accepted);
     expect(store.stopRecord(repo.baseUrl, 's'), contains('accepted'));
     final reopened = ChatController(repo, store, 's');
-    expect(reopened.stopNotice, contains('accepted'));
+    expect(reopened.stopNoticeKind, StopNotice.previousStopRecord);
     c.dispose();
     reopened.dispose();
   });

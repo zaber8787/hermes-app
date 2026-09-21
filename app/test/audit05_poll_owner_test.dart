@@ -3,9 +3,14 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'package:hermes_app/l10n/app_locale.dart';
+import 'support/localized_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'package:hermes_app/api/hermes_repository.dart';
+import 'package:hermes_app/l10n/message_key.dart';
+import 'package:hermes_app/l10n/ui_message.dart';
 import 'package:hermes_app/models/session_activity.dart';
 import 'package:hermes_app/api/sse.dart';
 import 'package:hermes_app/features/chat/chat_page.dart';
@@ -169,7 +174,7 @@ void main() {
     c.detach();
     await Future<void>.delayed(const Duration(milliseconds: 300));
     expect(c.phase, ChatPhase.uncertain);
-    expect(c.error, contains('重新核對'));
+    expect((c.error! as UiLocal).key, MessageKey.chatStateM011);
     final frozen = repo.statusCalls;
     await Future<void>.delayed(const Duration(milliseconds: 60));
     expect(repo.statusCalls, frozen, reason: 'capped: no timer keeps running');
@@ -199,7 +204,7 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 40));
     expect(c.phase, ChatPhase.idle);
     expect(c.busy, isFalse);
-    expect(c.error, contains('歷史載入失敗'));
+    expect((c.error! as UiLocal).key, MessageKey.chatStateM024);
     final frozen = repo.statusCalls;
     await Future<void>.delayed(const Duration(milliseconds: 60));
     expect(repo.statusCalls, frozen, reason: 'no scheduler may outlive settle');
@@ -254,8 +259,9 @@ void main() {
     addTearDown(container.dispose);
     await tester.pumpWidget(UncontrolledProviderScope(
       container: container,
-      child: MaterialApp(
-        home: ChatPage(
+      child: localizedWrap(
+        locale: AppLocale.zhHant,
+        ChatPage(
           session: Session(
             id: 's',
             title: 'A',
@@ -271,7 +277,7 @@ void main() {
     await tester.pump();
     final page = container.read(chatProvider('s'));
     page.phase = ChatPhase.uncertain;
-    page.error = '背景任務進度暫時查不到，請按「重新核對」重試。';
+    page.error = const UiMessage.local(MessageKey.chatStateM011);
     page.notifyListeners();
     await tester.pump();
     expect(find.text('重新核對'), findsOneWidget);

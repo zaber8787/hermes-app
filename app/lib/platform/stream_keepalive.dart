@@ -1,4 +1,6 @@
 import 'dart:async';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import '../diagnostics/diagnostics.dart';
 
@@ -18,6 +20,42 @@ class StreamKeepalive {
         await Diagnostics.current?.record('fgs.error');
       }
     });
+  }
+
+  /// Locale mirror dispatched through the same serialized queue as start/
+  /// stop, so the initial tag lands BEFORE the first stream start and a
+  /// changed-language command can never interleave with start/stop.
+  /// Returns success; false means "keep going, warn once" (never replays
+  /// streams). Web has no such channel: skip without touching the queue.
+  /// Test-only: the serialized chain is process-scoped state; between
+  /// flutter_test zones a completed-but-orphaned tail would stall it.
+  @visibleForTesting
+  static void resetCommandQueueForTest() => _operations = Future.value();
+
+  static Future<bool> syncLocale(String tag) {
+    if (defaultTargetPlatform != TargetPlatform.android) {
+      return Future.value(true);
+    }
+    final operation = _operations.then((_) => _setLocale(tag));
+    _operations = operation.then((_) {}, onError: (_) {});
+    return operation;
+  }
+
+  static Future<bool> _setLocale(String tag) async {
+    // ignore: avoid_print
+    print('[dbg] _setLocale running $tag');
+    try {
+      await channel.invokeMethod<void>('setLocale', {'tag': tag});
+      unawaited(Diagnostics.current?.record('fgs.locale'));
+      return true;
+    } on MissingPluginException {
+      // No native service side at all (tests, unsupported builds): skip
+      // without warning — the notification simply does not exist here.
+      return true;
+    } catch (_) {
+      unawaited(Diagnostics.current?.record('fgs.locale_error'));
+      return false;
+    }
   }
 
   Future<void> start() {

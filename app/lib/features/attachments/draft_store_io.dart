@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:path_provider/path_provider.dart';
 
 import '../../api/hermes_repository.dart' show ApiException;
+import '../../l10n/message_key.dart';
 import 'attachment.dart';
 import 'draft_store.dart';
 
@@ -43,7 +44,7 @@ class IoDraftStore implements DraftStore {
   Future<AttachmentSource> open(String ref) async {
     final file = File(ref);
     if (!await file.exists()) {
-      throw const ApiException('附件快取已遺失，請移除後重新選取。');
+      throw const ApiException.local(MessageKey.attachmentCacheMissing);
     }
     return StreamAttachmentSource(() => file.openRead());
   }

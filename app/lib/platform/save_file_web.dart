@@ -6,7 +6,7 @@ import 'package:web/web.dart' as web;
 
 import 'save_file.dart';
 
-Future<String?> saveBytesAs(String name, Uint8List bytes) async {
+Future<SaveResult> saveBytesAs(String name, Uint8List bytes) async {
   final blob = web.Blob(
     [bytes.toJS].toJS,
     web.BlobPropertyBag(type: 'application/octet-stream'),
@@ -23,7 +23,7 @@ Future<String?> saveBytesAs(String name, Uint8List bytes) async {
   unawaited(Future.delayed(const Duration(seconds: 30), () {
     web.URL.revokeObjectURL(url);
   }));
-  return '瀏覽器下載';
+  return const BrowserStarted();
 }
 
 /// Artifacts re-download cheaply over Tailscale; an LRU-ish memory map beats

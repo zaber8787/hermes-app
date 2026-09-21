@@ -3,6 +3,11 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../api/hermes_repository.dart';
+import '../../l10n/app_strings.dart';
+import '../../l10n/date_labels.dart';
+import '../../l10n/localized_text.dart';
+import '../../l10n/message_key.dart';
+import '../../l10n/ui_message.dart';
 import '../../providers.dart';
 import '../../models/session_activity.dart';
 import 'chat_controller.dart';
@@ -53,13 +58,16 @@ KeyEventResult decideChatInputKey(
 class ClientCommand {
   const ClientCommand(
     this.name,
-    this.description, {
+    this.descriptionKey, {
     this.worksWhileBusy = false,
     required this.run,
   });
 
   final String name;
-  final String description;
+
+  /// Catalog key (I18N-PLAN §4.4): descriptions resolve at render; the
+  /// provider never rebuilds for language (callback identity stays fixed).
+  final MessageKey descriptionKey;
 
   /// true 時 agent 跑著也能用（中斷類指令）。
   final bool worksWhileBusy;
@@ -88,7 +96,16 @@ final clientCommandsProvider = Provider<List<ClientCommand>>((ref) {
       Navigator.of(context).pushReplacement(
           MaterialPageRoute<void>(builder: (_) => ChatPage(session: created)));
     } catch (e) {
-      messenger?.showSnackBar(SnackBar(content: Text('開新對話失敗：$e')));
+      messenger?.showSnackBar(
+        SnackBar(
+          content: LocalizedText(
+            UiMessage.local(
+              MessageKey.commandsM001,
+              args: {'error': messageForError(e)},
+            ),
+          ),
+        ),
+      );
     }
     return true;
   }
@@ -100,97 +117,252 @@ final clientCommandsProvider = Provider<List<ClientCommand>>((ref) {
     _,
   ) async {
     // 快照優先：先抓本輪身份再 await，頁面 dispose／切 session 後不誤貼。
+    // Only RAW data is snapshotted here; all app wording stays as catalog
+    // keys resolved INSIDE the dialog/snackbar (§4.5), so an open /status
+    // follows a language switch.
     final sid = chat.sid;
     final runId = chat.activeRunId;
-    var runLine = '目前沒有執行中的 run';
+    var runStatusToken = ''; // raw server status token
+    var runLineFailed = false, runLineFinished = false;
     if (runId != null) {
       try {
         final status = await ref.read(repositoryProvider).runStatus(runId);
-        runLine = 'run $runId：${(status['status'] as String?) ?? '狀態不明'}';
+        runStatusToken = (status['status'] as String?) ?? '';
       } on ApiException catch (e) {
         // 404 = gateway 已遺忘這個 run：顯示「已結束」；既有核對流程照跑，
         // status 查詢本身不改 phase／pending。
-        runLine = e.status == 404
-            ? 'run $runId：已結束'
-            : 'run $runId：狀態查詢失敗';
+        if (e.status == 404) {
+          runLineFinished = true;
+        } else {
+          runLineFailed = true;
+        }
       } catch (_) {
-        runLine = 'run $runId：狀態查詢失敗';
+        runLineFailed = true;
       }
     }
     if (!context.mounted) return true;
     final messenger = ScaffoldMessenger.maybeOf(context);
-    final phaseLabel = switch ((chat.phase, chat.detached)) {
-      (ChatPhase.idle, _) => '空閒',
-      (ChatPhase.sending, _) => '執行中',
-      (ChatPhase.recovering, true) => '觀察中（背景輪詢）',
-      (ChatPhase.recovering, false) => '觀察中',
-      (ChatPhase.uncertain, _) => '待確認',
+    final errorDescriptor = chat.error; // UiMessage? — stays a descriptor
+    final remoteRuns = chat.remoteActiveRuns;
+    final lastActivity = chat.lastActivitySuccess;
+    final freshness = chat.activityFreshness;
+    final overflow = chat.observedActivity?.overflow ?? false;
+    final messageCount = chat.messages.length;
+    final reconnects = chat.reconnects;
+    final viewers = ChatViewers.count(chat.sid);
+
+    MessageKey phaseKey(
+      ChatPhase p,
+      bool d,
+    ) => switch ((p, d)) {
+      (ChatPhase.idle, _) => MessageKey.commandsM006,
+      (ChatPhase.sending, _) => MessageKey.commandsM007,
+      (ChatPhase.recovering, true) => MessageKey.commandsM008,
+      (ChatPhase.recovering, false) => MessageKey.commandsM009,
+      (ChatPhase.uncertain, _) => MessageKey.commandsM010,
     };
-    // WAVE4：本地 phase 之外，快照證明「其他裝置也在這個 session 跑」。
-    final remoteLines = [for (final r in chat.remoteActiveRuns) chat.remoteRunLabel(r)];
-    final activityText = switch (chat.activityFreshness) {
-      ActivityFreshness.unknown => '即時觀察：尚未取得快照',
-      ActivityFreshness.unsupported => '即時觀察：此伺服器不支援即時快照',
-      ActivityFreshness.stale =>
-        '即時觀察：擷取失敗，最後成功 '
-        '${chat.lastActivitySuccess == null ? '（無）' : TimeOfDay.fromDateTime(chat.lastActivitySuccess!).format(context)}；可能還有未顯示的回合',
-      ActivityFreshness.fresh => remoteLines.isEmpty
-          ? '即時觀察：無其他進行中回合'
-          : '其他裝置進行中：\n${remoteLines.join('\n')}',
-    };
-    final summary =
-        '狀態：$phaseLabel｜run：${runId ?? '未知'}｜訊息 ${chat.messages.length} 則'
-        '${chat.remoteBusy ? '｜其他裝置進行中（${remoteLines.first}）' : chat.activityBlocksSend ? '｜狀態確認中，暫停送出' : ''}';
+
+    UiMessage runLine() {
+      if (runId == null) return const UiMessage.local(MessageKey.commandsM002);
+      if (runLineFinished) {
+        return UiMessage.local(
+          MessageKey.commandsM004,
+          args: {'runId': runId},
+        );
+      }
+      if (runLineFailed) {
+        return UiMessage.local(
+          MessageKey.commandsM005,
+          args: {'runId': runId},
+        );
+      }
+      return runStatusToken.isEmpty
+          ? UiMessage.local(
+              MessageKey.chatStateRunLabel,
+              args: {
+                'who': UiMessage.raw('run $runId'),
+                'what': const UiMessage.local(MessageKey.commandsM003),
+              },
+            )
+          : UiMessage.local(
+              MessageKey.chatStateRunLabel,
+              args: {
+                'who': UiMessage.raw('run $runId'),
+                'what': UiMessage.raw(runStatusToken),
+              },
+            );
+    }
+
+    String activityText(AppStrings strings) =>
+        switch (freshness) {
+          ActivityFreshness.unknown => strings.resolve(MessageKey.commandsM011),
+          ActivityFreshness.unsupported => strings.resolve(
+            MessageKey.commandsM012,
+          ),
+          ActivityFreshness.stale => strings.resolve(
+            // Fixed local HH:mm in both locales (I18N-PLAN §7).
+            MessageKey.commandsActivityStale,
+            args: {
+              'time': lastActivity == null
+                  ? strings.resolve(MessageKey.commonNoneParenthesized)
+                  : formatLocalClock(lastActivity),
+            },
+          ),
+          ActivityFreshness.fresh => remoteRuns.isEmpty
+              ? strings.resolve(MessageKey.commandsM015)
+              : strings.resolve(
+                  MessageKey.commandsM016,
+                  args: {
+                    'lines': remoteRuns
+                        .map(
+                          (r) => ChatController.formatRemoteRunLabel(strings, r),
+                        )
+                        .join('\n'),
+                  },
+                ),
+        };
+
     if (chat.busy || chat.remoteBusy || chat.activityBlocksSend) {
       // 忙碌（本機或遠端）時不打斷畫面：簡版 SnackBar（長版留給空閒結果卡）。
       // 遠端回合只觀察：這裡絕不對它 stop/steer。
-      messenger?.showSnackBar(SnackBar(content: Text(summary)));
+      messenger?.showSnackBar(
+        SnackBar(
+          // Builder resolves through Localizations, so a visible SnackBar
+          // re-renders when the language changes under it (§4.5).
+          content: Builder(
+            builder: (context) {
+              final strings = AppStrings.of(context);
+              final suffix = (chat.remoteBusy && remoteRuns.isNotEmpty)
+                  ? strings.resolve(
+                      MessageKey.commandsM018,
+                      args: {
+                        'line': ChatController.formatRemoteRunLabel(
+                          strings,
+                          remoteRuns.first,
+                        ),
+                      },
+                    )
+                  : chat.activityBlocksSend
+                  ? strings.resolve(MessageKey.commandsM019)
+                  : '';
+              return Text(
+                strings.resolve(
+                  MessageKey.commandsM017,
+                  count: messageCount,
+                  args: {
+                    'phase': strings.resolve(
+                      phaseKey(chat.phase, chat.detached),
+                    ),
+                    'runId': runId ?? strings.resolve(MessageKey.commonUnknown),
+                    'count': messageCount,
+                  },
+                ) +
+                suffix,
+              );
+            },
+          ),
+        ),
+      );
       return true;
     }
     await showDialog<void>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('/status'),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text('工作階段：$sid'),
-            Text('狀態：$phaseLabel'),
-            Text(runLine),
-            Text('訊息數：本地已載入 ${chat.messages.length} 則'),
-            Text('本頁觀察者：${ChatViewers.count(chat.sid)} 個'),
-            Text(activityText),
-            if (chat.observedActivity?.overflow ?? false)
-              const Text('（進行中回合過多，快照僅顯示部分）'),
-            Text('錯誤：${chat.error ?? '無'}'),
-            Text('重新連線次數：${chat.reconnects}'),
+      builder: (context) {
+        final strings = AppStrings.of(context);
+        return AlertDialog(
+          title: const Text('/status'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                strings.resolve(
+                  MessageKey.commandsM020,
+                  args: {'sid': sid},
+                ),
+              ),
+              Text(
+                strings.resolve(
+                  MessageKey.commandsM021,
+                  args: {
+                    'phase': UiMessage.local(
+                      phaseKey(chat.phase, chat.detached),
+                    ),
+                  },
+                ),
+              ),
+              Text(strings.render(runLine())),
+              Text(
+                strings.resolve(
+                  MessageKey.commandsM022,
+                  args: {'count': messageCount},
+                ),
+              ),
+              Text(
+                strings.resolve(
+                  MessageKey.commandsM023,
+                  args: {'count': viewers},
+                  count: viewers,
+                ),
+              ),
+              Text(activityText(strings)),
+              if (overflow)
+                Text(strings.resolve(MessageKey.commandsM024)),
+              Text(
+                strings.resolve(
+                  MessageKey.commandsM025,
+                  args: {
+                    'error':
+                        errorDescriptor ??
+                        const UiMessage.local(MessageKey.commonNone),
+                  },
+                ),
+              ),
+              Text(
+                strings.resolve(
+                  MessageKey.commandsM026,
+                  args: {'count': reconnects},
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.pop(context);
+                chat.refreshActivity();
+              },
+              child: Text(strings.resolve(MessageKey.commandsM027)),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: Text(strings.resolve(MessageKey.commonClose)),
+            ),
           ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () {
-              Navigator.pop(context);
-              chat.refreshActivity();
-            },
-            child: const Text('立即重新核對'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('關閉'),
-          ),
-        ],
-      ),
+        );
+      },
     );
     return true;
   }
 
   return [
-    ClientCommand('reset', '清空脈絡，開一個全新對話',
-        worksWhileBusy: true, run: startFresh),
-    ClientCommand('new', '同 /reset：開一個全新對話',
-        worksWhileBusy: true, run: startFresh),
-    ClientCommand('status', '顯示工作階段與執行中回合狀態',
-        worksWhileBusy: true, run: showStatus),
+    ClientCommand(
+      'reset',
+      MessageKey.commandsM028,
+      worksWhileBusy: true,
+      run: startFresh,
+    ),
+    ClientCommand(
+      'new',
+      MessageKey.commandsM029,
+      worksWhileBusy: true,
+      run: startFresh,
+    ),
+    ClientCommand(
+      'status',
+      MessageKey.commandsM030,
+      worksWhileBusy: true,
+      run: showStatus,
+    ),
   ];
 });

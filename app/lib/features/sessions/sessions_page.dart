@@ -1,6 +1,10 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../l10n/app_strings.dart';
+import '../../l10n/localized_text.dart';
+import '../../l10n/message_key.dart';
+import '../../l10n/ui_message.dart';
 import '../../models/session.dart';
 import '../../providers.dart';
 import '../chat/chat_page.dart';
@@ -56,7 +60,14 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('建立對話失敗：$e')),
+          SnackBar(
+            content: LocalizedText(
+              UiMessage.local(
+                MessageKey.sessionsM001,
+                args: {'error': messageForError(e)},
+              ),
+            ),
+          ),
         );
       }
     } finally {
@@ -160,24 +171,32 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     final controller = TextEditingController(text: s.title);
     final title = await showDialog<String>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('重新命名'),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          maxLength: 120,
-          decoration: const InputDecoration(hintText: '對話名稱'),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('儲存'),
-          ),
-        ],
+      builder: (context) => Builder(
+        // Builder re-resolves on a live language switch while open (§4.5).
+        builder: (context) {
+          final strings = AppStrings.of(context);
+          return AlertDialog(
+            title: Text(strings.resolve(MessageKey.sessionsRename)),
+            content: TextField(
+              controller: controller,
+              autofocus: true,
+              maxLength: 120,
+              decoration: InputDecoration(
+                hintText: strings.resolve(MessageKey.sessionsName),
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(strings.resolve(MessageKey.commonCancel)),
+              ),
+              FilledButton(
+                onPressed: () => Navigator.pop(context, controller.text.trim()),
+                child: Text(strings.resolve(MessageKey.commonSave)),
+              ),
+            ],
+          );
+        },
       ),
     );
     if (title == null || title.isEmpty || title == s.title || !mounted) return;
@@ -189,9 +208,13 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
       ref.invalidate(sessionsProvider);
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('改名失敗')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: LocalizedText(
+            UiMessage.local(MessageKey.sessionsRenameFailed),
+          ),
+        ),
+      );
       }
     }
   }
@@ -210,7 +233,14 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('釘選失敗：$e')),
+          SnackBar(
+            content: LocalizedText(
+              UiMessage.local(
+                MessageKey.sessionsM002,
+                args: {'error': messageForError(e)},
+              ),
+            ),
+          ),
         );
       }
     }
@@ -219,20 +249,32 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
   Future<void> delete(Session s) async {
     final confirmed = await showDialog<bool>(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('刪除對話'),
-        content: Text('確定刪除「${s.title}」？這會從伺服器移除整個對話。'),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('取消'),
-          ),
-          FilledButton(
-            style: FilledButton.styleFrom(backgroundColor: Colors.red.shade700),
-            onPressed: () => Navigator.pop(context, true),
-            child: const Text('刪除'),
-          ),
-        ],
+      builder: (context) => Builder(
+        builder: (context) {
+          final strings = AppStrings.of(context);
+          return AlertDialog(
+            title: Text(strings.resolve(MessageKey.sessionsM003)),
+            content: Text(
+              strings.resolve(
+                MessageKey.sessionsM004,
+                args: {'title': displaySessionTitle(strings, s.title)},
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(context, false),
+                child: Text(strings.resolve(MessageKey.commonCancel)),
+              ),
+              FilledButton(
+                style: FilledButton.styleFrom(
+                  backgroundColor: Colors.red.shade700,
+                ),
+                onPressed: () => Navigator.pop(context, true),
+                child: Text(strings.resolve(MessageKey.commonDelete)),
+              ),
+            ],
+          );
+        },
       ),
     );
     if (confirmed != true || !mounted) return;
@@ -242,9 +284,11 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
       ref.invalidate(sessionsProvider);
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('刪除失敗')));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: LocalizedText(UiMessage.local(MessageKey.sessionsM005)),
+        ),
+      );
       }
     }
   }
@@ -258,6 +302,7 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     ); // Startup cache, retained until refresh.
     final store = ref.watch(localStoreProvider);
     final server = ref.watch(settingsProvider).url;
+    final strings = AppStrings.of(context);
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -266,7 +311,7 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
         ),
         actions: [
           IconButton(
-            tooltip: '新對話',
+            tooltip: strings.resolve(MessageKey.sessionsM006),
             onPressed: _creating ? null : _createSession,
             icon: _creating
                 ? const SizedBox(
@@ -277,7 +322,9 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                 : const Icon(Icons.add_comment_outlined),
           ),
           Tooltip(
-            message: online ? '已連線' : '離線或檢查中',
+            message: strings.resolve(
+              online ? MessageKey.sessionsM007 : MessageKey.sessionsM008,
+            ),
             child: Padding(
               padding: const EdgeInsets.all(12),
               child: Icon(
@@ -288,7 +335,7 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
             ),
           ),
           IconButton(
-            tooltip: '管理',
+            tooltip: strings.resolve(MessageKey.managementTitle),
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute<void>(builder: (_) => const ManagementPage()),
@@ -296,7 +343,7 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
             icon: const Icon(Icons.grid_view_outlined),
           ),
           IconButton(
-            tooltip: '設定',
+            tooltip: strings.resolve(MessageKey.sessionsM009),
             onPressed: () => Navigator.push(
               context,
               MaterialPageRoute<void>(builder: (_) => const SettingsPage()),
@@ -321,10 +368,18 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
             children: [
               const Icon(Icons.cloud_off_outlined, size: 48),
               const SizedBox(height: 16),
-              const Text('暫時無法載入對話', textAlign: TextAlign.center),
+              Text(
+                strings.resolve(MessageKey.sessionsM010),
+                textAlign: TextAlign.center,
+              ),
               const SizedBox(height: 8),
-              Text('$error', textAlign: TextAlign.center),
-              TextButton(onPressed: refresh, child: const Text('重新連線')),
+              // Typed descriptors render translated; raw server/transport
+              // text stays byte-for-byte.
+              LocalizedText(messageForError(error), textAlign: TextAlign.center),
+              TextButton(
+                onPressed: refresh,
+                child: Text(strings.resolve(MessageKey.sessionsM011)),
+              ),
             ],
           ),
           data: (list) {
@@ -362,14 +417,16 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                          '對話',
+                          strings.resolve(MessageKey.sessionsM012),
                           style: Theme.of(context).textTheme.headlineLarge,
                         ),
                         const SizedBox(height: 12),
                         TextField(
                           controller: search,
                           decoration: InputDecoration(
-                            hintText: '搜尋對話標題（含已隱藏）',
+                            hintText: strings.resolve(
+                              MessageKey.sessionsM013,
+                            ),
                             prefixIcon: const Icon(Icons.search),
                             suffixIcon: query.isEmpty
                                 ? null
@@ -387,7 +444,7 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                         Row(
                           children: [
                             ChoiceChip(
-                              label: const Text('全部'),
+                              label: Text(strings.resolve(MessageKey.sessionsM014)),
                               selected: !onlyPinned,
                               onSelected: (_) =>
                                   setState(() => onlyPinned = false),
@@ -403,7 +460,12 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                                           .colorScheme
                                           .onSurfaceVariant,
                               ),
-                              label: Text('最愛（$pinnedCount）'),
+                              label: Text(
+                                strings.resolve(
+                                  MessageKey.sessionsM015,
+                                  args: {'count': pinnedCount},
+                                ),
+                              ),
                               selected: onlyPinned,
                               onSelected: (_) =>
                                   setState(() => onlyPinned = true),
@@ -419,7 +481,10 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                             ),
                             Expanded(
                               child: Text(
-                                '顯示已隱藏（$hiddenCount）',
+                                strings.resolve(
+                                  MessageKey.sessionsM016,
+                                  args: {'count': hiddenCount},
+                                ),
                                 style: TextStyle(
                                   color: Theme.of(
                                     context,
@@ -433,17 +498,26 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                         Text(
                           visible.isEmpty
                               ? (query.isEmpty
-                                    ? '目前沒有可瀏覽的對話。'
-                                    : '找不到符合「$query」的對話。')
-                              : '${visible.length} 段對話 · 最近活躍優先',
+                                    ? strings.resolve(MessageKey.sessionsM017)
+                                    : strings.resolve(
+                                        MessageKey.sessionsM018,
+                                        args: {'query': query},
+                                      ))
+                              : strings.resolve(
+                                  MessageKey.sessionsM019,
+                                  args: {'count': visible.length},
+                                  count: visible.length,
+                                ),
                           style: TextStyle(
                             color: Theme.of(context).colorScheme.onSurfaceVariant,
                           ),
                         ),
                         if (skillState.hasError)
-                          const Padding(
-                            padding: EdgeInsets.only(top: 8),
-                            child: Text('Skills 目錄尚未載入，可下拉重試。'),
+                          Padding(
+                            padding: const EdgeInsets.only(top: 8),
+                            child: Text(
+                              strings.resolve(MessageKey.sessionsM020),
+                            ),
                           ),
                       ],
                     ),
@@ -491,7 +565,8 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                           ),
                         Expanded(
                           child: Text(
-                            s.title,
+                            // Display fallback ONLY; the model stays raw.
+                            displaySessionTitle(strings, s.title),
                             maxLines: 2,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
@@ -506,7 +581,16 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                     subtitle: Padding(
                       padding: const EdgeInsets.only(top: 8),
                       child: Text(
-                        '${s.count} 則訊息 · ${date.month}/${date.day} · ${s.source}',
+                        strings.resolve(
+                          MessageKey.sessionsM021,
+                          args: {
+                            'count': s.count,
+                            'month': date.month,
+                            'day': date.day,
+                            'source': s.source,
+                          },
+                          count: s.count,
+                        ),
                       ),
                     ),
                     trailing: unread
@@ -519,55 +603,79 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                     onTap: () => open(s),
                     onLongPress: () => showModalBottomSheet<void>(
                       context: context,
-                      builder: (sheet) => SafeArea(
-                        child: Column(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            ListTile(
-                              leading: Icon(
-                                s.pinned
-                                    ? Icons.push_pin
-                                    : Icons.push_pin_outlined,
-                              ),
-                              title: Text(s.pinned ? '取消釘選' : '釘選在最上面'),
-                              onTap: () {
-                                Navigator.pop(sheet);
-                                pin(s, !s.pinned);
-                              },
+                      builder: (sheet) => Builder(
+                        builder: (sheet) {
+                          final strings = AppStrings.of(sheet);
+                          return SafeArea(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                ListTile(
+                                  leading: Icon(
+                                    s.pinned
+                                        ? Icons.push_pin
+                                        : Icons.push_pin_outlined,
+                                  ),
+                                  title: Text(
+                                    strings.resolve(
+                                      s.pinned
+                                          ? MessageKey.sessionsM022
+                                          : MessageKey.sessionsM023,
+                                    ),
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(sheet);
+                                    pin(s, !s.pinned);
+                                  },
+                                ),
+                                ListTile(
+                                  leading: const Icon(
+                                    Icons.drive_file_rename_outline,
+                                  ),
+                                  title: Text(
+                                    strings.resolve(MessageKey.sessionsRename),
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(sheet);
+                                    rename(s);
+                                  },
+                                ),
+                                ListTile(
+                                  leading: Icon(
+                                    hidden
+                                        ? Icons.visibility_outlined
+                                        : Icons.visibility_off_outlined,
+                                  ),
+                                  title: Text(
+                                    strings.resolve(
+                                      hidden
+                                          ? MessageKey.sessionsM024
+                                          : MessageKey.sessionsM025,
+                                    ),
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(sheet);
+                                    hide(s, !hidden);
+                                  },
+                                ),
+                                ListTile(
+                                  leading: const Icon(
+                                    Icons.delete_outline,
+                                    color: Colors.red,
+                                  ),
+                                  title: Text(
+                                    strings.resolve(MessageKey.commonDelete),
+                                    style: const TextStyle(color: Colors.red),
+                                  ),
+                                  onTap: () {
+                                    Navigator.pop(sheet);
+                                    delete(s);
+                                  },
+                                ),
+                              ],
                             ),
-                            ListTile(
-                              leading: const Icon(Icons.drive_file_rename_outline),
-                              title: const Text('重新命名'),
-                              onTap: () {
-                                Navigator.pop(sheet);
-                                rename(s);
-                              },
-                            ),
-                            ListTile(
-                              leading: Icon(
-                                hidden
-                                    ? Icons.visibility_outlined
-                                    : Icons.visibility_off_outlined,
-                              ),
-                              title: Text(hidden ? '取消隱藏' : '隱藏此對話'),
-                              onTap: () {
-                                Navigator.pop(sheet);
-                                hide(s, !hidden);
-                              },
-                            ),
-                            ListTile(
-                              leading: const Icon(
-                                Icons.delete_outline,
-                                color: Colors.red,
-                              ),
-                              title: const Text('刪除', style: TextStyle(color: Colors.red)),
-                              onTap: () {
-                                Navigator.pop(sheet);
-                                delete(s);
-                              },
-                            ),
-                          ],
-                        ),
+                          );
+                        },
                       ),
                     ),
                   ),

@@ -2,6 +2,11 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../l10n/app_strings.dart';
+import '../../l10n/date_labels.dart';
+import '../../l10n/localized_text.dart';
+import '../../l10n/message_key.dart';
+import '../../l10n/ui_message.dart';
 import '../../models/message.dart';
 import '../../models/session_activity.dart';
 import '../../models/session.dart';
@@ -30,7 +35,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   bool follow = true;
   bool preparing = false, suppressDraft = false;
   bool firstLoaded = false;
-  String draftError = '';
+  UiMessage? draftError;
   Timer? draftTimer;
   late String title;
   bool _dragging = false;
@@ -160,21 +165,23 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final next = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('重新命名'),
+        title: Text(AppStrings.of(context).resolve(MessageKey.sessionsRename)),
         content: TextField(
           controller: controller,
           autofocus: true,
           maxLength: 120,
-          decoration: const InputDecoration(hintText: '對話名稱'),
+          decoration: InputDecoration(
+            hintText: AppStrings.of(context).resolve(MessageKey.sessionsName),
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
+            child: Text(AppStrings.of(context).resolve(MessageKey.commonCancel)),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, controller.text.trim()),
-            child: const Text('儲存'),
+            child: Text(AppStrings.of(context).resolve(MessageKey.commonSave)),
           ),
         ],
       ),
@@ -189,9 +196,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       ref.invalidate(sessionsProvider);
     } catch (_) {
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('改名失敗')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            // Resolved inside the route: follows a later language switch.
+            content: const LocalizedText(
+              UiMessage.local(MessageKey.sessionsRenameFailed),
+            ),
+          ),
+        );
       }
     }
   }
@@ -276,7 +288,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
     if (value.startsWith('/steer ')) {
       if (!controller.detailed || !controller.canControl) {
-        setState(() => draftError = '請在詳細模式中對進行中的對話插話。');
+        setState(
+          () => draftError = const UiMessage.local(MessageKey.chatM001),
+        );
         return;
       }
       try {
@@ -320,7 +334,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       final prompt = await attachments.prepare(rewritten);
       if (!mounted) return;
       setState(() {
-        draftError = '';
+        draftError = null;
         preparing = false;
       });
       draftTimer?.cancel();
@@ -347,7 +361,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         setState(
           () => draftError =
               attachments.error ??
-              (e is FormatException ? e.message : '傳送失敗，草稿已保留。'),
+              (e is FormatException
+                  ? messageForError(e)
+                  : const UiMessage.local(MessageKey.chatM002)),
         );
       }
     } finally {
@@ -360,22 +376,24 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final guidance = await showDialog<String>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('插話'),
+        title: Text(AppStrings.of(context).resolve(MessageKey.chatSteer)),
         content: TextField(
           controller: draft,
           autofocus: true,
           minLines: 2,
           maxLines: 6,
-          decoration: const InputDecoration(hintText: '補充指示或調整方向'),
+          decoration: InputDecoration(
+            hintText: AppStrings.of(context).resolve(MessageKey.chatM003),
+          ),
         ),
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: const Text('取消'),
+            child: Text(AppStrings.of(context).resolve(MessageKey.commonCancel)),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, draft.text),
-            child: const Text('送出'),
+            child: Text(AppStrings.of(context).resolve(MessageKey.chatM004)),
           ),
         ],
       ),
@@ -386,9 +404,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     try {
       await ref.read(chatProvider(widget.session.id)).steer(guidance);
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(const SnackBar(content: Text('插話已接受')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: const LocalizedText(
+              UiMessage.local(MessageKey.chatM005),
+            ),
+          ),
+        );
       }
     } catch (_) {
       /* Error shown inline. */
@@ -397,22 +419,31 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   @override
   Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
     final c = ref.watch(chatProvider(widget.session.id));
     final attachments = ref.watch(attachmentsProvider(widget.session.id));
     final skills = ref.watch(skillsProvider).asData?.value ?? <Skill>[];
     final match = RegExp(r'(?:^|\s)/([^\s]*)$').firstMatch(input.text);
     // 清單三分層：app 指令（能跑）→ gateway 指令（原文直通模型）→ skills。
+    // Descriptions are descriptors (keys or RAW server text), rendered by
+    // LocalizedText so an open menu follows a language switch (§4.5).
     final suggestions = input.text.startsWith('/') && match != null
         ? [
             for (final c in ref.watch(clientCommandsProvider))
               if (c.name.startsWith(match.group(1)!))
-                _SlashItem('/${c.name}', c.description),
+                _SlashItem('/${c.name}', UiMessage.local(c.descriptionKey)),
             for (final (name, desc) in gatewayPassthroughCommands)
               if (name.startsWith(match.group(1)!))
-                _SlashItem('/$name', '問 agent：$desc'),
+                _SlashItem(
+                  '/$name',
+                  UiMessage.local(
+                    MessageKey.chatM006,
+                    args: {'desc': UiMessage.local(desc)},
+                  ),
+                ),
             ...skills
                 .where((s) => s.name.startsWith(match.group(1)!))
-                .map((s) => _SlashItem('/${s.name}', s.description)),
+                .map((s) => _SlashItem('/${s.name}', UiMessage.raw(s.description))),
           ].take(8).toList()
         : const <_SlashItem>[];
     if (!c.loading && (!firstLoaded || follow) && !c.loadingOlder) {
@@ -425,10 +456,15 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
     return Scaffold(
       appBar: AppBar(
-        title: Text(title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        title: Text(
+          // Raw cacheTitle; untitled fallback happens only at render.
+          displaySessionTitle(AppStrings.of(context), title),
+          maxLines: 1,
+          overflow: TextOverflow.ellipsis,
+        ),
         actions: [
           PopupMenuButton<String>(
-            tooltip: '對話選單',
+            tooltip: strings.resolve(MessageKey.chatM007),
             onSelected: (v) {
               if (v == 'rename') rename();
               if (v == 'model') {
@@ -441,27 +477,29 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 );
               }
             },
-            itemBuilder: (context) => const [
+            itemBuilder: (context) => [
               PopupMenuItem(
                 value: 'rename',
                 child: ListTile(
                   dense: true,
-                  leading: Icon(Icons.drive_file_rename_outline),
-                  title: Text('重新命名'),
+                  leading: const Icon(Icons.drive_file_rename_outline),
+                  title: Text(strings.resolve(MessageKey.sessionsRename)),
                 ),
               ),
               PopupMenuItem(
                 value: 'model',
                 child: ListTile(
                   dense: true,
-                  leading: Icon(Icons.memory_outlined),
-                  title: Text('切換模型'),
+                  leading: const Icon(Icons.memory_outlined),
+                  title: Text(strings.resolve(MessageKey.chatM008)),
                 ),
               ),
             ],
           ),
           IconButton(
-            tooltip: c.detailed ? '切換簡略模式' : '切換詳細模式',
+            tooltip: strings.resolve(
+              c.detailed ? MessageKey.chatM009 : MessageKey.chatM010,
+            ),
             onPressed: c.toggleDetail,
             icon: Icon(
               c.detailed ? Icons.view_agenda_outlined : Icons.short_text,
@@ -480,26 +518,36 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   child: Row(
                     children: [
                   Text(
-                    c.detailed ? '詳細時間軸' : '簡略對話',
+                    strings.resolve(
+                      c.detailed
+                          ? MessageKey.chatM011
+                          : MessageKey.chatM012,
+                    ),
                     style: Theme.of(context).textTheme.labelMedium,
                   ),
                   const Spacer(),
                   if (c.busy)
-                    const Text('進行中', style: TextStyle(fontSize: 12))
+                    Text(
+                      strings.resolve(MessageKey.chatM013),
+                      style: const TextStyle(fontSize: 12),
+                    )
                   else if (c.remoteBusy)
-                    const Text(
-                      '其他裝置進行中',
-                      style: TextStyle(fontSize: 12),
+                    Text(
+                      strings.resolve(MessageKey.chatRemoteBusy),
+                      style: const TextStyle(fontSize: 12),
                     )
                   else if (c.activityBlocksSend)
-                    const Text('狀態確認中…', style: TextStyle(fontSize: 12)),
+                    Text(
+                      strings.resolve(MessageKey.chatM014),
+                      style: const TextStyle(fontSize: 12),
+                    ),
                 ],
               ),
             ),
             if (c.backgrounded)
-              const Padding(
-                padding: EdgeInsets.all(12),
-                child: Text('背景中，連線可能中斷；回前景將立即核對歷史。'),
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(strings.resolve(MessageKey.chatM015)),
               ),
             if (c.remoteBusy)
               Padding(
@@ -511,7 +559,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       Row(
                         children: [
                           Text(
-                            c.remoteRunLabel(r),
+                            ChatController.formatRemoteRunLabel(strings, r),
                             style: const TextStyle(fontSize: 12),
                           ),
                           const SizedBox(width: 8),
@@ -519,8 +567,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                         ],
                       ),
                     if (c.observedActivity?.overflow == true)
-                      const Text('⋯（進行中回合過多，僅顯示部分）',
-                          style: TextStyle(fontSize: 12)),
+                      Text(strings.resolve(MessageKey.chatM016),
+                          style: const TextStyle(fontSize: 12)),
                   ],
                 ),
               ),
@@ -528,24 +576,41 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 12),
                 child: Text(
-                  '即時狀態擷取失敗，顯示最後一次成功核對的結果'
-                  '${c.lastActivitySuccess == null ? '' : '（${TimeOfDay.fromDateTime(c.lastActivitySuccess!).format(context)}）'}'
-                  '；可能還有未顯示的進行中回合。',
+                  // Fixed local HH:mm in both locales (I18N-PLAN §7).
+                  strings.resolve(
+                    MessageKey.chatActivityStaleSummary,
+                    args: {
+                      'time': c.lastActivitySuccess == null
+                          ? ''
+                          : strings.resolve(
+                              MessageKey.commonParenthesized,
+                              args: {
+                                'value': formatLocalClock(
+                                  c.lastActivitySuccess!,
+                                ),
+                              },
+                            ),
+                    },
+                  ),
                   style: TextStyle(
                     fontSize: 12,
                     color: Theme.of(context).colorScheme.error,
                   ),
                 ),
               ),
-            if (c.stopNotice != null)
+            if (c.stopNoticeKind != StopNotice.none)
               MaterialBanner(
                 content: Text(
-                  c.stopNotice!.startsWith('{') ? '此對話曾由你要求停止' : c.stopNotice!,
+                  // Explicit provenance replaces the old startsWith('{')
+                  // heuristic (§4.4); the stored JSON is never displayed.
+                  c.stopNoticeMessage != null
+                      ? strings.render(c.stopNoticeMessage!)
+                      : strings.resolve(MessageKey.chatM019),
                 ),
                 actions: [
                   TextButton(
                     onPressed: c.dismissStopNotice,
-                    child: const Text('收起'),
+                    child: Text(strings.resolve(MessageKey.chatM020)),
                   ),
                 ],
               ),
@@ -556,7 +621,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   children: [
                     Expanded(
                       child: Text(
-                        c.error!,
+                        strings.render(c.error!),
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.error,
                         ),
@@ -565,10 +630,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     if (c.phase == ChatPhase.uncertain)
                       TextButton(
                         onPressed: c.retryReconcile,
-                        child: const Text('重新核對'),
+                        child: Text(strings.resolve(MessageKey.chatM021)),
                       ),
                     if (!c.busy)
-                      TextButton(onPressed: c.load, child: const Text('重試')),
+                      TextButton(
+                        onPressed: c.load,
+                        child: Text(strings.resolve(MessageKey.commonRetry)),
+                      ),
                   ],
                 ),
               ),
@@ -591,14 +659,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                 onPressed: c.loadingOlder || c.busy
                                     ? null
                                     : older,
-                                child: Text(c.loadingOlder ? '載入中…' : '載入較早訊息'),
+                                child: Text(
+                                  strings.resolve(
+                                    c.loadingOlder
+                                        ? MessageKey.chatM022
+                                        : MessageKey.chatM023,
+                                  ),
+                                ),
                               ),
                             ),
                           if (c.messages.isEmpty && c.live == null)
-                            const Padding(
-                              padding: EdgeInsets.all(40),
+                            Padding(
+                              padding: const EdgeInsets.all(40),
                               child: Text(
-                                '這段對話還沒有訊息。',
+                                strings.resolve(MessageKey.chatM024),
                                 textAlign: TextAlign.center,
                               ),
                             ),
@@ -632,7 +706,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
                                   Text(
-                                    '發言中',
+                                    strings.resolve(MessageKey.chatM025),
                                     style: TextStyle(
                                       fontSize: 12,
                                       color: Theme.of(context)
@@ -666,7 +740,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           dense: true,
                           title: Text(s.command),
                           subtitle: Text(
-                            s.description,
+                            strings.render(s.description),
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                           ),
@@ -686,11 +760,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       .toList(),
                 ),
               ),
-            if (draftError.isNotEmpty)
+            if (draftError != null)
               Padding(
                 padding: const EdgeInsets.all(8),
                 child: Text(
-                  draftError,
+                  strings.render(draftError!),
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ),
@@ -708,20 +782,40 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                 ? showSteer
                                 : null,
                             icon: const Icon(Icons.add_comment_outlined),
-                            label: const Text('插話'),
+                            label: Text(strings.resolve(MessageKey.chatSteer)),
                           ),
                         TextButton.icon(
                           onPressed: c.canStop
                               ? () => unawaited(c.stop())
                               : null,
                           icon: const Icon(Icons.stop_circle_outlined),
-                          label: const Text('停止'),
+                          label: Text(strings.resolve(MessageKey.chatM026)),
                         ),
                       ],
                     ),
                   if (attachments.error != null)
                     Text(
-                      attachments.error!,
+                      strings.render(attachments.error!),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    )
+                  else if (attachments.batchParts.isNotEmpty)
+                    // Locale-specific join happens HERE (plan §4.3): the
+                    // controller kept typed counts + descriptors only.
+                    Text(
+                      strings.resolve(
+                        attachments.batchSucceeded == 0
+                            ? MessageKey.attachmentBatchM005
+                            : MessageKey.attachmentBatchM006,
+                        args: {
+                          'parts': strings.joinParts(
+                            attachments.batchParts.map(strings.render).toList(),
+                          ),
+                          'count': attachments.batchSucceeded,
+                        },
+                        count: attachments.batchSucceeded,
+                      ),
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.error,
                       ),
@@ -738,7 +832,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                               .map(
                                 (e) => InputChip(
                                   label: Text(
-                                    '${e.value.filename}${e.value.uploaded ? '（已上傳）' : ''}',
+                                    '${e.value.filename}'
+                                    '${e.value.uploaded ? strings.resolve(MessageKey.chatM027) : ''}',
                                   ),
                                   onDeleted:
                                       c.busy || preparing || attachments.busy
@@ -754,7 +849,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
                       IconButton(
-                        tooltip: '加入附件',
+                        tooltip: strings.resolve(MessageKey.chatM028),
                         icon: const Icon(Icons.add),
                         onPressed: c.busy || preparing || attachments.busy
                             ? null
@@ -795,15 +890,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                               _submitFromIme();
                             },
                             decoration: InputDecoration(
-                              hintText: c.busy
-                                  ? '可輸入 /stop'
-                                  : c.remoteBusy
-                                  ? '此工作階段正由其他裝置執行'
-                                  : c.activityBlocksSend
-                                  ? '狀態確認中，暫停送出'
-                                  : _mobileComposer
-                                  ? 'Enter 換行，按送出鍵傳送'
-                                  : '傳送訊息，Enter 傳送 / Shift+Enter 換行',
+                              hintText: strings.resolve(
+                                c.busy
+                                    ? MessageKey.chatM029
+                                    : c.remoteBusy
+                                ? MessageKey.chatM030
+                                : c.activityBlocksSend
+                                ? MessageKey.chatM031
+                                : _mobileComposer
+                                ? MessageKey.chatM032
+                                : MessageKey.chatM033,
+                              ),
                               border: OutlineInputBorder(
                                 borderRadius: BorderRadius.circular(22),
                               ),
@@ -813,7 +910,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       ),
                       const SizedBox(width: 8),
                       IconButton.filled(
-                        tooltip: '傳送',
+                        tooltip: strings.resolve(MessageKey.chatM034),
                         onPressed:
                             preparing ||
                                 attachments.busy ||
@@ -849,7 +946,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Center(
-                    child: Text('放進來，我會當成附件'),
+                    child: LocalizedText(
+                      UiMessage.local(MessageKey.chatM035),
+                    ),
                   ),
                 ),
               ),
@@ -863,5 +962,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 /// `/` 聯想清單列（app 指令、gateway 直通指令、skills 共用）。
 class _SlashItem {
   const _SlashItem(this.command, this.description);
-  final String command, description;
+  final String command;
+
+  /// Descriptor: catalog key or RAW server skill description (§5).
+  final UiMessage description;
 }

@@ -2,6 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+
+import 'support/localized_app.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
 import 'package:hermes_app/models/session_activity.dart';
@@ -107,10 +109,7 @@ void main() {
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
-        child: MaterialApp(
-          navigatorKey: navKey,
-          home: const SessionsPage(),
-        ),
+        child: localizedWrap(const SessionsPage(), navigatorKey: navKey),
       ),
     );
     for (var i = 0; i < 4; i++) {
@@ -217,7 +216,7 @@ void main() {
       await tester.pumpWidget(
         UncontrolledProviderScope(
           container: container,
-          child: MaterialApp(home: ChatPage(session: cur)),
+          child: localizedWrap(ChatPage(session: cur)),
         ),
       );
       for (var i = 0; i < 4; i++) {

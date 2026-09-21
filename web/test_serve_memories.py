@@ -48,6 +48,12 @@ class Harness:
         self.tmp = tmp
 
     async def __aenter__(self):
+        # Guard (USER.md-incident): the memories dir MUST resolve inside this
+        # harness tmp. A resolution-order regression that reads the operator's
+        # real ~/.hermes/.env (or defaults to the real home) must fail HERE,
+        # before any PUT can overwrite a real memory file.
+        assert pathlib.Path(serve._memories_dir()).resolve().is_relative_to(
+            self.tmp.resolve()), "memories dir escaped the harness tmp"
         app = serve.build_app()
         self.runner = web.AppRunner(app)
         await self.runner.setup()

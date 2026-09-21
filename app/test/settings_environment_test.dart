@@ -180,7 +180,7 @@ void main() {
       final repo = QuietRepo();
       await boot(tester, url: '', key: 'k', repo: repo);
       expect(find.textContaining('Tailscale'), findsNothing);
-      expect(find.textContaining('私人網路'), findsOneWidget);
+      expect(find.textContaining('private network'), findsOneWidget);
     });
   });
 }

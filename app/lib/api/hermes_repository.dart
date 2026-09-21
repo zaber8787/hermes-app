@@ -3,6 +3,13 @@ import 'dart:convert';
 import 'dart:typed_data';
 import 'package:crypto/crypto.dart';
 import '../features/attachments/attachment.dart';
+import '../l10n/app_locale.dart';
+import '../l10n/app_strings.dart';
+import '../l10n/message_key.dart';
+import '../l10n/ui_message.dart';
+// AppFormatException lives in the pure l10n layer; re-exported so existing
+// api-layer importers keep resolving it.
+export '../l10n/ui_message.dart' show AppFormatException;
 import '../models/message.dart';
 import '../models/session.dart';
 import '../models/session_activity.dart';
@@ -11,13 +18,63 @@ import 'transport.dart';
 import '../diagnostics/diagnostics.dart';
 import '../platform/stream_keepalive.dart';
 
-class ApiException implements Exception {
-  const ApiException(this.message, [this.status]);
-  final String message;
+/// Network/server error. Carries a locale-independent descriptor when the
+/// text is app-created (I18N-PLAN §4.3); the legacy raw-string constructor
+/// stays for server-origin/fake text. `toString()` is a technical,
+/// locale-free representation for diagnostics — never a UI formatter; a
+/// test/CLI that needs human output resolves [uiMessage] through the
+/// English catalog explicitly via [message].
+class ApiException implements Exception, UiCarriesMessage {
+  const ApiException(String rawMessage, [this.status])
+    : _rawMessage = rawMessage,
+      _key = null,
+      _args = null;
+
+  const ApiException.local(
+    MessageKey key, {
+    this.status,
+    Map<String, Object?> args = const {},
+  }) : _rawMessage = null,
+       _key = key,
+       _args = args;
+
+  final String? _rawMessage;
+  final MessageKey? _key;
+  final Map<String, Object?>? _args;
   final int? status;
+
+  /// Bridge for descriptor-valued helpers: local hints keep their key,
+  /// raw text keeps the legacy raw form.
+  factory ApiException.fromUiMessage(UiMessage m, [int? status]) =>
+      m is UiLocal
+      ? ApiException.local(m.key, status: status, args: m.args)
+      : ApiException((m as UiRaw).text, status);
+
   @override
-  String toString() => status == null ? message : '$message (HTTP $status)';
+  UiMessage get uiMessage {
+    if (_key != null) return UiLocal(_key, args: _args ?? const {});
+    if (_rawMessage == null) return const UiRaw('');
+    return status == null
+        ? UiRaw(_rawMessage)
+        : UiRaw('$_rawMessage (HTTP $status)');
+  }
+
+  /// English resolution (or raw server text) for logs/CLI; UI code must
+  /// render [uiMessage] with the current AppStrings instead.
+  String get message =>
+      _rawMessage ?? AppStrings(AppLocale.en).render(uiMessage);
+
+  @override
+  String toString() => _key != null
+      ? 'ApiException(${_key.name}${status != null ? ', HTTP $status' : ''})'
+      : status == null
+      ? message
+      : '$message (HTTP $status)';
 }
+
+// AppFormatException is defined in l10n/ui_message.dart (pure layer, so
+// models can throw it without an api import); re-exported for existing
+// call sites that import this file.
 
 class HermesRepository {
   HermesRepository(
@@ -77,20 +134,23 @@ class HermesRepository {
   /// AUDIT-10: distinguish "Tailscale/IP unreachable" from "gateway didn't
   /// answer headers" (already surfaced as PortTimeout above) from a generic
   /// transport error, so the UI can suggest the right fix.
-  static String _netHint(Object e) {
+  static UiMessage _netHint(Object e) {
     final s = e.toString();
     if (e is TimeoutException) {
-      return '等待伺服器回應逾時，請檢查網路後重試。';
+      return const UiMessage.local(MessageKey.apiM001);
     }
     if (s.contains('SocketException') ||
         s.contains('Failed host lookup') ||
         s.contains('Connection refused')) {
-      return '連不上伺服器：請確認裝置能連線至該 URL，且 gateway 正在執行。';
+      return const UiMessage.local(MessageKey.apiM002);
     }
     if (s.contains('HandshakeException') || s.contains('CERT')) {
-      return '與伺服器建立加密連線失敗，請檢查憑證設定。';
+      return const UiMessage.local(MessageKey.apiM003);
     }
-    return '網路連線失敗：$s';
+    return UiMessage.local(
+      MessageKey.apiM004,
+      args: {'detail': UiMessage.raw(s)},
+    );
   }
 
   Future<PortResponse> _open(
@@ -119,13 +179,11 @@ class HermesRepository {
         headersTimeout: sse ? unboundedTimeout : headersTimeout,
       );
     } on PortTimeout {
-      throw const ApiException(
-        '等待伺服器回應逾時：網路不通或 gateway 無回應，請重試。',
-      );
+      throw const ApiException.local(MessageKey.apiM005);
     } on ApiException {
       rethrow;
     } catch (e) {
-      throw ApiException(_netHint(e));
+      throw ApiException.fromUiMessage(_netHint(e));
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final budget = headersTimeout != null && headersTimeout < readTimeout
@@ -133,9 +191,9 @@ class HermesRepository {
           : readTimeout;
       await response.stream.drain<void>().timeout(budget);
       // Do not expose reflected key or private server body in the UI/logs.
-      throw ApiException(
-        response.statusCode == 401 ? '金鑰無效' : '伺服器請求失敗',
-        response.statusCode,
+      throw ApiException.local(
+        response.statusCode == 401 ? MessageKey.apiM006 : MessageKey.apiM007,
+        status: response.statusCode,
       );
     }
     return response;
@@ -164,12 +222,12 @@ class HermesRepository {
     } on TimeoutException {
       // AUDIT-10: a body that stops mid-flight must land as a retry-able
       // timeout error, not an eternal spinner.
-      throw const ApiException('伺服器回應中斷（資料未傳完），請重試。');
+      throw const ApiException.local(MessageKey.apiM008);
     }
     try {
       return Map<String, dynamic>.from(jsonDecode(raw) as Map);
     } catch (_) {
-      throw const ApiException('伺服器回傳無法解析的資料');
+      throw const ApiException.local(MessageKey.apiM009);
     }
   }
 
@@ -179,7 +237,7 @@ class HermesRepository {
         deadline: metadataTimeout);
     if ((c['auth'] as Map?)?['required'] != true ||
         (c['features'] as Map?)?['session_chat_streaming'] != true) {
-      throw const ApiException('伺服器不符合 P1 contract（auth / session streaming）');
+      throw const ApiException.local(MessageKey.apiM010);
     }
   }
 
@@ -257,7 +315,7 @@ class HermesRepository {
       deadline: metadataTimeout,
     );
     final session = json['session'];
-    if (session is! Map) throw const ApiException('對話資料格式錯誤');
+    if (session is! Map) throw const ApiException.local(MessageKey.apiM011);
     return Map<String, dynamic>.from(session);
   }
 
@@ -275,7 +333,7 @@ class HermesRepository {
     try {
       return SessionActivity.fromJson(Map<String, dynamic>.from(json));
     } on FormatException {
-      throw const ApiException('即時同步資料格式錯誤');
+      throw const ApiException.local(MessageKey.apiM012);
     }
   }
 
@@ -314,7 +372,7 @@ class HermesRepository {
       );
       if (response.mimeType != 'text/event-stream') {
         await response.stream.drain<void>();
-        throw const ApiException('伺服器未回傳 SSE');
+        throw const ApiException.local(MessageKey.apiM013);
       }
       unawaited(Diagnostics.current?.record('sse.open', stream: stream));
       await lease.start();
@@ -390,20 +448,22 @@ class HermesRepository {
   }
 
   ApiException _artifactError(int status, {bool download = false}) =>
-      ApiException(switch (status) {
-        404 =>
-          download
-              ? '附件不存在、已下載或伺服器未啟用附件傳輸。'
-              : '伺服器未啟用附件傳輸（browser.extension_control.enabled=false），目前不能傳送檔案。',
-        413 => '附件超過伺服器大小上限，請縮小檔案。',
-        415 => '伺服器不支援此附件格式。',
-        400 => '附件資料或檔名無效，請重新選取檔案。',
-        410 => '附件已過期，請重新取得附件。',
-        401 => '金鑰無效，無法傳輸附件。',
-        403 => '沒有附件傳輸權限。',
-        429 => '附件傳輸過於頻繁，請稍後再試。',
-        _ => '附件傳輸失敗，請檢查連線後重試。',
-      }, status);
+      ApiException.local(
+        switch (status) {
+          404 => download
+              ? MessageKey.apiM014
+              : MessageKey.apiM015,
+          413 => MessageKey.apiM016,
+          415 => MessageKey.apiM017,
+          400 => MessageKey.apiM018,
+          410 => MessageKey.apiM019,
+          401 => MessageKey.apiM020,
+          403 => MessageKey.apiM021,
+          429 => MessageKey.apiM022,
+          _ => MessageKey.apiM023,
+        },
+        status: status,
+      );
 
   Future<Json> uploadAttachment(
     AttachmentSource source,
@@ -448,7 +508,7 @@ class HermesRepository {
           as Map,
     );
     if (!artifactIdPattern.hasMatch(receipt['artifact_id']?.toString() ?? '')) {
-      throw const ApiException('附件收據無效，請重試上傳。');
+      throw const ApiException.local(MessageKey.apiM024);
     }
     final receivedSize = receipt['size_bytes'];
     final receivedHash = receipt['sha256'];
@@ -456,7 +516,7 @@ class HermesRepository {
         (receivedHash is String &&
             receivedHash.toLowerCase() !=
                 (await sha256.bind(source.open()).first).toString())) {
-      throw const ApiException('附件上傳校驗失敗，草稿已保留，請重試。');
+      throw const ApiException.local(MessageKey.apiM025);
     }
     return receipt;
   }
@@ -482,7 +542,7 @@ class HermesRepository {
     final expected = response.headers['x-artifact-sha256'];
     if (expected != null &&
         sha256.convert(result).toString() != expected.toLowerCase()) {
-      throw const ApiException('附件校驗失敗，請重新取得附件。');
+      throw const ApiException.local(MessageKey.apiM026);
     }
     return result;
   }
@@ -527,7 +587,9 @@ class HermesRepository {
       '/v1/runs/${Uri.encodeComponent(runId)}/steer',
       body: {'input': input},
     );
-    if (result['accepted'] != true) throw const ApiException('伺服器未接受插話');
+    if (result['accepted'] != true) {
+      throw const ApiException.local(MessageKey.apiM027);
+    }
   }
 
   /// Contract §2: DELETE returns 200; subsequent GET is 404 (P0-verified).
@@ -539,7 +601,7 @@ class HermesRepository {
   Future<Session> createSession() async {
     final json = await _json('POST', '/api/sessions', body: const {});
     final raw = json['session'];
-    if (raw is! Map) throw const ApiException('建立對話失敗');
+    if (raw is! Map) throw const ApiException.local(MessageKey.apiM028);
     return Session.fromJson(Map<String, dynamic>.from(raw));
   }
 

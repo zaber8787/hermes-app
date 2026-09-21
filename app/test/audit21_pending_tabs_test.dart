@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:hermes_app/l10n/message_key.dart';
+import 'package:hermes_app/l10n/ui_message.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
 import 'package:hermes_app/models/session_activity.dart';
@@ -97,7 +99,7 @@ void main() {
       0,
       reason: 'old code POSTed blindly and started a duplicate run',
     );
-    expect(b.error ?? '', contains('另一個分頁'));
+    expect((b.error! as UiLocal).key, MessageKey.chatStateM020);
     expect(b.busy, isFalse); // rolled back: no ghost bubble, input intact
 
     // A finishes cleanly: its settle may delete its OWN record.

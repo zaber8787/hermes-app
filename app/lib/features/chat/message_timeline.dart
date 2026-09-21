@@ -1,5 +1,9 @@
 import 'package:flutter/material.dart';
+import '../../l10n/app_strings.dart';
+import '../../l10n/localized_text.dart';
+import '../../l10n/message_key.dart';
 import '../../models/message.dart';
+import 'chat_controller.dart' show RemoteHint, RemoteMessageRow;
 import 'copy_actions.dart';
 import 'live_turn.dart';
 import 'message_content.dart';
@@ -17,14 +21,22 @@ class MessageTimeline extends StatelessWidget {
 
   /// WAVE4: not-yet-durable remote user projections — rendered after the
   /// durable rows; never part of `messages` (offsets/fingerprints stay pure).
-  final List<Message> remoteRows;
+  /// Raw Message + separate hint (§4.4): the note renders at the UI
+  /// boundary, never inside durable content.
+  final List<RemoteMessageRow> remoteRows;
   @override
   Widget build(BuildContext context) {
-    final entries = projectMessages([...messages, ...remoteRows]);
+    final hints = {for (final r in remoteRows) r.message.id: r.hint};
+    final entries = projectMessages([
+      ...messages,
+      ...remoteRows.map((r) => r.message),
+    ]);
+    Widget view(DisplayEntry e) =>
+        EntryView(entry: e, hint: hints[e.message.id] ?? RemoteHint.none);
     if (detailed) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: entries.map((e) => EntryView(entry: e)).toList(),
+        children: entries.map(view).toList(),
       );
     }
     final widgets = <Widget>[];
@@ -35,8 +47,14 @@ class MessageTimeline extends StatelessWidget {
       final steps = frozen.where((e) => e.kind == EntryKind.tool).length;
       widgets.add(
         ExpansionTile(
-          title: Text(steps > 0 ? '🔧 執行了 $steps 個步驟' : '執行資訊與系統事件'),
-          children: frozen.map((e) => EntryView(entry: e)).toList(),
+          title: Text(
+            steps > 0
+                ? AppStrings.of(
+                    context,
+                  ).resolve(MessageKey.timelineM001, count: steps)
+                : AppStrings.of(context).resolve(MessageKey.timelineM002),
+          ),
+          children: frozen.map(view).toList(),
         ),
       );
       details.clear();
@@ -45,7 +63,7 @@ class MessageTimeline extends StatelessWidget {
     for (final e in entries) {
       if (e.kind == EntryKind.user || e.kind == EntryKind.finalReply) {
         flush();
-        widgets.add(EntryView(entry: e));
+        widgets.add(view(e));
       } else {
         details.add(e);
       }
@@ -71,6 +89,7 @@ class _FoldedTextState extends State<FoldedText> {
   @override
   Widget build(BuildContext context) {
     final long = widget.text.length > widget.limit;
+    final strings = AppStrings.of(context);
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
@@ -83,7 +102,11 @@ class _FoldedTextState extends State<FoldedText> {
         if (long)
           TextButton(
             onPressed: () => setState(() => expanded = !expanded),
-            child: Text(expanded ? '收合' : '展開完整內容'),
+            child: Text(
+              strings.resolve(
+                expanded ? MessageKey.timelineM003 : MessageKey.timelineM004,
+              ),
+            ),
           ),
       ],
     );
@@ -91,10 +114,18 @@ class _FoldedTextState extends State<FoldedText> {
 }
 
 class EntryView extends StatelessWidget {
-  const EntryView({super.key, required this.entry});
+  const EntryView({
+    super.key,
+    required this.entry,
+    this.hint = RemoteHint.none,
+  });
   final DisplayEntry entry;
+
+  /// Remote-projection note rendered separately from raw content (§4.4).
+  final RemoteHint hint;
   @override
   Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
     final e = entry;
     final colors = Theme.of(context).colorScheme;
     final m = e.message;
@@ -103,11 +134,19 @@ class EntryView extends StatelessWidget {
         return Card(
           child: ExpansionTile(
             leading: const Icon(Icons.terminal, size: 18),
-            title: Text(e.call?.name ?? m.toolName ?? '工具'),
+            title: Text(
+              e.call?.name ?? m.toolName ?? strings.resolve(MessageKey.timelineM005),
+            ),
             subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(e.result == null ? '等待結果' : '工具結果'),
+                Text(
+                  strings.resolve(
+                    e.result == null
+                        ? MessageKey.timelineM006
+                        : MessageKey.timelineM007,
+                  ),
+                ),
                 MessageTime((e.result ?? m).timestamp),
               ],
             ),
@@ -116,7 +155,7 @@ class EntryView extends StatelessWidget {
             children: [
               if (e.call != null)
                 ExpansionTile(
-                  title: const Text('參數'),
+                  title: Text(strings.resolve(MessageKey.timelineArguments)),
                   children: [FoldedText(e.call!.arguments)],
                 ),
               if (e.result != null) FoldedText(e.result!.content),
@@ -128,37 +167,59 @@ class EntryView extends StatelessWidget {
           color: colors.surfaceContainerHighest,
           child: ExpansionTile(
             leading: const Icon(Icons.info_outline, size: 18),
-            title: Text(e.label ?? '系統事件'),
+            title: Text(strings.resolve(DisplayEntry.labelKeyFor(m))),
             childrenPadding: const EdgeInsets.all(16),
             subtitle: MessageTime(m.timestamp),
             children: [FoldedText(m.content)],
           ),
         );
       case EntryKind.user:
-        return Align(
-          alignment: Alignment.centerRight,
-          child: Container(
-            constraints: const BoxConstraints(maxWidth: 600),
-            margin: const EdgeInsets.only(top: 20, bottom: 12, left: 36),
-            padding: const EdgeInsets.all(16),
-            decoration: BoxDecoration(
-              color: colors.primaryContainer,
-              borderRadius: BorderRadius.circular(20),
-            ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                MessageContent(m.content),
-                Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Align(
+              alignment: Alignment.centerRight,
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 600),
+                margin: const EdgeInsets.only(top: 20, bottom: 12, left: 36),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: colors.primaryContainer,
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    CopyMenuButton(text: m.content),
-                    MessageTime(m.timestamp),
+                    MessageContent(m.content),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      children: [
+                        CopyMenuButton(text: m.content),
+                        MessageTime(m.timestamp),
+                      ],
+                    ),
                   ],
                 ),
-              ],
+              ),
             ),
-          ),
+            if (hint != RemoteHint.none)
+              Padding(
+                // Localized note OUTSIDE the raw bubble: content bytes stay
+                // what the server observed (plan §4.4).
+                padding: const EdgeInsets.only(right: 4, bottom: 8),
+                child: Text(
+                  strings.resolve(
+                    hint == RemoteHint.unconfirmed
+                        ? MessageKey.chatRemoteUnconfirmed
+                        : MessageKey.chatRemoteTruncated,
+                  ),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onSurfaceVariant,
+                  ),
+                ),
+              ),
+          ],
         );
       case EntryKind.finalReply:
       case EntryKind.narration:
@@ -169,7 +230,7 @@ class EntryView extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                narration ? '執行旁白' : 'HERMES',
+                narration ? strings.resolve(MessageKey.timelineM008) : 'HERMES',
                 style: TextStyle(
                   fontSize: 11,
                   letterSpacing: 1.2,
@@ -198,7 +259,7 @@ class EntryView extends StatelessWidget {
               ),
               if (m.reasoning.isNotEmpty)
                 ExpansionTile(
-                  title: const Text('思考過程'),
+                  title: Text(strings.resolve(MessageKey.timelineReasoning)),
                   children: [FoldedText(m.reasoning)],
                 ),
             ],
@@ -220,6 +281,7 @@ class LiveTurnView extends StatelessWidget {
   final Future<void> Function(String choice)? onResolve;
   @override
   Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
     if (turn.transcript != null && turn.transcript!.isNotEmpty) {
       return MessageTimeline(messages: turn.transcript!, detailed: detailed);
     }
@@ -232,7 +294,12 @@ class LiveTurnView extends StatelessWidget {
           Padding(
             padding: const EdgeInsets.symmetric(vertical: 6),
             child: Text(
-              '已回覆審核：${approvalChoiceLabels[turn.approvalChoice] ?? turn.approvalChoice}',
+              // Server-origin unknown choices stay RAW; known kinds map to
+              // catalog keys.
+              strings.resolve(
+                MessageKey.timelineM009,
+                args: {'choice': _approvalChoiceLabel(strings, turn.approvalChoice!)},
+              ),
               style: TextStyle(
                 fontSize: 12,
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
@@ -242,7 +309,12 @@ class LiveTurnView extends StatelessWidget {
         if (turn.tools.isNotEmpty)
           ExpansionTile(
             initiallyExpanded: detailed,
-            title: Text('🔧 執行了 ${turn.tools.length} 個步驟'),
+            title: Text(
+              strings.resolve(
+                MessageKey.timelineM010,
+                count: turn.tools.length,
+              ),
+            ),
             children: turn.tools
                 .map(
                   (tool) => ExpansionTile(
@@ -255,7 +327,7 @@ class LiveTurnView extends StatelessWidget {
                     title: Text(tool.name),
                     children: [
                       ExpansionTile(
-                        title: const Text('參數'),
+                        title: Text(strings.resolve(MessageKey.timelineArguments)),
                         children: [FoldedText(tool.arguments)],
                       ),
                       if (tool.result.isNotEmpty)
@@ -275,7 +347,9 @@ class LiveTurnView extends StatelessWidget {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  turn.finalText == null ? '串流中 · 內容尚未確認' : 'HERMES',
+                  turn.finalText == null
+                      ? strings.resolve(MessageKey.timelineM011)
+                      : 'HERMES',
                   style: TextStyle(
                     fontSize: 11,
                     color: Theme.of(context).colorScheme.primary,
@@ -288,7 +362,7 @@ class LiveTurnView extends StatelessWidget {
           ),
         if (detailed && turn.reasoning.isNotEmpty)
           ExpansionTile(
-            title: const Text('思考過程'),
+            title: Text(strings.resolve(MessageKey.timelineReasoning)),
             children: [FoldedText(turn.reasoning)],
           ),
         if (!turn.completed && turn.approval == null)
@@ -301,12 +375,20 @@ class LiveTurnView extends StatelessWidget {
   }
 }
 
-const approvalChoiceLabels = {
-  'once': '允許一次',
-  'session': '本次對話都允許',
-  'always': '一律允許',
-  'deny': '拒絕',
+/// Approval choices: catalog keys for the closed wire vocabulary (§5 —
+/// the wire tokens `once/session/always/deny` themselves never change).
+/// Unknown server-origin choices stay RAW.
+const approvalChoiceKeys = <String, MessageKey>{
+  'once': MessageKey.approvalOnce,
+  'session': MessageKey.approvalSession,
+  'always': MessageKey.approvalAlways,
+  'deny': MessageKey.approvalDeny,
 };
+
+String _approvalChoiceLabel(AppStrings strings, String choice) =>
+    approvalChoiceKeys[choice] == null
+    ? choice
+    : strings.resolve(approvalChoiceKeys[choice]!);
 
 /// Danger-command approval card: redacted target, why it was flagged, and the
 /// choice buttons the server's flags allow (smart-DENY narrows to once/deny).
@@ -317,10 +399,9 @@ class ApprovalCard extends StatelessWidget {
   final LiveTurn turn;
   final Future<void> Function(String choice)? onResolve;
 
-  static const _labels = approvalChoiceLabels;
-
   @override
   Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
     final data = turn.approval!;
     final colors = Theme.of(context).colorScheme;
     final busy = turn.approvalBusy;
@@ -339,7 +420,7 @@ class ApprovalCard extends StatelessWidget {
                 const SizedBox(width: 8),
                 Expanded(
                   child: Text(
-                    '需要你的核准',
+                    strings.resolve(MessageKey.timelineM012),
                     style: TextStyle(
                       fontWeight: FontWeight.bold,
                       color: colors.onErrorContainer,
@@ -349,8 +430,12 @@ class ApprovalCard extends StatelessWidget {
               ],
             ),
             const SizedBox(height: 8),
-            Text(data['description']?.toString() ?? '這個動作被標記為敏感操作',
-                style: TextStyle(color: colors.onErrorContainer)),
+            // Server description stays raw bytes; only the fallback is local.
+            Text(
+              data['description']?.toString() ??
+                  strings.resolve(MessageKey.timelineM013),
+              style: TextStyle(color: colors.onErrorContainer),
+            ),
             if (data['command']?.toString().isNotEmpty == true) ...[
               const SizedBox(height: 8),
               Container(
@@ -370,13 +455,15 @@ class ApprovalCard extends StatelessWidget {
             if (turn.approvalError != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Text(turn.approvalError!,
-                    style: TextStyle(color: colors.error, fontSize: 12)),
+                child: LocalizedText(
+                  turn.approvalError!,
+                  style: TextStyle(color: colors.error, fontSize: 12),
+                ),
               ),
             const SizedBox(height: 12),
             if (turn.approvalRunId == null)
               Text(
-                '此審核事件缺少 run_id，無法在此回覆；請改用 CLI 處理。',
+                strings.resolve(MessageKey.timelineM014),
                 style: TextStyle(fontSize: 12, color: colors.onErrorContainer),
               )
             else
@@ -396,7 +483,7 @@ class ApprovalCard extends StatelessWidget {
                               side: BorderSide(color: colors.error),
                             )
                           : null,
-                      child: Text(_labels[c] ?? c),
+                      child: Text(_approvalChoiceLabel(strings, c)),
                     ),
                 ],
               ),
@@ -408,9 +495,16 @@ class ApprovalCard extends StatelessWidget {
             if (choice != null)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
-                child: Text('已回覆：${_labels[choice] ?? choice}',
-                    style: TextStyle(
-                        fontSize: 12, color: colors.onErrorContainer)),
+                child: Text(
+                  strings.resolve(
+                    MessageKey.timelineM015,
+                    args: {'choice': _approvalChoiceLabel(strings, choice)},
+                  ),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onErrorContainer,
+                  ),
+                ),
               ),
           ],
         ),

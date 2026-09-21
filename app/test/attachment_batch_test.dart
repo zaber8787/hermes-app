@@ -3,6 +3,10 @@ import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
+import 'package:hermes_app/l10n/app_locale.dart';
+import 'package:hermes_app/l10n/app_strings.dart';
+import 'package:hermes_app/l10n/message_key.dart';
+import 'package:hermes_app/l10n/ui_message.dart';
 import 'package:hermes_app/models/session_activity.dart';
 import 'package:hermes_app/features/attachments/attachment.dart';
 import 'package:hermes_app/features/attachments/attachment_controller.dart';
@@ -176,8 +180,23 @@ void main() {
     expect(blobs.staged.length, 2);
     expect(blobs.discarded, isEmpty);
     expect(controller.busy, isFalse);
-    expect(controller.error, contains('1 個檔案讀取失敗'));
-    expect(controller.error, contains('成功 2 個'));
+    expect(controller.error, isNull);
+    expect(controller.batchSucceeded, 2);
+    final part = controller.batchParts.single as UiLocal;
+    expect(part.key, MessageKey.attachmentBatchM003);
+    expect(part.count, 1);
+    final en = AppStrings.forLocale(AppLocale.en);
+    final zh = AppStrings.forLocale(AppLocale.zhHant);
+    expect(en.render(part), '1 file could not be read');
+    expect(zh.render(part), '1 個檔案讀取失敗');
+    expect(
+      zh.resolve(
+        MessageKey.attachmentBatchM006,
+        args: {'parts': zh.joinParts([zh.render(part)]), 'count': 2},
+        count: 2,
+      ),
+      '1 個檔案讀取失敗，成功 2 個。',
+    );
 
     // 順序與內容 round-trip：staged refs 仍對應各自的來源。
     expect(await bytesOf(controller.drafts[0].localPath), utf8.encode('AAA'));
@@ -231,7 +250,9 @@ void main() {
 
     expect(unhandled, isEmpty);
     expect(controller.drafts.map((d) => d.filename), ['ok.txt']);
-    expect(controller.error, contains('讀取失敗'));
+    expect(controller.error, isNull);
+    expect((controller.batchParts.single as UiLocal).key,
+        MessageKey.attachmentBatchM003);
     expect(controller.busy, isFalse);
   });
 
@@ -243,13 +264,20 @@ void main() {
     ]);
     expect(controller.drafts, isEmpty);
     expect(store.attachments(repo.baseUrl, 's'), isEmpty);
-    expect(controller.error, contains('1 個檔案附加失敗'));
-    expect(controller.error, isNot(contains('讀取失敗')));
+    expect(controller.error, isNull);
+    final broken = controller.batchParts.single as UiLocal;
+    expect(broken.key, MessageKey.attachmentBatchM004);
+    expect(broken.count, 1);
+    expect(
+      AppStrings.forLocale(AppLocale.zhHant).render(broken),
+      '1 個檔案附加失敗',
+    );
 
     blobs.stageError = null;
     await controller.addFiles([
       (name: 'y.txt', source: FakeSource.unreadable()),
     ]);
-    expect(controller.error, contains('1 個檔案讀取失敗'));
+    expect((controller.batchParts.single as UiLocal).key,
+        MessageKey.attachmentBatchM003);
   });
 }

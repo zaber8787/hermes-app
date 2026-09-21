@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import '../../l10n/app_locale.dart';
 import '../../platform/store_tx.dart';
 import '../attachments/attachment.dart';
 import 'key_vault.dart';
@@ -110,6 +111,21 @@ class LocalStore {
   Future<void> saveSettings(AppSettings value) async {
     await vault.write('server.key', value.key);
     await prefs.setString('server.url', value.url);
+  }
+
+  // ---- I18N: global UI language (I18N-PLAN §4.2) --------------------------
+  // `ui.locale` is GLOBAL (never _scope-d), independent of credentials: a
+  // corrupt/missing value normalizes to English and must never block
+  // settings loading, and a saved language must survive a vault failure.
+  AppLocale loadLocale() => AppLocale.normalize(prefs.getString('ui.locale'));
+  Future<bool> saveLocale(AppLocale value) async {
+    try {
+      // false (write refused) or a throw is a failure; the caller keeps
+      // the old locale and surfaces the descriptor-based warning.
+      return await prefs.setString('ui.locale', value.tag);
+    } catch (_) {
+      return false;
+    }
   }
 
   String _scope(String server, String sid, String field) =>

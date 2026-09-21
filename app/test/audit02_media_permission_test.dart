@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'support/localized_app.dart';
+import 'package:hermes_app/l10n/app_locale.dart';
 import 'package:photo_manager/photo_manager.dart';
 
 import 'package:hermes_app/features/attachments/media_picker_sheet.dart';
@@ -39,7 +41,8 @@ class FakeMediaSource implements MediaSource {
 }
 
 Future<FakeMediaSource> openGrid(WidgetTester tester, FakeMediaSource src) async {
-  await tester.pumpWidget(MaterialApp(
+  await tester.pumpWidget(localizedHome(
+    locale: AppLocale.zhHant,
     home: Scaffold(
       body: MediaPickerSheet.debugGrid(
         scrollController: ScrollController(),

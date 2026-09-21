@@ -22,6 +22,33 @@ class HermesStreamService : Service() {
         private val stopping = mutableListOf<MethodChannel.Result>()
         var reportError: (() -> Unit)? = null
 
+        // In-process reference for locale update-in-place only (§6.5); no
+        // broadcast, no service wakeup, cleared on destruction.
+        @Volatile
+        private var active: HermesStreamService? = null
+
+        fun onLocaleChanged(context: Context) {
+            val service = active
+            if (service != null) {
+                service.refreshLocalized()
+                return
+            }
+            if (Build.VERSION.SDK_INT >= 26) {
+                // Existing channel keeps importance/user settings; never
+                // create or start anything just because the language changed.
+                val manager = context.getSystemService(NotificationManager::class.java)
+                manager.getNotificationChannel(CHANNEL)?.let { existing ->
+                    manager.createNotificationChannel(
+                        NotificationChannel(
+                            CHANNEL,
+                            NotificationLocale.channelName(context),
+                            existing.importance,
+                        )
+                    )
+                }
+            }
+        }
+
         fun start(context: Context, id: Int, result: MethodChannel.Result) {
             streams.add(id)
             pending[id] = result
@@ -46,23 +73,59 @@ class HermesStreamService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /** Rebuilds the SAME notification id/title channel under the new
+     *  language; stream tokens and foreground state stay untouched. */
+    private fun refreshLocalized() {
+        try {
+            val manager = getSystemService(NotificationManager::class.java)
+            if (Build.VERSION.SDK_INT >= 26) {
+                manager.getNotificationChannel(CHANNEL)?.let { existing ->
+                    manager.createNotificationChannel(
+                        NotificationChannel(
+                            CHANNEL,
+                            NotificationLocale.channelName(this),
+                            existing.importance,
+                        )
+                    )
+                }
+            }
+            val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL)
+                else Notification.Builder(this)
+            manager.notify(
+                NOTIFICATION,
+                builder
+                    .setSmallIcon(R.drawable.ic_stream_notification)
+                    .setContentTitle(NotificationLocale.activeTitle(this))
+                    .setContentIntent(pendingIntent())
+                    .setOngoing(true)
+                    .setOnlyAlertOnce(true)
+                    .setPriority(Notification.PRIORITY_LOW)
+                    .build()
+            )
+        } catch (_: Exception) {
+            // Language refresh must never break the running stream.
+        }
+    }
+
+    private fun pendingIntent(): PendingIntent = PendingIntent.getActivity(
+        this, 0, Intent(this, MainActivity::class.java),
+        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        active = this
         val id = intent?.getIntExtra("stream", -1) ?: -1
         try {
             val manager = getSystemService(NotificationManager::class.java)
             if (Build.VERSION.SDK_INT >= 26) {
                 manager.createNotificationChannel(NotificationChannel(
-                    CHANNEL, "Hermes 回覆中", NotificationManager.IMPORTANCE_LOW))
+                    CHANNEL, NotificationLocale.channelName(this), NotificationManager.IMPORTANCE_LOW))
             }
-            val open = PendingIntent.getActivity(this, 0,
-                Intent(this, MainActivity::class.java),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
             val builder = if (Build.VERSION.SDK_INT >= 26) Notification.Builder(this, CHANNEL)
                 else Notification.Builder(this)
             val notification = builder
                 .setSmallIcon(R.drawable.ic_stream_notification)
-                .setContentTitle("Hermes 正在回覆")
-                .setContentIntent(open)
+                .setContentTitle(NotificationLocale.activeTitle(this))
+                .setContentIntent(pendingIntent())
                 .setOngoing(true)
                 .setOnlyAlertOnce(true)
                 .setPriority(Notification.PRIORITY_LOW)
@@ -95,6 +158,7 @@ class HermesStreamService : Service() {
     }
 
     override fun onDestroy() {
+        active = null
         pending.values.forEach { it.error("fgs", "Stream service stopped", null) }
         pending.clear()
         streams.clear()
