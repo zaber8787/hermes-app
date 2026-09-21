@@ -76,7 +76,7 @@ def clean_if_switched(app: pathlib.Path, marker_name: str) -> None:
     except OSError:
         previous = None
     if previous is not None and previous != marker_name:
-        for cache in (app / "build"):
+        for cache in (app / "build",):
             if cache.exists():
                 print(f"profile changed -> cleaning {cache.relative_to(REPO)}")
                 shutil.rmtree(cache)

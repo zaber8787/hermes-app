@@ -382,14 +382,42 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     for (final r in waiting) {
       final uid = r.user!.afterId;
       final text = r.user!.text?.trim();
+      final folded = (text == null || text.isEmpty)
+          ? ''
+          : _foldObservationText(text);
       Message? match;
       for (final m in unclaimed) {
         if (uid != null && int.parse(m.id) <= uid) continue;
-        if (text != null && text.isNotEmpty && m.content.trim() != text) {
-          continue;
+        if (folded.isEmpty) {
+          match = m; // no observed text: positional claim (original rule)
+          break;
         }
-        match = m;
-        break;
+        // Exact first, then whitespace/platform-decoration-insensitive:
+        // cross-platform runs (Discord/API) persist text that is reformatted
+        // versus the live observation preview — exact matching strands a
+        // ghost row forever.
+        if (m.content.trim() == text ||
+            _foldObservationText(m.content) == folded) {
+          match = m;
+          break;
+        }
+      }
+      if (match == null && uid != null) {
+        // History-first positional fallback: a durable row AFTER the
+        // observation point proves the observed turn is already persisted
+        // (history appends in order), even if its text was rewritten.
+        for (final m in unclaimed) {
+          if (int.parse(m.id) > uid) {
+            match = m;
+            break;
+          }
+        }
+      }
+      if (match == null && r.isTerminal) {
+        // A finished run's user row is durable by definition; if it is not
+        // inside the loaded window, stranding "尚未於歷史確認" below the
+        // timeline forever is worse than not showing the preview.
+        continue;
       }
       if (match != null) {
         unclaimed.remove(match);
@@ -407,6 +435,15 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       );
     }
   }
+
+  /// Claim-comparison fold: trim, collapse all whitespace (incl. newlines),
+  /// drop the platform's attachment-tag decoration. Text is only ever
+  /// COMPARED with this form; nothing rendered or sent is altered.
+  static String _foldObservationText(String s) =>
+      s.replaceAll(RegExp(r'\[附件: [^\]]*\]'), '').replaceAll(
+        RegExp(r'\s+'),
+        ' ',
+      ).trim();
 
   /// Remote user rows shown under the timeline (never part of `messages`, so
   /// loadOlder offsets and pendingDelivered fingerprints never see them).

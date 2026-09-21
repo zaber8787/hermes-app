@@ -4,6 +4,11 @@
 `CHANGELOG-PRIVATE.md`（不入版本庫）。`<SERVER_ORIGIN>` 代表部署者自設的
 伺服器位址。
 
+## 2026-09-21 — v0.13.17+37 幽靈列根治（跨平台觀察宣示）
+
+- 根因修復：其他平台（Discord 等）起 run 時，歷史落盤文字與即時觀察預覽存在換行／附件標註等格式差異，舊版逐字比對認親永遠失敗，時間軸下方永久殘留數輪前的「⋯（尚未於歷史確認）」幽靈列。宣示邏輯改為三層：精確比對 → 摺疊比對（並空白字元、去附件標註，僅比對不改渲染）→ 歷史優先的位置宣示（觀察點之後出現更新的落盤使用者列即證明該回合已持久化）；terminal 列找不到視窗內對應者直接退場，不再掛註記。
+- 驗收：`audit_cross_device_sync_test` 11/11（新增 2 回歸案例，在舊宣示邏輯下紅）；flutter 逐檔全綠、analyze 0。修 `scripts/build_app.py` profile 切換清理的 tuple 語法 bug。
+
 ## 2026-09-21 — v0.13.16+36 WAVE4：即時跨裝置同步（sessionActivity）＋/status 雙軌＋管理頁摺疊
 
 - 根因修復：舊版以 `message_count` 為訊號，工具執行中不落 DB 會整輪漏看。gateway 端由 compat plugin 新增 `GET /api/sessions/{sid}/activity`（run 受理即登記，queued/running/waiting/stopping 即時，含 user preview、DB revision、server_epoch）；app 端以它取代計數輪詢：他端發言 ≤6 秒顯示 user 列＋「另一裝置執行中」＋鎖送出（草稿可編）；remoteBusy 與本機 busy 三口徑分離，觀察者不觸碰他人 lease/stop/approval。`/status` 分「本頁操作」與「伺服器活動」兩軌；離線/未知老實顯示待確認。Skills／Model 區塊可摺疊（本機持久化）。

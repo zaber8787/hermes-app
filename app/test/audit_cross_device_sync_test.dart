@@ -284,6 +284,56 @@ void main() {
     expect(c.busy, isFalse);
   });
 
+  testWidgets('cross-platform observation claims by fold/position, never a '
+      'permanent ghost (discord-run repro)', (tester) async {
+    // The run lives on ANOTHER platform (discord): the persisted history row
+    // is reformatted versus the live observation preview (attachment tags,
+    // newlines). The old exact-text matcher strands "尚未於歷史確認" under
+    // the timeline forever. History is the source of truth: claim it.
+    repo.post([
+      const Message(id: '1', role: 'user', content: '舊問題'),
+      const Message(id: '5', role: 'user', content: '新問題 說明'),
+      const Message(id: '6', role: 'assistant', content: '答'),
+    ]);
+    repo.recent = [
+      remoteRun(
+        obs: 'oX',
+        status: 'completed',
+        userText: '新問題\n[附件: 754d img.png]', // observed preview, rewrapped
+        afterId: 1,
+      ),
+    ];
+    await openPage(tester);
+    await tester.pump(const Duration(seconds: 6));
+    expect(
+      find.textContaining('尚未於歷史確認'),
+      findsNothing,
+      reason: 'a durable row after the observation point folds the ghost',
+    );
+    expect(find.text('新問題 說明'), findsOneWidget); // history row shown once
+  });
+
+  testWidgets('fold match beats exact for whitespace/attachment decoration', (
+    tester,
+  ) async {
+    repo.post([
+      const Message(id: '1', role: 'user', content: '甲'),
+      const Message(id: '7', role: 'user', content: '乙\n[附件: x.png]'),
+    ]);
+    repo.recent = [
+      remoteRun(
+        obs: 'oF',
+        status: 'completed',
+        userText: '乙 [附件: x.png]',
+        afterId: 1,
+      ),
+    ];
+    await openPage(tester);
+    await tester.pump(const Duration(seconds: 6));
+    expect(find.textContaining('尚未於歷史確認'), findsNothing);
+    expect(find.textContaining('remote:'), findsNothing);
+  });
+
   testWidgets('stale after a confirmed remote run: banner stays, send stays '
       'locked — a failed snapshot NEVER reads as idle', (tester) async {
     repo.active = [remoteRun()];
