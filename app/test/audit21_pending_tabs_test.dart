@@ -194,4 +194,44 @@ void main() {
     expect(LocalStore(prefs).loadPending(url, 's'), isNull);
     c.dispose(); // R1: bootstrap's sync poll must not outlive the test
   });
+
+  test('the recovery retry allowance is shared and single-shot across tabs',
+      () async {
+    final storeA = LocalStore(prefs), storeB = LocalStore(prefs);
+    final tokenA = await storeA.claimPending(
+      url,
+      's',
+      userText: '問題',
+      turnId: 'p2',
+    );
+    expect(tokenA, isNotNull);
+    final t0 = DateTime.utc(2026);
+    final begun = await storeA.beginPendingRecovery(
+      url,
+      's',
+      token: tokenA,
+      now: t0,
+    );
+    expect(begun.outcome, PendingRecoveryOutcome.begun);
+    // both tabs adopt the record's current token the way bootstrap does
+    final recToken = storeA.loadPending(url, 's')!.token!;
+    final a = await storeA.consumeRecoveryRetry(
+      url,
+      's',
+      token: recToken,
+      now: t0.add(const Duration(seconds: 61)),
+    );
+    expect(a.outcome, RecoveryRetryOutcome.consumed);
+    final b = await storeB.consumeRecoveryRetry(
+      url,
+      's',
+      token: storeB.loadPending(url, 's')!.token!,
+      now: t0.add(const Duration(seconds: 62)),
+    );
+    expect(b.outcome, RecoveryRetryOutcome.alreadyUsed);
+    expect(b.record!.recoveryDeadline, a.record!.recoveryDeadline);
+    // tab B must never wipe tab A's claim on the way out
+    expect(await storeB.clearPending(url, 's', token: null), isFalse);
+    expect(storeB.loadPending(url, 's'), isNotNull);
+  });
 }

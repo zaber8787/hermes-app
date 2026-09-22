@@ -76,6 +76,10 @@ final healthProvider = FutureProvider<bool>((ref) async {
 // oldest idle controllers past chatIdleCap. This family must NOT become
 // autoDispose: a page pop intentionally keeps the running turn (and its
 // detached poll) alive — that is the v0.12 background-survival contract.
+/// STUCK-BUSY: one injectable clock seam for the recovery deadlines — the
+/// app uses wall time; widget tests drive the binding's fake clock.
+final chatNowProvider = Provider<DateTime Function()>((ref) => DateTime.now);
+
 final chatProvider = ChangeNotifierProvider.family<ChatController, String>((
   ref,
   sid,
@@ -85,6 +89,7 @@ final chatProvider = ChangeNotifierProvider.family<ChatController, String>((
     ref.watch(localStoreProvider),
     sid,
     serverUrl: ref.watch(settingsProvider).url,
+    now: ref.watch(chatNowProvider),
   );
 });
 

@@ -73,3 +73,4 @@ key.properties
 .env*
 !.env.example
 .i18n-evidence/
+.stuck-busy-evidence/

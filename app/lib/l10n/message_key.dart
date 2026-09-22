@@ -134,6 +134,15 @@ enum MessageKey {
   chatStateM035,
   chatStateStoppedByYou,
   chatStateRunLabel,
+
+  // ---- STUCK-BUSY B4: recovery countdown / uncertain / clear actions ----
+  chatTurnIncomplete,
+  chatRecoveryCountdown,
+  chatRecoveryUncertain,
+  chatRecoveryExhausted,
+  chatClearLocalWaiting,
+  chatTerminalHistoryUnknown,
+  chatRecoveryStorageFailed,
   chatSteer,
   chatRemoteBusy,
   chatRemoteUnconfirmed,

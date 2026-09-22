@@ -614,29 +614,53 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   ),
                 ],
               ),
-            if (c.error != null)
+            if (c.error != null || c.recoveryNotice != null)
               Padding(
                 padding: const EdgeInsets.all(12),
-                child: Row(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(
-                      child: Text(
+                    if (c.error != null)
+                      Text(
                         strings.render(c.error!),
                         style: TextStyle(
                           color: Theme.of(context).colorScheme.error,
                         ),
                       ),
+                    // STUCK-BUSY B2: the "ended without a final" notice has
+                    // its own slot so a cleanup failure never masks it.
+                    if (c.recoveryNotice != null)
+                      Text(
+                        strings.render(c.recoveryNotice!),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.tertiary,
+                        ),
+                      ),
+                    Row(
+                      children: [
+                        // STUCK-BUSY B4: 「重新核對」 shows only while the
+                        // ONE persisted allowance is still unconsumed.
+                        if (c.phase == ChatPhase.uncertain &&
+                            c.recoveryRetryAvailable)
+                          TextButton(
+                            onPressed: c.retryReconcile,
+                            child: Text(strings.resolve(MessageKey.chatM021)),
+                          ),
+                        if (c.phase == ChatPhase.uncertain &&
+                            c.hasLocalWaitingRecord)
+                          TextButton(
+                            onPressed: c.clearLocalWaitingRecord,
+                            child: Text(
+                              strings.resolve(MessageKey.chatClearLocalWaiting),
+                            ),
+                          ),
+                        if (!c.busy)
+                          TextButton(
+                            onPressed: c.load,
+                            child: Text(strings.resolve(MessageKey.commonRetry)),
+                          ),
+                      ],
                     ),
-                    if (c.phase == ChatPhase.uncertain)
-                      TextButton(
-                        onPressed: c.retryReconcile,
-                        child: Text(strings.resolve(MessageKey.chatM021)),
-                      ),
-                    if (!c.busy)
-                      TextButton(
-                        onPressed: c.load,
-                        child: Text(strings.resolve(MessageKey.commonRetry)),
-                      ),
                   ],
                 ),
               ),
@@ -705,17 +729,46 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
-                                  Text(
-                                    strings.resolve(MessageKey.chatM025),
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Theme.of(context)
-                                          .colorScheme
-                                          .onSurfaceVariant,
+                                  // STUCK-BUSY B4: the generic "typing" row
+                                  // belongs to CONFIRMED-active work only.
+                                  // A recovery window shows its honest
+                                  // countdown (persisted deadline, repainted
+                                  // once a second); uncertain says nothing
+                                  // that could pass for a pending answer —
+                                  // no dots, ever.
+                                  if (c.phase == ChatPhase.recovering &&
+                                      c.recoverySecondsRemaining != null &&
+                                      !c.recoveryActiveConfirmed)
+                                    Text(
+                                      strings.render(
+                                        UiMessage.local(
+                                          MessageKey.chatRecoveryCountdown,
+                                          args: {
+                                            'seconds':
+                                                c.recoverySecondsRemaining!,
+                                          },
+                                        ),
+                                      ),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                    )
+                                  else if (c.phase != ChatPhase.uncertain) ...[
+                                    Text(
+                                      strings.resolve(MessageKey.chatM025),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
                                     ),
-                                  ),
-                                  const SizedBox(width: 8),
-                                  const TypingDots(),
+                                    const SizedBox(width: 8),
+                                    const TypingDots(),
+                                  ],
                                 ],
                               ),
                             ),

@@ -10,6 +10,7 @@ import '../../models/message.dart';
 import '../../models/session_activity.dart';
 import '../settings/local_store.dart';
 import 'live_turn.dart';
+import 'turn_history_match.dart';
 import 'viewers.dart';
 
 enum ChatPhase { idle, sending, recovering, uncertain }
@@ -65,8 +66,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     String? serverUrl,
     this.watchInterval = const Duration(seconds: 5),
     this.leaseInterval = const Duration(seconds: 15),
+    DateTime Function()? now,
   }) : wait = wait ?? ((duration) => Future<void>.delayed(duration)),
        serverUrl = serverUrl ?? repo.baseUrl,
+       _now = now ?? DateTime.now,
        detailed = store.detailed(serverUrl ?? repo.baseUrl, sid) {
     // A persisted stop record from BEFORE this session shows the generic
     // provenance banner; its JSON schema and contents are data, untouched.
@@ -81,6 +84,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.hidden;
   }
   final Future<void> Function(Duration) wait;
+
+  /// STUCK-BUSY B3: one injectable clock for every recovery deadline
+  /// (deterministic tests never wait real 60s).
+  final DateTime Function() _now;
+  DateTime _clock() => _now();
   final HermesRepository repo;
   final LocalStore store;
   final String sid, serverUrl;
@@ -180,6 +188,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         );
         unawaited(_activityTick());
       }
+      if (phase == ChatPhase.recovering &&
+          (_bootDeadline ?? _budgetDeadline) != null) {
+        _armCountdownTicker(); // hidden pages skip repaints; re-arm on return
+      }
       unawaited(reconcileForeground());
       notifyListeners();
     }
@@ -258,6 +270,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// Locale-independent descriptor state (I18N-PLAN §4.3): UI resolves it
   /// with the CURRENT locale; overlays resolve at build, never pre-rendered.
   UiMessage? error;
+
+  /// STUCK-BUSY B2: the un-settled-turn notice lives NEXT to (not inside)
+  /// `error` so a cleanup failure never masks "this turn never got a
+  /// final" — both can be visible at once.
+  UiMessage? recoveryNotice;
   StopNotice stopNoticeKind = StopNotice.none;
   UiMessage? stopNoticeMessage;
   ChatPhase phase = ChatPhase.idle;
@@ -269,8 +286,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   bool get pendingDelivered {
     final p = pendingInput;
     if (p == null) return false;
+    // Same shared comparison as every other pending anchor (B1): a
+    // cross-platform reformatted row must hide the bubble, not double it.
     return messages.any(
-      (m) => !_beforeSend.contains(m.id) && m.isUserTurn && m.content == p,
+      (m) =>
+          !_beforeSend.contains(m.id) &&
+          m.isUserTurn &&
+          foldedTurnTextEquals(m.content, p),
     );
   }
   bool stopBusy = false, steerBusy = false;
@@ -286,7 +308,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     if (p != null && !pendingDelivered) return p;
     if (live == null) {
       final b = _bootUserText;
-      if (b != null && _bootstrapAnchor() < 0) return b;
+      if (b != null && !_bootstrapInspection().anchorFound) return b;
     }
     return null;
   }
@@ -299,9 +321,17 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   bool _pollCapped = false;
   bool _pollTickBusy = false; // single-flight guard for _pollRun (AUDIT-11)
   bool _pollFreshQueued = false; // a fresh snapshot was asked for mid-GET
-  int _noRunPolls = 0, _pollFails = 0;
-  bool? _turnUserVisible; // last reconcile: server has our pending turn row
+  int _pollFails = 0;
+  DateTime? _budgetDeadline;
+  bool _budgetBegun = false, _budgetRetryUsed = false;
+
+  /// Last POSITIVE evidence the run is alive (an active status or a fresh
+  /// active-run snapshot). The budget timer never expires a confirmed
+  /// working run (B3: 已確認 active 的 run 顯示「仍在執行」) — only the
+  /// evidence-free (unknown) stretch counts toward the deadline.
+  DateTime? _lastActiveSeen;
   Timer? _watchTimer;
+  Timer? _deadlineTimer;
   bool get detached => _detached;
 
   // ---- WAVE4 activity observation (replaces R1 message_count polling) -----
@@ -436,9 +466,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     for (final r in waiting) {
       final uid = r.user!.afterId;
       final text = r.user!.text?.trim();
-      final folded = (text == null || text.isEmpty)
-          ? ''
-          : _foldObservationText(text);
+      final folded = text == null ? '' : foldTurnText(text);
       Message? match;
       for (final m in unclaimed) {
         if (uid != null && int.parse(m.id) <= uid) continue;
@@ -449,9 +477,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         // Exact first, then whitespace/platform-decoration-insensitive:
         // cross-platform runs (Discord/API) persist text that is reformatted
         // versus the live observation preview — exact matching strands a
-        // ghost row forever.
-        if (m.content.trim() == text ||
-            _foldObservationText(m.content) == folded) {
+        // ghost row forever. Same rule as every other pending comparison
+        // (turn_history_match — STUCK-BUSY B1).
+        if (foldedTurnTextEquals(m.content, text!)) {
           match = m;
           break;
         }
@@ -493,17 +521,6 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           );
     }
   }
-
-  /// Claim-comparison fold: trim, collapse all whitespace (incl. newlines),
-  /// drop the platform's attachment-tag decoration. Text is only ever
-  /// COMPARED with this form; nothing rendered or sent is altered.
-  static String _foldObservationText(String s) =>
-      // i18n-exempt: history-matching regex (cross-device protocol) — see
-      // I18N-PLAN §5.
-      s.replaceAll(RegExp(r'\[附件: [^\]]*\]'), '').replaceAll(
-        RegExp(r'\s+'),
-        ' ',
-      ).trim();
 
   /// Remote user rows shown under the timeline (never part of `messages`, so
   /// loadOlder offsets and pendingDelivered fingerprints never see them).
@@ -547,10 +564,16 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   // A fresh controller after F5 has no live turn; the persisted pending
   // record tells it which turn is still outstanding. Recovery is read-only:
   // runStatus by runId when known, otherwise bounded history observation.
-  static const bootstrapWindow = Duration(minutes: 30);
+  /// STUCK-BUSY B3: the OLD 30-minute fresh window and the 1440/15-poll
+  /// counters are GONE. One persisted budget: 60s initial observation,
+  /// then at most ONE 30s re-check — reloads adopt the persisted
+  /// deadline instead of minting a new window.
+  static const recoveryInitialWindow = Duration(seconds: 60);
+  static const recoveryRetryWindow = Duration(seconds: 30);
   String? _bootRunId, _bootUserText;
   DateTime? _bootStartedAt, _bootDeadline;
-  bool _bootActive = false, _bootKnownText = true;
+  int? _bootHistoryAfterId;
+  bool _bootActive = false, _bootKnownText = true, _bootRetryUsed = false;
   int _bootFails = 0;
   bool _bootTick = false;
   bool get _bootstrapWaiting => _bootActive && live == null && pendingInput == null;
@@ -663,6 +686,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       // will land later — keep polling (long runs included); only give up when
       // the turn never appeared at all.
       if (busy) {
+        // STUCK-BUSY B3: the 1440/15 counters are gone — the SAME
+        // persisted recovery budget decides when this observation ends.
+        if (await _budgetGate(token)) return; // expired → uncertain (stops)
         var settled = false;
         // AUDIT-05①: a failed history read is a transient miss, not a throw
         // into the void — an escaping error here would strand attach()'s
@@ -672,19 +698,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         } catch (_) {}
         if (settled) return;
         if (!_owns(token)) return; // the turn was settled/replaced mid-GET
-        if (++_noRunPolls > (_turnUserVisible == true ? 1440 : 15)) {
-          _watchTimer?.cancel();
-          _watchTimer = null;
-          phase = ChatPhase.uncertain;
-          error = const UiMessage.local(MessageKey.chatStateM009);
-          notifyListeners();
-          return;
-        }
+        if (await _budgetGate(token)) return; // expiry during the GETs
         _ensurePollTimer(token); // AUDIT-05①: keep the schedule, don't strand busy
       }
       return;
     }
-    _noRunPolls = 0;
     late final Json status;
     try {
       status = await repo.runStatus(runId);
@@ -702,10 +720,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
             return;
           }
         // The gateway forgot this run — fall back to a history reconciliation
-        // pass, and if no final materialised, tell the user instead of polling
-        // a dead id forever.
+        // pass; a CONFIRMED-quiet no-final turn settles with the incomplete
+        // notice (B2), anything weaker lands in uncertain with a REAL
+        // retry action instead of polling a dead id forever.
         _watchTimer?.cancel();
         _watchTimer = null;
+        if (await _budgetGate(token)) return; // expiry mid-404: uncertain
         var settled = false;
         // AUDIT-05①: same discipline here — a failing history read lands in
         // uncertain (with its 「重新核對」action), never an uncaught throw.
@@ -714,8 +734,41 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         } catch (_) {}
         if (settled || !_owns(token)) return;
         if (!busy) return;
+        final quiet = await _quietRound(
+          token,
+          _recoveryEpoch,
+          () async {
+            try {
+              await _reconcile();
+            } catch (_) {}
+          },
+        );
+        if (!_owns(token)) return;
+        if (await _budgetGate(token)) return;
+        final pendingTurn = store.loadPending(serverUrl, sid);
+        final verdict = evaluateRecoveryEvidence(
+          runGone: true,
+          quietConfirmed: quiet,
+          activeConfirmed:
+              activityFreshness == ActivityFreshness.fresh &&
+              (observedActivity?.activeRuns.any((r) => !r.isTerminal) ??
+                  false),
+          history: inspectPendingHistory(
+            rows: messages,
+            pendingText: pendingInput,
+            excludeIds: _beforeSend,
+            historyAfterId: pendingTurn?.historyAfterId,
+          ),
+        );
+        if (verdict == RecoveryVerdict.incompleteTerminal) {
+          await _settleTurn(
+            token,
+            errorMessage: const UiMessage.local(MessageKey.chatTurnIncomplete),
+          );
+          return;
+        }
         phase = ChatPhase.uncertain;
-        error = const UiMessage.local(MessageKey.chatStateM010);
+        error = const UiMessage.local(MessageKey.chatRecoveryUncertain);
         notifyListeners();
       } else {
         _ensurePollTimer(token); // AUDIT-05: transient HTTP keeps polling
@@ -764,6 +817,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     if (state == 'waiting_for_approval') {
+      _lastActiveSeen = _clock();
       final a = status['approval'];
       if (a is Map && turn != null && turn.approval == null) {
         turn.approval = Map<String, dynamic>.from(a);
@@ -862,6 +916,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     repo.releaseStreamKeepalive(sid);
     repo.cancelStream(sid);
     _watchTimer?.cancel();
+    _deadlineTimer?.cancel();
+    _countdownTicker?.cancel();
     _activityTimer?.cancel();
     _activityTimer = null;
     _activityEpoch++;
@@ -995,25 +1051,86 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // settle (terminal seen), but the clear is compare-and-delete, so it
     // can never wipe a claim another tab took in the meantime. No claim
     // is written here: watching is not owning.
-    _turnToken = Object();
+    final adoptToken = _turnToken = Object();
     _pendingToken = pending.token;
     _bootRunId = pending.runId;
     _bootKnownText = pending.hasUserText;
     _bootUserText = pending.hasUserText ? pending.userText : null;
     _bootStartedAt = pending.startedAt;
-    _bootDeadline = DateTime.now().add(bootstrapWindow);
     _bootFails = 0;
+    recoveryNotice = null;
+    _bootstrapping = true; // the begin write must not admit a concurrent send
+    // STUCK-BUSY B3: adopt (or stamp exactly once) the PERSISTED budget —
+    // a reload gets the REMAINING time, never a fresh 60s, and a storage
+    // that refuses the migration must not open a window either.
+    PendingTurn? budget;
+    try {
+      final begun = await store.beginPendingRecovery(
+        serverUrl,
+        sid,
+        token: pending.token,
+        initialWindow: recoveryInitialWindow,
+        now: _clock(),
+      );
+      if (begun.outcome == PendingRecoveryOutcome.mismatch ||
+          begun.outcome == PendingRecoveryOutcome.missing) {
+        // Another tab re-claimed mid-adoption: stop here, re-read the NEW
+        // owner's state next entry, never race it.
+        if (!_owns(adoptToken)) return;
+        _bootstrapping = false;
+        _turnToken = null;
+        _pendingToken = null;
+        error = const UiMessage.local(MessageKey.chatStateM021);
+        notifyListeners();
+        return;
+      }
+      budget = begun.record;
+    } catch (_) {
+      if (!_disposed) {
+        _bootstrapping = false;
+        _turnToken = null;
+        _pendingToken = null;
+        phase = ChatPhase.uncertain;
+        error = const UiMessage.local(MessageKey.chatRecoveryStorageFailed);
+        notifyListeners();
+      }
+      return;
+    }
+    if (!_disposed) _bootstrapping = false;
+    if (_disposed || !identical(_turnToken, adoptToken)) return;
+    _bootDeadline = budget?.recoveryDeadline;
+    _bootRetryUsed = budget?.recoveryRetryUsed ?? false;
+    _bootHistoryAfterId = budget?.historyAfterId;
+    if (_bootDeadline != null && _clock().isAfter(_bootDeadline!)) {
+      // Persisted budget already spent (reload after expiry): uncertain
+      // IMMEDIATELY — observing again would be a fresh window in disguise.
+      // The ADOPTED identity stays: the 「清除本機等待紀錄」 action and the
+      // compare-clear need this turn's token (an expired observation is
+      // still THIS page's turn, unlike a mid-adoption takeover mismatch).
+      phase = ChatPhase.uncertain;
+      error = UiMessage.local(
+        budget != null && budget.recoveryRetryUsed
+            ? MessageKey.chatRecoveryExhausted
+            : MessageKey.chatRecoveryUncertain,
+      );
+      notifyListeners();
+      return;
+    }
     _bootActive = true;
     phase = ChatPhase.recovering; // busy: waiting, never idle-without-trying
     notifyListeners();
     _watchTimer?.cancel();
     _watchTimer = Timer.periodic(watchInterval, (_) => unawaited(_bootstrapTick()));
+    _armDeadlineTimer();
+    _armCountdownTicker();
     unawaited(_bootstrapTick());
   }
 
   void _cancelBootstrapWaiting() {
     _watchTimer?.cancel();
     _watchTimer = null;
+    _deadlineTimer?.cancel();
+    _deadlineTimer = null;
     _bootRunId = null;
     _bootUserText = null;
     _bootStartedAt = null;
@@ -1024,20 +1141,147 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _bootFails = 0;
   }
 
+  /// STUCK-BUSY B3: the deadline fires on its own one-shot timer, so a
+  /// hung GET (single-flight guard stuck) can never hold busy past the
+  /// budget. Late responses die on the epoch bump below.
+  void _armDeadlineTimer() {
+    _deadlineTimer?.cancel();
+    final deadline = _bootDeadline ?? _budgetDeadline;
+    if (deadline == null) return;
+    final remaining = deadline.difference(_clock());
+    _deadlineTimer = Timer(
+      remaining.isNegative ? Duration.zero : remaining,
+      () => unawaited(_bootActive ? _bootstrapTick() : _budgetTick()),
+    );
+  }
+
+  /// Budget expiry check shared by the bootstrap ticks and the runId-less
+  /// live poll. A CONFIRMED-active run defers it (active outranks the
+  /// timer — "仍在執行" is never relabelled incomplete); otherwise the
+  /// observation stops here and lands in uncertain with its actions.
+  bool _budgetExpiredNow() {
+    final deadline = _bootActive ? _bootDeadline : _budgetDeadline;
+    if (deadline == null || !_clock().isAfter(deadline)) return false;
+    final activeFresh =
+        (activityFreshness == ActivityFreshness.fresh &&
+            (observedActivity?.activeRuns.any((r) => !r.isTerminal) ??
+                false)) ||
+        (_lastActiveSeen != null &&
+            _clock().difference(_lastActiveSeen!) <= recoveryInitialWindow);
+    if (activeFresh) {
+      _armDeadlineTimer(); // still working: watch the NEXT window edge
+      return false;
+    }
+    _recoveryEpoch++; // kill late continuations of this observation
+    if (_bootActive) {
+      _cancelBootstrapWaiting();
+    } else {
+      _watchTimer?.cancel();
+      _watchTimer = null;
+      _deadlineTimer?.cancel();
+      _deadlineTimer = null;
+    }
+    _countdownTicker?.cancel();
+    _countdownTicker = null;
+    phase = ChatPhase.uncertain;
+    // 保留 pending：逾時不等於中斷；「重新核對」最多一次，之後只剩清帳。
+    error = UiMessage.local(
+      (_bootActive ? _bootRetryUsed : _budgetRetryUsed)
+          ? MessageKey.chatRecoveryExhausted
+          : MessageKey.chatRecoveryUncertain,
+    );
+
+    notifyListeners();
+    return true;
+  }
+
+  Future<void> _budgetTick() async {
+    if (_disposed || !busy || live != null && live!.runId != null) return;
+    _budgetExpiredNow();
+  }
+
+  /// begin-once for any caller that needs the allowance BEFORE consuming.
+  /// Returns true when the caller must stop (error already surfaced).
+  Future<bool> _ensureBudgetBegun(Object? token) async {
+    if (_budgetBegun) return false;
+    _budgetBegun = true;
+    try {
+      final begun = await store.beginPendingRecovery(
+        serverUrl,
+        sid,
+        token: _pendingToken ?? store.loadPending(serverUrl, sid)?.token,
+        initialWindow: recoveryInitialWindow,
+        now: _clock(),
+      );
+      if (!_owns(token)) return true;
+      if (begun.outcome == PendingRecoveryOutcome.mismatch) {
+        error = const UiMessage.local(MessageKey.chatStateM021);
+        notifyListeners();
+        return true;
+      }
+      if (begun.outcome == PendingRecoveryOutcome.begun ||
+          begun.outcome == PendingRecoveryOutcome.alreadyPresent) {
+        _budgetDeadline = begun.record?.recoveryDeadline;
+        _budgetRetryUsed = begun.record?.recoveryRetryUsed ?? false;
+      }
+    } catch (_) {
+      if (_owns(token)) {
+        phase = ChatPhase.uncertain;
+        error = const UiMessage.local(MessageKey.chatRecoveryStorageFailed);
+        notifyListeners();
+      }
+      return true;
+    }
+    return false;
+  }
+
+  /// Ensures the live (in-tab) observation runs inside the SAME persisted
+  /// budget as bootstrap: stamped once, adopted on takeover, and a
+  /// refused write surfaces honestly instead of silently re-arming.
+  /// Returns true when the caller must STOP (already landed uncertain).
+  Future<bool> _budgetGate(Object? token) async {
+    if (_disposed || !busy) return false;
+    if (!_budgetBegun) {
+      _budgetBegun = true;
+      try {
+        final begun = await store.beginPendingRecovery(
+          serverUrl,
+          sid,
+          token: _pendingToken,
+          initialWindow: recoveryInitialWindow,
+          now: _clock(),
+        );
+        if (!_owns(token)) return false;
+        if (begun.outcome == PendingRecoveryOutcome.begun ||
+            begun.outcome == PendingRecoveryOutcome.alreadyPresent) {
+          _budgetDeadline = begun.record?.recoveryDeadline;
+          _budgetRetryUsed = begun.record?.recoveryRetryUsed ?? false;
+          _armDeadlineTimer();
+        }
+      } catch (_) {
+        if (_owns(token)) {
+          _watchTimer?.cancel();
+          _watchTimer = null;
+          phase = ChatPhase.uncertain;
+          error = const UiMessage.local(MessageKey.chatRecoveryStorageFailed);
+          notifyListeners();
+        }
+        return true;
+      }
+    }
+    return _budgetExpiredNow();
+  }
+
   Future<void> _bootstrapTick() async {
-    if (_disposed || !_bootActive || _bootTick) return;
+    if (_disposed || !_bootActive) return;
+    // Checked BEFORE the single-flight guard: an in-flight GET must not
+    // delay the budget's expiry (B3: "到限 even if GET未完成").
+    if (_budgetExpiredNow()) return;
+    if (_bootTick) return;
     _bootTick = true;
     final epoch = _recoveryEpoch;
     final token = _turnToken;
     try {
-      if (_bootDeadline != null && DateTime.now().isAfter(_bootDeadline!)) {
-        _cancelBootstrapWaiting();
-        phase = ChatPhase.uncertain;
-        // 保留 pending：逾時不等於中斷，之後「重新核對」可再觀察一輪。
-        error = const UiMessage.local(MessageKey.chatStateM015);
-        notifyListeners();
-        return;
-      }
       final runId = _bootRunId;
       if (runId != null) {
         Json status;
@@ -1079,9 +1323,35 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         _bootFails = 0;
         final state = status['status'];
         if (state == 'completed') {
-          await _latest(token); // 對帳：final 由歷史取得。
-          if (!_owns(token)) return;
-          await _bootstrapSettled(token);
+          // B2 rule 5: an explicit terminal settles EVEN when the history
+          // read fails (with the honest "history unreadable" notice) — a
+          // GET miss must not push a dead-topped turn back into
+          // recovering. When history IS read and this turn has no final,
+          // the incomplete notice rides along.
+          List<Message>? page;
+          try {
+            page = await repo.messages(sid); // 對帳：final 由歷史取得。
+          } catch (_) {}
+          if (!_owns(token) || epoch != _recoveryEpoch) return;
+          if (page != null) {
+            messages = mergeMessages([], page);
+            _offset = page.length;
+            hasOlder = page.length == 200;
+          }
+          final inspection = page == null
+              ? null
+              : _bootstrapInspectionFor(page);
+          await _settleTurn(
+            token,
+            page: page,
+            errorMessage: page == null
+                ? const UiMessage.local(MessageKey.chatTerminalHistoryUnknown)
+                : (inspection != null &&
+                      inspection.anchorFound &&
+                      !inspection.hasFinal)
+                ? const UiMessage.local(MessageKey.chatTurnIncomplete)
+                : null,
+          );
           return;
         }
         if (state == 'cancelled') {
@@ -1116,6 +1386,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           return;
         }
         // queued/running/waiting_for_approval: still going, keep watching.
+        _lastActiveSeen = _clock();
         return;
       }
       try {
@@ -1124,44 +1395,108 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         return; // Transient read miss: retry next tick.
       }
       if (!_owns(token) || epoch != _recoveryEpoch) return;
-      final anchor = _bootstrapAnchor();
-      if (anchor >= 0 && _bootstrapFinalAfter(anchor)) {
+      final inspection = _bootstrapInspection();
+      if (inspection.anchorFound && inspection.hasFinal) {
         await _bootstrapSettled(token);
+        return;
+      }
+      // No final yet. A unique anchor + the LOST terminal (run 404 earlier
+      // in this budget, or no runId at all) + CONFIRMED quiet (activity →
+      // history → activity, same epoch/revision, zero active) is evidence
+      // the turn ended without a final answer → settle with the notice.
+      // Anything weaker (quiet insufficient, ambiguous anchor, remote
+      // rows only) stays unknown — observation continues inside the
+      // persisted budget (B2 rules 2 and 4).
+      if (inspection.anchorFound &&
+          !inspection.ambiguous &&
+          (_bootRunId == null)) {
+        final quiet = await _quietRound(token, epoch, () => _latest(token));
+        if (!_owns(token) || epoch != _recoveryEpoch) return;
+        final verdict = evaluateRecoveryEvidence(
+          quietConfirmed: quiet,
+          activeConfirmed:
+              activityFreshness == ActivityFreshness.fresh &&
+              (observedActivity?.activeRuns.any((r) => !r.isTerminal) ?? false),
+          history: _bootstrapInspection(),
+        );
+        switch (verdict) {
+          case RecoveryVerdict.incompleteTerminal:
+            await _settleTurn(
+              token,
+              errorMessage: const UiMessage.local(
+                MessageKey.chatTurnIncomplete,
+              ),
+            );
+            return;
+          case RecoveryVerdict.normalTerminal:
+            await _bootstrapSettled(token);
+            return;
+          case RecoveryVerdict.running:
+          case RecoveryVerdict.unknown:
+            break; // keep watching inside the budget
+        }
       }
     } finally {
       if (!_disposed) _bootTick = false;
     }
   }
 
-  /// Last user row whose content equals the pending text and (when the
-  /// server stamps time) at/after the pending start — so an identical older
-  /// question cannot be mistaken for this turn. A legacy record WITHOUT the
-  /// user_text field can never anchor: identity unknown ⇒ keep pending,
-  /// present uncertain (AUDIT-12: no fabricated certainty).
-  int _bootstrapAnchor() {
-    final text = _bootUserText;
-    if (text == null || !_bootKnownText) return -1;
-    final floor =
-        (_bootStartedAt?.millisecondsSinceEpoch ?? 0) / 1000 - 5;
-    for (var i = messages.length - 1; i >= 0; i--) {
-      final m = messages[i];
-      if (m.isUserTurn &&
-          m.content == text &&
-          (m.timestamp <= 0 || m.timestamp >= floor)) {
-        return i;
+  /// B2 rule 2's paired quiet read: activity #1 (fresh, zero active, no
+  /// overflow) → the history GET → activity #2 with UNCHANGED
+  /// serverEpoch/historyRevision and still zero active. A stale,
+  /// unsupported, overflowed or erroring snapshot is NEVER quiet
+  /// evidence; a moved revision just retries within the remaining budget.
+  Future<bool> _quietRound(
+    Object? token,
+    int epoch,
+    Future<void> Function() historyStep,
+  ) async {
+    SessionActivity? first;
+    var snap = observedActivity;
+    bool quietish(SessionActivity? s) =>
+        s != null && !s.overflow && s.activeRuns.every((r) => r.isTerminal);
+    bool freshOk(SessionActivity? s) =>
+        activityFreshness == ActivityFreshness.fresh &&
+        quietish(s) &&
+        lastActivitySuccess != null &&
+        _clock().difference(lastActivitySuccess!) <= syncInterval;
+    if (!freshOk(snap)) {
+      await _activityTick();
+      if (!_owns(token) || epoch != _recoveryEpoch) return false;
+      snap = observedActivity;
+      if (activityFreshness != ActivityFreshness.fresh || !quietish(snap)) {
+        return false;
       }
     }
-    return -1;
+    first = snap!;
+    await historyStep();
+    if (!_owns(token) || epoch != _recoveryEpoch) return false;
+    await _activitySnapshot();
+    if (!_owns(token) || epoch != _recoveryEpoch) return false;
+    final second = observedActivity;
+    return activityFreshness == ActivityFreshness.fresh &&
+        second != null &&
+        !second.overflow &&
+        second.activeRuns.every((r) => r.isTerminal) &&
+        second.serverEpoch == first.serverEpoch &&
+        second.resolvedSessionId == first.resolvedSessionId &&
+        second.historyRevision.sameAs(first.historyRevision);
   }
 
-  bool _bootstrapFinalAfter(int anchor) {
-    final turn = messages.skip(anchor + 1).takeWhile((m) => !m.isUserTurn).toList();
-    final ordinary = turn.where((m) => m.displayKind == null).toList();
-    return ordinary.isNotEmpty &&
-        ordinary.last.role == 'assistant' &&
-        ordinary.last.toolCalls.isEmpty &&
-        ordinary.last.content.isNotEmpty;
-  }
+  /// Pending-inspection of the loaded page for the bootstrap-adopted turn
+  /// (shared matcher, STUCK-BUSY B1): time floor = persisted startedAt −
+  /// 5s; a legacy record WITHOUT user_text can never anchor.
+  PendingHistoryInspection _bootstrapInspection() =>
+      _bootstrapInspectionFor(messages);
+
+  PendingHistoryInspection _bootstrapInspectionFor(List<Message> rows) =>
+      inspectPendingHistory(
+        rows: rows,
+        pendingText: _bootKnownText ? (_bootUserText ?? '') : null,
+        knownText: _bootKnownText,
+        timeFloor: (_bootStartedAt?.millisecondsSinceEpoch ?? 0) / 1000 - 5,
+        historyAfterId: _bootHistoryAfterId,
+      );
 
   Future<void> _bootstrapSettled(Object? token) async {
     _recovery = null;
@@ -1201,6 +1536,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final token = _turnToken = Object();
     _settledTurn = null;
     _settleGate = null;
+    recoveryNotice = null;
+    _budgetBegun = false;
+    _budgetDeadline = null;
+    _budgetRetryUsed = false;
+    _lastActiveSeen = null;
+    _bootRetryUsed = false;
+    _bootHistoryAfterId = null;
     _beforeSend
       ..clear()
       ..addAll(messages.map((m) => m.id));
@@ -1221,12 +1563,23 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // serializes through the same store transaction as compare-update
     // and clear.
     final pendingSince = DateTime.now();
+    // B3: the max numeric history id visible before the POST — the row
+    // watermark recovery uses to drop older same-text candidates.
+    int? historyAfterId;
+    for (final m in messages) {
+      final n = int.tryParse(m.id);
+      if (n != null && (historyAfterId == null || n > historyAfterId)) {
+        historyAfterId = n;
+      }
+    }
+    _bootHistoryAfterId = historyAfterId;
     final claim = await store.claimPending(
       serverUrl,
       sid,
       userText: input,
       turnId: '${++_turnSeq}', // turn layer; the tab layer lives in the store
       startedAt: pendingSince,
+      historyAfterId: historyAfterId,
     );
     _pendingStart = false;
     if (_disposed) return;
@@ -1439,7 +1792,6 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _stopRunId = null;
     _stopFails = 0;
     _detached = false;
-    _noRunPolls = 0;
     _pollCapped = false;
     _pollTickBusy = false;
     stopBusy = false;
@@ -1469,6 +1821,16 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       cleanupFailed = true;
     }
     _pendingToken = null;
+    _budgetBegun = false;
+    _budgetDeadline = null;
+    _budgetRetryUsed = false;
+    _lastActiveSeen = null;
+    _bootRetryUsed = false;
+    _bootHistoryAfterId = null;
+    _deadlineTimer?.cancel();
+    _deadlineTimer = null;
+    _countdownTicker?.cancel();
+    _countdownTicker = null;
     // 3) Publish + release. Only dispose can race here: send can't, the gate
     //    held busy across step 2.
     if (_disposed || !identical(_turnToken, token)) return;
@@ -1481,6 +1843,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     pendingInput = null;
     _turnToken = null; // retire every late continuation of this turn
     phase = ChatPhase.idle;
+    // A cleanup failure must not swallow the "ended without a final"
+    // notice (B2): the notice keeps its own field so BOTH can show.
+    recoveryNotice = cleanupFailed ? errorMessage : null;
     error = cleanupFailed
         ? const UiMessage.local(MessageKey.chatStateM025)
         : errorMessage;
@@ -1510,6 +1875,15 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     phase = ChatPhase.recovering;
     for (final seconds in [1, 2, 4, 8, 16, 30]) {
       if (!_owns(token) || epoch != _recoveryEpoch) return;
+      final budget = _budgetDeadline;
+      if (budget != null && _clock().isAfter(budget)) {
+        // The consumed 30s re-check window ended mid-backoff: stop with
+        // the honest exhausted state, never loop on into a new window.
+        phase = ChatPhase.uncertain;
+        error = const UiMessage.local(MessageKey.chatRecoveryExhausted);
+        notifyListeners();
+        return;
+      }
       error = UiMessage.local(
         MessageKey.chatStateM026,
         args: {'seconds': seconds},
@@ -1556,23 +1930,14 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     messages = mergeMessages([], page);
     _offset = page.length;
     hasOlder = page.length == 200;
-    final start = page.indexWhere(
-      (m) =>
-          !_beforeSend.contains(m.id) &&
-          m.isUserTurn &&
-          m.content == pendingInput,
+    // Shared matcher (B1): the pending text in the SAME folded comparison
+    // as bootstrap/claims; _beforeSend is this turn's row watermark.
+    final inspection = inspectPendingHistory(
+      rows: page,
+      pendingText: pendingInput,
+      excludeIds: _beforeSend,
     );
-    _turnUserVisible = start >= 0;
-    final turnRows = start < 0
-        ? <Message>[]
-        : page.skip(start + 1).takeWhile((m) => !m.isUserTurn).toList();
-    final ordinary = turnRows.where((m) => m.displayKind == null).toList();
-    final hasFinal =
-        ordinary.isNotEmpty &&
-        ordinary.last.role == 'assistant' &&
-        ordinary.last.toolCalls.isEmpty &&
-        ordinary.last.content.isNotEmpty;
-    if (live?.completed == true || hasFinal) {
+    if (live?.completed == true || inspection.hasFinal) {
       await _settleTurn(token, page: page); // AUDIT-04: settle notifies idle
       return true;
     }
@@ -1605,7 +1970,30 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final token = _turnToken;
     if (_pollCapped && live?.runId != null) {
       // AUDIT-05②: the transport-cap uncertain resumes the STATUS POLL
-      // (the run exists; the network was the problem).
+      // (the run exists; the network was the problem) — but only through
+      // the SAME one-shot persisted allowance (B3): once spent, re-checks
+      // can never re-arm a window from this branch either.
+      if (await _ensureBudgetBegun(token)) return;
+      final outcome = await store.consumeRecoveryRetry(
+        serverUrl,
+        sid,
+        token: _pendingToken,
+        retryWindow: recoveryRetryWindow,
+        now: _clock(),
+      );
+      if (!_owns(token)) return;
+      if (outcome.outcome == RecoveryRetryOutcome.mismatch) {
+        error = const UiMessage.local(MessageKey.chatStateM021);
+        notifyListeners();
+        return;
+      }
+      if (outcome.outcome == RecoveryRetryOutcome.alreadyUsed) {
+        error = const UiMessage.local(MessageKey.chatRecoveryExhausted);
+        notifyListeners();
+        return;
+      }
+      _budgetDeadline = outcome.record?.recoveryDeadline;
+      _budgetRetryUsed = true;
       _pollCapped = false;
       _pollFails = 0;
       error = null;
@@ -1629,20 +2017,57 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       return;
     }
     if (live == null && pendingInput == null) {
-      // Bootstrap observation timed out: "重新核對" restarts the read-only
-      // watch (no POST, no assumptions), clearing the timeout error.
+      // Bootstrap observation timed out: "重新核對" gets EXACTLY ONE
+      // persisted 30s window (B3) — double taps, the second tab and
+      // post-reload retries all see `alreadyUsed` and re-arm nothing.
       final pending = store.loadPending(serverUrl, sid);
       if (pending == null) {
         await recover();
         return;
       }
+      final outcome = await store.consumeRecoveryRetry(
+        serverUrl,
+        sid,
+        token: pending.token,
+        retryWindow: recoveryRetryWindow,
+        now: _clock(),
+      );
+      switch (outcome.outcome) {
+        case RecoveryRetryOutcome.mismatch:
+          error = const UiMessage.local(MessageKey.chatStateM021);
+          notifyListeners();
+          return;
+        case RecoveryRetryOutcome.alreadyUsed:
+          final deadline = outcome.record?.recoveryDeadline;
+          if (deadline != null && _clock().isBefore(deadline)) {
+            error = const UiMessage.local(MessageKey.chatRecoveryUncertain);
+          } else {
+            error = const UiMessage.local(MessageKey.chatRecoveryExhausted);
+          }
+          notifyListeners();
+          return;
+        case RecoveryRetryOutcome.missing:
+          await recover();
+          return;
+        case RecoveryRetryOutcome.consumed:
+          break;
+      }
+      final retried = outcome.record ?? pending;
+      if (retried.recoveryDeadline != null &&
+          _clock().isAfter(retried.recoveryDeadline!)) {
+        error = const UiMessage.local(MessageKey.chatRecoveryExhausted);
+        notifyListeners();
+        return;
+      }
       error = null;
       phase = ChatPhase.recovering;
-      _bootRunId = pending.runId;
-      _bootKnownText = pending.hasUserText;
-      _bootUserText = pending.hasUserText ? pending.userText : null;
-      _bootStartedAt = pending.startedAt;
-      _bootDeadline = DateTime.now().add(bootstrapWindow);
+      _bootRunId = retried.runId;
+      _bootKnownText = retried.hasUserText;
+      _bootUserText = retried.hasUserText ? retried.userText : null;
+      _bootStartedAt = retried.startedAt;
+      _bootDeadline = retried.recoveryDeadline;
+      _bootRetryUsed = true;
+      _bootHistoryAfterId = retried.historyAfterId;
       _bootFails = 0;
       _bootActive = true;
       if (!identical(_turnToken, token) || _turnToken == null) {
@@ -1654,10 +2079,109 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         watchInterval,
         (_) => unawaited(_bootstrapTick()),
       );
+      _armDeadlineTimer();
+      _armCountdownTicker();
       unawaited(_bootstrapTick());
       return;
     }
+    // Live turn fallback: re-running the read-only backoff must consume the
+    // SAME persisted allowance too — no branch may re-arm a window (B3).
+    final pending = store.loadPending(serverUrl, sid);
+    if (pending != null) {
+      if (await _ensureBudgetBegun(token)) return;
+      final outcome = await store.consumeRecoveryRetry(
+        serverUrl,
+        sid,
+        token: pending.token,
+        retryWindow: recoveryRetryWindow,
+        now: _clock(),
+      );
+      if (!_owns(token)) return;
+      if (outcome.outcome == RecoveryRetryOutcome.mismatch) {
+        error = const UiMessage.local(MessageKey.chatStateM021);
+        notifyListeners();
+        return;
+      }
+      if (outcome.outcome == RecoveryRetryOutcome.alreadyUsed) {
+        error = const UiMessage.local(MessageKey.chatRecoveryExhausted);
+        notifyListeners();
+        return;
+      }
+      if (outcome.outcome == RecoveryRetryOutcome.consumed) {
+        _budgetDeadline = outcome.record?.recoveryDeadline;
+        _budgetRetryUsed = true;
+        _armDeadlineTimer();
+      }
+    }
     await recover();
+  }
+
+  /// STUCK-BUSY B3: end THIS device's waiting — compare-clear the pending
+  /// record through the settlement gate and return to idle. It is neither
+  /// a server stop nor a resend: drafts, attachments and history stay as
+  /// they are, and a record another tab re-claimed survives untouched.
+  Future<void> clearLocalWaitingRecord() async {
+    if (_disposed) return;
+    final token = _turnToken;
+    if (token == null) return; // nothing waiting under this identity
+    await _settleTurn(token);
+  }
+
+  /// Countdown source for the recovering UI (B4): ceil remaining seconds
+  /// over the persisted deadline; null = no recovery window in flight.
+  int? get recoverySecondsRemaining {
+    if (!busy) return null;
+    final deadline = _bootDeadline ?? _budgetDeadline;
+    if (deadline == null) return null;
+    final ms = deadline.difference(_clock()).inMilliseconds;
+    return ms <= 0 ? 0 : (ms + 999) ~/ 1000;
+  }
+
+  /// Whether the ONE persisted re-check allowance is still unconsumed —
+  /// the uncertain UI shows 「重新核對」 only while this is true (B4).
+  bool get recoveryRetryAvailable =>
+      !(_bootRetryUsed || _budgetRetryUsed) &&
+      !(store.loadPending(serverUrl, sid)?.recoveryRetryUsed ?? false);
+
+  /// True while POSITIVE evidence (active status / active snapshot) says
+  /// the run is working — the generic 「發言中」 row belongs to THAT, and
+  /// only the evidence-free observation stretch gets the countdown (B4).
+  bool get recoveryActiveConfirmed =>
+      _lastActiveSeen != null &&
+      _clock().difference(_lastActiveSeen!) <= recoveryInitialWindow;
+
+  /// The 「清除本機等待紀錄」 button only makes sense while a record IS
+  /// here; another tab's claim is cleared by settlement compare rules, not
+  /// by pretending this page can delete it.
+  bool get hasLocalWaitingRecord => busy && store.loadPending(serverUrl, sid) != null;
+
+  Timer? _countdownTicker;
+
+  /// B4: repaint the countdown once a second WITHOUT any extra GET; a
+  /// hidden page never ticks, and returning recomputes from the persisted
+  /// deadline (the getter is always pure arithmetic on _now()).
+  void _armCountdownTicker() {
+    if (_disposed) return;
+    _countdownTicker?.cancel();
+    _countdownTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (_disposed ||
+          backgrounded ||
+          !busy ||
+          phase != ChatPhase.recovering ||
+          (_bootDeadline ?? _budgetDeadline) == null) {
+        _countdownTicker?.cancel();
+        _countdownTicker = null;
+        return;
+      }
+      notifyListeners();
+    });
+  }
+
+  @visibleForTesting
+  void debugSetRecoveryBudget(DateTime? deadline, {bool retryUsed = false}) {
+    _bootDeadline = deadline;
+    _bootRetryUsed = retryUsed;
+    if (deadline != null && phase == ChatPhase.recovering) _armCountdownTicker();
   }
 
   Future<bool> stop() async {

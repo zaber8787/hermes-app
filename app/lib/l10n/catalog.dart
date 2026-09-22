@@ -82,6 +82,26 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.chatStateM001: 'The foreground re-check failed; check the connection and re-check.',
   MessageKey.chatStateM002: 'History changed (the session history was rewritten); the latest page was reloaded.',
   MessageKey.chatStateM003: 'Synced API turn',
+  MessageKey.chatTurnIncomplete:
+      'This turn ended without a final response. The available results have '
+      'been kept; you can continue typing.',
+  MessageKey.chatRecoveryCountdown:
+      'Checking the previous turn, up to {seconds} seconds remaining. '
+      'Reloading will not extend the wait.',
+  MessageKey.chatRecoveryUncertain:
+      'The result is still unconfirmed. Re-check once or clear the local '
+      'waiting record. This will not stop the server task or resend your '
+      'message.',
+  MessageKey.chatRecoveryExhausted:
+      'The re-check has been used. You can clear the local waiting record; '
+      'sending remains paused if the server is still running.',
+  MessageKey.chatClearLocalWaiting: 'Clear local waiting record',
+  MessageKey.chatTerminalHistoryUnknown:
+      'The turn has ended, but its full result could not be confirmed. '
+      'Reload the history.',
+  MessageKey.chatRecoveryStorageFailed:
+      'This device cannot save the waiting record, so recovery cannot be '
+      'tracked here. Your message was not resent.',
   MessageKey.chatStateRunLabel: '{who}: {what}',
   MessageKey.chatStateM004: 'Status unconfirmed ({status})',
   MessageKey.chatStateM005: 'Queued',
@@ -446,6 +466,19 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatStateM019: '較早訊息載入失敗：{error}',
   MessageKey.chatStateM020: '這個對話已在另一個分頁執行中；本頁不會重複送出。',
   MessageKey.chatStateM021: '此對話的共用紀錄已由其他分頁接手，本頁轉為唯讀觀察。',
+  MessageKey.chatTurnIncomplete:
+      '該回合未正常收尾。已保留目前結果，你可以繼續輸入。',
+  MessageKey.chatRecoveryCountdown:
+      '正在核對上一回合，最多再等 {seconds} 秒。重新整理不會延長等待。',
+  MessageKey.chatRecoveryUncertain:
+      '尚無法確認結果。可再核對一次，或清除本機等待紀錄；這不會停止伺服器任務或重送訊息。',
+  MessageKey.chatRecoveryExhausted:
+      '已用完重新核對次數。可清除本機等待紀錄；若伺服器仍在執行，送出會繼續暫停。',
+  MessageKey.chatClearLocalWaiting: '清除本機等待紀錄',
+  MessageKey.chatTerminalHistoryUnknown:
+      '該回合已結束，但未能確認完整結果。請重新載入歷史。',
+  MessageKey.chatRecoveryStorageFailed:
+      '本機無法保存等待紀錄，此裝置無法追蹤復原進度；你的訊息並未重送。',
   MessageKey.chatStateM022: '串流提早結束',
   MessageKey.chatStateM023: '訊息未送出：{error}',
   MessageKey.chatStateM024: '歷史載入失敗，下拉可重試。',

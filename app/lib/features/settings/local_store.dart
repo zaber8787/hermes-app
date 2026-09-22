@@ -46,12 +46,37 @@ class PendingTurn {
     this.ownerTab,
     this.ownerTurn,
     this.leaseUntil,
+    this.recoveryStartedAt,
+    this.recoveryDeadline,
+    this.recoveryRetryUsed = false,
+    this.historyAfterId,
   });
   final String? runId;
   final String userText;
   final DateTime startedAt;
   final String? ownerTab, ownerTurn;
   final DateTime? leaseUntil;
+
+  // ---- STUCK-BUSY B3: persisted recovery budget ---------------------------
+  // The FIRST entry into recovery stamps started_at/deadline (now + initial
+  // window); a reload adopts them instead of re-arming a fresh window. The
+  // retry flag is consumed exactly once, atomically, for ALL retry paths.
+  // All four fields are OPTIONAL on disk: legacy records parse with
+  // null/false and migrate on their first recovery (never rewritten just
+  // because they were read).
+  final DateTime? recoveryStartedAt, recoveryDeadline;
+  final bool recoveryRetryUsed;
+
+  /// Max numeric history id observed BEFORE the send POST — a row
+  /// watermark for dropping older same-text candidates, never proof of
+  /// content attribution (B3).
+  final int? historyAfterId;
+
+  bool get hasRecoveryMetadata =>
+      recoveryStartedAt != null ||
+      recoveryDeadline != null ||
+      recoveryRetryUsed ||
+      historyAfterId != null;
 
   /// Compare tag for claim/amend/clear; null = unowned (legacy or empty).
   String? get token =>
@@ -74,6 +99,14 @@ class PendingTurn {
     ownerTab: json['owner_tab'] as String?,
     ownerTurn: json['owner_turn'] as String?,
     leaseUntil: DateTime.tryParse(json['lease_until'] as String? ?? ''),
+    recoveryStartedAt: DateTime.tryParse(
+      json['recovery_started_at'] as String? ?? '',
+    ),
+    recoveryDeadline: DateTime.tryParse(
+      json['recovery_deadline'] as String? ?? '',
+    ),
+    recoveryRetryUsed: json['recovery_retry_used'] == true,
+    historyAfterId: (json['history_after_id'] as num?)?.toInt(),
   );
 }
 
@@ -241,6 +274,7 @@ class LocalStore {
     required DateTime startedAt,
     String? ownerTurn,
     DateTime? leaseUntil,
+    Map<String, dynamic> recovery = const {},
   }) => prefs.setString(_scope(server, sid, 'pending'), jsonEncode({
     'run_id': runId,
     'user_text': userText,
@@ -250,7 +284,133 @@ class LocalStore {
       'owner_turn': ownerTurn,
       'lease_until': leaseUntil.toIso8601String(),
     },
+    ...recovery,
   }));
+
+  /// STUCK-BUSY B3: the persisted recovery keys carried over from an
+  /// existing record (amend / touch / legacy-save must not erase them).
+  static Map<String, dynamic> _recoveryKeys(Map<String, dynamic>? rec) => {
+    if (rec?['recovery_started_at'] is String)
+      'recovery_started_at': rec!['recovery_started_at'],
+    if (rec?['recovery_deadline'] is String)
+      'recovery_deadline': rec!['recovery_deadline'],
+    if (rec?['recovery_retry_used'] == true) 'recovery_retry_used': true,
+    if (rec?['history_after_id'] is num)
+      'history_after_id': rec!['history_after_id'],
+  };
+
+  static Map<String, dynamic> _recoveryJson(
+    DateTime started,
+    DateTime deadline,
+    bool retryUsed,
+    int? historyAfterId,
+  ) => {
+    'recovery_started_at': started.toIso8601String(),
+    'recovery_deadline': deadline.toIso8601String(),
+    if (retryUsed) 'recovery_retry_used': true,
+    'history_after_id': ?historyAfterId,
+  };
+
+  /// True when a compare-and-set write was REFUSED (false from
+  /// setString) — the caller must not pretend the state persisted.
+  Future<void> _setPendingJson(String server, String sid, String json) async {
+    if (!await prefs.setString(_scope(server, sid, 'pending'), json)) {
+      throw const PendingPersistenceFailure();
+    }
+  }
+
+  /// B3: stamp the recovery budget onto a pending record EXACTLY ONCE,
+  /// inside the same per-session store transaction as claim/amend/clear.
+  /// The deadline is the FIRST entry into recovery + the initial window —
+  /// never derived from the run's startedAt, so a long healthy run does
+  /// not arrive with its recovery time already spent.
+  Future<PendingRecoveryResult> beginPendingRecovery(
+    String server,
+    String sid, {
+    String? token,
+    Duration initialWindow = const Duration(seconds: 60),
+    DateTime? now,
+  }) => withStoreTx('pending.$server.$sid', () async {
+    final at = now ?? DateTime.now();
+    final rec = _pendingRaw(server, sid);
+    if (rec == null) {
+      return const PendingRecoveryResult(
+        PendingRecoveryOutcome.missing,
+        null,
+      );
+    }
+    final current = rec['owner_tab'] == null && rec['owner_turn'] == null
+        ? null
+        : '${rec['owner_tab']}|${rec['owner_turn']}';
+    if (current != token) {
+      return const PendingRecoveryResult(
+        PendingRecoveryOutcome.mismatch,
+        null,
+      );
+    }
+    final turn = PendingTurn.fromJson(rec);
+    if (turn.hasRecoveryMetadata) {
+      return PendingRecoveryResult(PendingRecoveryOutcome.alreadyPresent, turn);
+    }
+    await _setPendingJson(
+      server,
+      sid,
+      jsonEncode({
+        ...rec,
+        ..._recoveryJson(at, at.add(initialWindow), false, turn.historyAfterId),
+      }),
+    );
+    return PendingRecoveryResult(
+      PendingRecoveryOutcome.begun,
+      PendingTurn.fromJson(_pendingRaw(server, sid)!),
+    );
+  });
+
+  /// B3: atomically consume the ONE retry allowance. Only the first
+  /// caller (per record token) flips retry_used and re-arms the deadline
+  /// at now + retryWindow; every other caller (double tap, second tab,
+  /// post-reload) gets `alreadyUsed` and must NOT open a new window —
+  /// the persisted deadline is shared verbatim.
+  Future<RecoveryRetryResult> consumeRecoveryRetry(
+    String server,
+    String sid, {
+    String? token,
+    Duration retryWindow = const Duration(seconds: 30),
+    DateTime? now,
+  }) => withStoreTx('pending.$server.$sid', () async {
+    final at = now ?? DateTime.now();
+    final rec = _pendingRaw(server, sid);
+    if (rec == null) {
+      return const RecoveryRetryResult(RecoveryRetryOutcome.missing, null);
+    }
+    final current = rec['owner_tab'] == null && rec['owner_turn'] == null
+        ? null
+        : '${rec['owner_tab']}|${rec['owner_turn']}';
+    if (current != token) {
+      return const RecoveryRetryResult(RecoveryRetryOutcome.mismatch, null);
+    }
+    final turn = PendingTurn.fromJson(rec);
+    if (!turn.hasRecoveryMetadata || turn.recoveryRetryUsed) {
+      return RecoveryRetryResult(RecoveryRetryOutcome.alreadyUsed, turn);
+    }
+    await _setPendingJson(
+      server,
+      sid,
+      jsonEncode({
+        ...rec,
+        ..._recoveryJson(
+          turn.recoveryStartedAt ?? turn.startedAt,
+          at.add(retryWindow),
+          true,
+          turn.historyAfterId,
+        ),
+      }),
+    );
+    return RecoveryRetryResult(
+      RecoveryRetryOutcome.consumed,
+      PendingTurn.fromJson(_pendingRaw(server, sid)!),
+    );
+  });
 
   /// Pre-D2 writers kept this API; records it produces are UNOWNED
   /// (anyone may claim; compare-clear sees token null == null).
@@ -270,8 +430,13 @@ class LocalStore {
       userText: userText.isEmpty
           ? (rec?['user_text'] as String? ?? '')
           : userText,
+      // STUCK-BUSY B3: the startedAt argument was silently ignored until
+      // now (only the old value or now was used). It wins when given.
       startedAt:
-          DateTime.tryParse(rec?['started_at'] as String? ?? '') ?? now,
+          startedAt ??
+          DateTime.tryParse(rec?['started_at'] as String? ?? '') ??
+          now,
+      recovery: _recoveryKeys(rec),
     );
   });
 
@@ -296,11 +461,15 @@ class LocalStore {
     required String userText,
     required String turnId,
     DateTime? startedAt,
+    int? historyAfterId,
     Duration lease = pendingLease,
   }) => withStoreTx('pending.$server.$sid', () async {
     final now = DateTime.now();
     final rec = _pendingRaw(server, sid);
     if (rec != null && _leaseHeldByOther(rec, now)) return null;
+    // A NEW claim belongs to a NEW turn: the old turn's recovery budget
+    // must not leak into it (B3 — only metadata set after this claim
+    // counts, and begin stamps it at first recovery).
     await _writePending(
       server,
       sid,
@@ -308,6 +477,7 @@ class LocalStore {
       startedAt: startedAt ?? now,
       ownerTurn: turnId,
       leaseUntil: now.add(lease),
+      recovery: {'history_after_id': ?historyAfterId},
     );
     return '$tabId|$turnId';
   });
@@ -343,6 +513,7 @@ class LocalStore {
           now,
       ownerTurn: rec['owner_turn'] as String?,
       leaseUntil: now.add(lease),
+      recovery: _recoveryKeys(rec),
     );
     return true;
   });
@@ -369,6 +540,7 @@ class LocalStore {
           DateTime.tryParse(rec['started_at'] as String? ?? '') ?? now,
       ownerTurn: rec['owner_turn'] as String?,
       leaseUntil: now.add(lease),
+      recovery: _recoveryKeys(rec),
     );
     return true;
   });
@@ -385,8 +557,11 @@ class LocalStore {
             ? null
             : '${rec['owner_tab']}|${rec['owner_turn']}';
         if (current != token) return false;
-        await prefs.remove(_scope(server, sid, 'pending'));
-        return true;
+        final removed = await prefs.remove(_scope(server, sid, 'pending'));
+        // STUCK-BUSY B3: "cleared" means the key is GONE, not that a
+        // write was attempted — a refused remove must never report a
+        // clean settle that will not survive reload.
+        return removed || _pendingRaw(server, sid) == null;
       });
 
   // ---- P2: hidden (archived) sessions; local-only, never deletes server-side ----
@@ -417,4 +592,51 @@ class LocalStore {
   );
   Future<void> clearLost(String server, String sid) =>
       prefs.remove(_scope(server, sid, 'lost'));
+}
+
+
+/// Thrown when a pending-record write was REFUSED — the caller must not
+/// claim the recovery budget (or a clear) persisted.
+class PendingPersistenceFailure implements Exception {
+  const PendingPersistenceFailure();
+}
+
+enum PendingRecoveryOutcome {
+  /// Metadata stamped by this call (first recovery for this record).
+  begun,
+
+  /// Metadata already present: the SAME deadline/retry state is returned,
+  /// untouched (reload never re-arms a window).
+  alreadyPresent,
+
+  /// Another tab's token owns the record now — nothing was touched.
+  mismatch,
+
+  /// No record at all.
+  missing,
+}
+
+class PendingRecoveryResult {
+  const PendingRecoveryResult(this.outcome, this.record);
+  final PendingRecoveryOutcome outcome;
+  final PendingTurn? record;
+}
+
+enum RecoveryRetryOutcome {
+  /// This call flipped retry_used and re-armed the 30s window.
+  consumed,
+
+  /// The single allowance is spent (or metadata is absent): the caller
+  /// must NOT start a new window — it may only observe the persisted one.
+  alreadyUsed,
+
+  /// Another tab's token owns the record — nothing was touched.
+  mismatch,
+  missing,
+}
+
+class RecoveryRetryResult {
+  const RecoveryRetryResult(this.outcome, this.record);
+  final RecoveryRetryOutcome outcome;
+  final PendingTurn? record;
 }

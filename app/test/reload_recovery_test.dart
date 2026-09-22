@@ -12,8 +12,10 @@ import 'package:hermes_app/models/message.dart';
 
 class FakeRepo extends HermesRepository {
   @override
-  Future<SessionActivity> sessionActivity(String sid) async =>
-      SessionActivity.quiet(sid);
+  Future<SessionActivity> sessionActivity(String sid) async {
+    if (activityError != null) throw activityError!;
+    return SessionActivity.quiet(sid);
+  }
   FakeRepo() : super('http://test.invalid', 'fake');
 
   @override
@@ -25,6 +27,7 @@ class FakeRepo extends HermesRepository {
   String? stopped;
   int stopCalls = 0;
   Object? stopError; // set to ApiException(…, 409/404/…) to script the reply
+  Object? activityError; // when set, the ACTIVITY snapshot read fails this way
   Json Function(String runId) status = (_) => {'status': 'running'};
   @override
   Stream<SseEvent> chat(String sid, String input) {
@@ -153,12 +156,18 @@ void main() {
 
   test('404 without a stop record keeps history observation (no regression)',
       () async {
+    // STUCK-BUSY B5: the observation-keeps protection now needs an EXPLICIT
+    // unknown fixture — a legacy gateway whose activity view answers 404 is
+    // never "confirmed quiet", so no-final must not fake a settle either
+    // way. (With confirmed-quiet evidence the same shape settles as
+    // incomplete; see stuck_busy_recovery_test.)
     await store.savePending(
       repo.baseUrl,
       's',
       userText: '問題一',
       runId: 'run_vanished',
     );
+    repo.activityError = const ApiException('gateway too old', 404);
     repo.history = const [Message(id: '1', role: 'user', content: '問題一')];
     repo.status = (_) => throw const ApiException('gone', 404);
     reloadPast();

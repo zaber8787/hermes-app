@@ -2,8 +2,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/features/settings/local_store.dart';
 import 'package:hermes_app/l10n/app_locale.dart';
+import 'dart:convert';
 import 'package:hermes_app/l10n/app_strings.dart';
 import 'package:hermes_app/models/session.dart';
+
+final kT0 = DateTime.utc(2026, 1, 1);
+final kKey = '${Uri.encodeComponent('http://s')}.x.pending';
 
 void main() {
   SharedPreferences.setMockInitialValues({});
@@ -80,6 +84,149 @@ void main() {
       expect((await store()).lostNotice('http://s', 'x'), isNotNull);
       await a.clearLost('http://s', 'x');
       expect((await store()).lostNotice('http://s', 'x'), isNull);
+    });
+  });
+
+  group('STUCK-BUSY recovery budget (B3)', () {
+    test('legacy pending parses with null recovery fields', () async {
+      final st = await store();
+      st.prefs.remove(kKey);
+      st.prefs.setString(
+        kKey,
+        jsonEncode({
+          'run_id': 'r',
+          'user_text': '早先的回合',
+          'started_at': kT0.toIso8601String(),
+        }),
+      );
+      final p = st.loadPending('http://s', 'x')!;
+      expect(p.recoveryDeadline, isNull);
+      expect(p.recoveryRetryUsed, isFalse);
+      expect(p.hasRecoveryMetadata, isFalse);
+    });
+
+    test('beginPendingRecovery initializes once; reload keeps the deadline',
+        () async {
+      final st = await store();
+      st.prefs.remove(kKey);
+      await st.savePending('http://s', 'x', userText: 'q', runId: 'r');
+      final b1 = await st.beginPendingRecovery('http://s', 'x', now: kT0);
+      expect(b1.outcome, PendingRecoveryOutcome.begun);
+      expect(b1.record!.recoveryDeadline, kT0.add(const Duration(seconds: 60)));
+      final b2 = await st.beginPendingRecovery(
+        'http://s',
+        'x',
+        now: kT0.add(const Duration(seconds: 10)),
+      );
+      expect(b2.outcome, PendingRecoveryOutcome.alreadyPresent);
+      expect(b2.record!.recoveryDeadline, kT0.add(const Duration(seconds: 60)));
+    });
+
+    test('begin compare-mismatch never touches another token\u2019s record',
+        () async {
+      final st = await store();
+      st.prefs.remove(kKey);
+      final token =
+          (await st.claimPending('http://s', 'x', userText: 'q', turnId: '1'))!;
+      final bad = await st.beginPendingRecovery(
+        'http://s',
+        'x',
+        token: 'other-tab|9',
+        now: kT0,
+      );
+      expect(bad.outcome, PendingRecoveryOutcome.mismatch);
+      expect(st.loadPending('http://s', 'x')!.hasRecoveryMetadata, isFalse);
+      final mine = await st.beginPendingRecovery(
+        'http://s',
+        'x',
+        token: token,
+        now: kT0,
+      );
+      expect(mine.outcome, PendingRecoveryOutcome.begun);
+    });
+
+    test('consumeRecoveryRetry is single-shot, re-arms exactly 30s once',
+        () async {
+      final st = await store();
+      st.prefs.remove(kKey);
+      await st.savePending('http://s', 'x', userText: 'q', runId: 'r');
+      await st.beginPendingRecovery('http://s', 'x', now: kT0);
+      final at = kT0.add(const Duration(seconds: 40));
+      final c1 = await st.consumeRecoveryRetry('http://s', 'x', now: at);
+      expect(c1.outcome, RecoveryRetryOutcome.consumed);
+      expect(c1.record!.recoveryDeadline, at.add(const Duration(seconds: 30)));
+      expect(c1.record!.recoveryStartedAt, kT0);
+      expect(c1.record!.recoveryRetryUsed, isTrue);
+      final c2 = await st.consumeRecoveryRetry(
+        'http://s',
+        'x',
+        now: at.add(const Duration(seconds: 5)),
+      );
+      expect(c2.outcome, RecoveryRetryOutcome.alreadyUsed);
+      expect(c2.record!.recoveryDeadline, at.add(const Duration(seconds: 30)));
+    });
+
+    test('amend / touch / savePending preserve recovery + startedAt', () async {
+      final st = await store();
+      st.prefs.remove(kKey);
+      final token = (await st.claimPending(
+        'http://s',
+        'x',
+        userText: 'q',
+        turnId: '1',
+        startedAt: kT0,
+      ))!;
+      await st.beginPendingRecovery('http://s', 'x', token: token, now: kT0);
+      await st.amendPendingRun(
+        'http://s',
+        'x',
+        token: token,
+        userText: 'q',
+        runId: 'r2',
+      );
+      var p = st.loadPending('http://s', 'x')!;
+      expect(p.recoveryDeadline, kT0.add(const Duration(seconds: 60)));
+      await st.touchPending('http://s', 'x', token);
+      p = st.loadPending('http://s', 'x')!;
+      expect(p.recoveryDeadline, kT0.add(const Duration(seconds: 60)));
+      await st.savePending('http://s', 'x', runId: 'r3');
+      p = st.loadPending('http://s', 'x')!;
+      expect(p.recoveryDeadline, kT0.add(const Duration(seconds: 60)));
+      final later = kT0.add(const Duration(minutes: 5));
+      await st.savePending('http://s', 'x', userText: 'q2', startedAt: later);
+      expect(st.loadPending('http://s', 'x')!.startedAt, later);
+      expect(st.loadPending('http://s', 'x')!.recoveryDeadline, isNotNull);
+    });
+
+    test('a NEW claim resets the old turn\u2019s recovery metadata', () async {
+      final st = await store();
+      st.prefs.remove(kKey);
+      await st.savePending('http://s', 'x', userText: 'q', runId: 'r');
+      await st.beginPendingRecovery('http://s', 'x', now: kT0);
+      final token = await st.claimPending(
+        'http://s',
+        'x',
+        userText: '新回合',
+        turnId: '2',
+        historyAfterId: 77,
+      );
+      expect(token, isNotNull);
+      final p = st.loadPending('http://s', 'x')!;
+      expect(p.recoveryDeadline, isNull);
+      expect(p.recoveryRetryUsed, isFalse);
+      expect(p.historyAfterId, 77);
+    });
+
+    test('clearPending compare-mismatch reports false and keeps the record',
+        () async {
+      final st = await store();
+      st.prefs.remove(kKey);
+      final token =
+          (await st.claimPending('http://s', 'x', userText: 'q', turnId: '1'))!;
+      expect(await st.clearPending('http://s', 'x', token: 'stale'), isFalse);
+      expect(st.loadPending('http://s', 'x'), isNotNull);
+      expect(await st.clearPending('http://s', 'x', token: token), isTrue);
+      expect(st.loadPending('http://s', 'x'), isNull);
     });
   });
 }
