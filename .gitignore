@@ -74,3 +74,4 @@ key.properties
 !.env.example
 .i18n-evidence/
 .stuck-busy-evidence/
+.ghost-dup-evidence/

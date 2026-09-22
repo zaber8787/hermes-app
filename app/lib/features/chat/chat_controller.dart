@@ -352,6 +352,49 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   final _remoteRows = <String, RemoteMessageRow>{}; // epoch+obs key -> row
   final _claimedRows = <String, String>{}; // observation_id -> durable row id
 
+  // ---- GHOST-DUP B3: presentation-only local run ownership ----------------
+  // The runId THIS controller's own turn was named by run.started. Excluded
+  // from previews through recentTerminal (activeRunId goes null once live
+  // completes) and cleared at every new send / epoch reset — never a
+  // growing set of past runs, never inferred from text or source.
+  String? _localOwnedRunId;
+  // Unknown-identity preview arbitration window (plan B3): when a snapshot
+  // run has NO runId yet, and a local pending preview exists for a turn
+  // started no later than the observation (5s clock slop) with a history
+  // watermark the observation cannot pre-date, the duplicate preview is
+  // HELD while the pending bubble shows — no claim written, no durable
+  // touch, released the moment any identity appears.
+  DateTime? _turnSendAt;
+  int? _turnSendWatermark;
+
+  bool isLocallyRepresentedRun(ActivityRun r) {
+    final id = r.runId;
+    return id != null &&
+        (id == activeRunId || id == _localOwnedRunId || id == _bootRunId);
+  }
+
+  bool _unknownPreviewOverlapsPending(ActivityRun r) {
+    if (r.runId != null) return false; // identity exists: exclusion decides
+    final p = pendingBubbleText;
+    if (p == null) return false; // no local preview to overlap
+    final sent = _turnSendAt ?? _bootStartedAt;
+    if (sent == null) return false;
+    final started = DateTime.fromMillisecondsSinceEpoch(
+      (r.startedAt * 1000).round(),
+    );
+    if (started.isBefore(sent.subtract(const Duration(seconds: 5)))) {
+      return false; // older than this send: a genuinely different turn
+    }
+    final uid = r.user!.afterId;
+    final mark = _turnSendWatermark ?? _bootHistoryAfterId;
+    if (uid != null && mark != null && uid < mark) {
+      return false; // anchors BEFORE this send: not ours to hide
+    }
+    final text = r.user!.text?.trim() ?? '';
+    if (text.isEmpty) return false; // no text: cannot prove the overlap
+    return foldedTurnTextEquals(text, p);
+  }
+
   /// Public entry for /status's retry button and every internal caller.
   Future<void> refreshActivity() => _activityTick();
 
@@ -399,6 +442,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       // Gateway restarted: revisions/observations are incomparable now.
       _appliedHistoryRevision = null;
       _claimedRows.clear();
+      _localOwnedRunId = null; // GHOST-DUP B3: the ownership table is per-epoch
     }
     if (prev != null &&
         snap.resolvedSessionId.isNotEmpty &&
@@ -409,6 +453,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       // page; the claim ledger (obs -> durable id) starts over.
       _appliedHistoryRevision = null;
       _claimedRows.clear();
+      _localOwnedRunId = null;
       error = const UiMessage.local(MessageKey.chatStateM002);
     }
     final remoteGone =
@@ -448,13 +493,17 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     if (snap == null) return;
     final waiting = <ActivityRun>[
       for (final r in snap.activeRuns)
-        if (!(r.runId != null && r.runId == activeRunId) && r.user != null) r,
+        if (!isLocallyRepresentedRun(r) && r.user != null) r,
       for (final r in snap.recentTerminal)
-        if (!(r.runId != null && r.runId == activeRunId) && r.user != null &&
+        if (!isLocallyRepresentedRun(r) && r.user != null &&
             !snap.activeRuns.any((a) => a.observationId == r.observationId)) r,
     ]..sort((a, b) => a.startedAt.compareTo(b.startedAt));
     if (waiting.isEmpty) return;
     final claimed = _claimedRows.values.toSet();
+    // (GHOST-DUP B2) the ledger is IDEMPOTENT: an observation retired once
+    // stays retired for the whole epoch/lineage — a rebuild must never
+    // re-pair it (respawn its preview or re-take another row). Ledger
+    // clearing happens only at the epoch/lineage resets in _applyActivity.
     final unclaimed = [
       for (final m in messages)
         if (m.isUserTurn &&
@@ -464,6 +513,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           m,
     ]..sort((a, b) => int.parse(a.id).compareTo(int.parse(b.id)));
     for (final r in waiting) {
+      if (_claimedRows.containsKey(r.observationId)) continue; // B2 skip
       final uid = r.user!.afterId;
       final text = r.user!.text?.trim();
       final folded = text == null ? '' : foldTurnText(text);
@@ -506,6 +556,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         _claimedRows[r.observationId] = match.id;
         continue;
       }
+      // GHOST-DUP B3: identity-unknown overlap — while the local pending
+      // bubble shows this exact text for THIS send, the duplicate preview
+      // waits. No claim is written; durable rows are untouched; a revealed
+      // runId (same or different) ends the hold on the very next rebuild.
+      // (A durable match above ALWAYS wins: claims never wait.)
+      if (_unknownPreviewOverlapsPending(r)) continue;
       final raw = text ?? '';
       final hint = r.isTerminal
           ? RemoteHint.unconfirmed
@@ -527,6 +583,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// Raw Message + separate hint (I18N-PLAN §4.4): the localized note is
   /// rendered at the UI boundary, never stored in the row's content.
   List<RemoteMessageRow> get remoteRows => _remoteRows.values.toList();
+
+  /// GHOST-DUP (B1/B3): the ONE synchronous projection-refresh seam — no
+  /// HTTP, no timers, no state beyond the derived remote rows. Identity
+  /// updates and durable-history commits call this so the UI never renders
+  /// a stale preview alongside a row that already represents it.
+  void _refreshUserProjections() => _rebuildRemoteRows();
 
   /// Pure presentation formatter (I18N-PLAN §4.4): accepts AppStrings so
   /// both the chat banner and /status render the SAME label; raw status and
@@ -1001,6 +1063,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _pendingHistoryRev = snap.historyRevision;
       unawaited(_activityTick());
     }
+    // GHOST-DUP B1: the durable page is now ON SCREEN — publish it. The
+    // activity tick that scheduled this GET already notified BEFORE the
+    // await; without this frame the user stares at a stale pending/preview
+    // until the next tick (the listener hole plan A2 proved).
+    notifyListeners();
   }
 
   /// Cold-start / re-entry entry (replaces attach()+load from the page):
@@ -1515,6 +1582,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       messages = mergeMessages(messages, page);
       _offset += page.length; // Raw page size, NOT de-duplicated rendered rows.
       hasOlder = page.length == 200;
+      // GHOST-DUP B1: older rows can satisfy an observation's claim — the
+      // projection must be rebuilt BEFORE the finally's notify paints. The
+      // LATEST-page revision bookkeeping is deliberately NOT touched.
+      _refreshUserProjections();
     } catch (e) {
       error = UiMessage.local(
         MessageKey.chatStateM019,
@@ -1543,6 +1614,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _lastActiveSeen = null;
     _bootRetryUsed = false;
     _bootHistoryAfterId = null;
+    _localOwnedRunId = null;
+    _turnSendAt = null;
+    _turnSendWatermark = null;
     _beforeSend
       ..clear()
       ..addAll(messages.map((m) => m.id));
@@ -1573,6 +1647,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
     _bootHistoryAfterId = historyAfterId;
+    _turnSendAt = pendingSince; // B3 arbitration window for this turn
+    _turnSendWatermark = historyAfterId;
     final claim = await store.claimPending(
       serverUrl,
       sid,
@@ -1590,6 +1666,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         _turnToken = null;
         live = null;
         pendingInput = null;
+        _localOwnedRunId = null;
+        _turnSendAt = null;
+        _turnSendWatermark = null;
         phase = ChatPhase.idle;
         error = const UiMessage.local(MessageKey.chatStateM020);
         notifyListeners();
@@ -1650,6 +1729,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           // THIS tab's claim — a failed compare means another tab took
           // the shared record over, and this page stops writing it.
           if (!identical(_turnToken, token)) return;
+          // GHOST-DUP B3: run.started of the CURRENT turn names this tab's
+          // renderer owner — recorded before any await so the identity
+          // retires the preview even if the store amend is slow.
+          _localOwnedRunId = turn.runId;
           final held = await store.amendPendingRun(
             serverUrl,
             sid,
@@ -1664,6 +1747,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
               const UiMessage.local(MessageKey.chatStateM021),
             );
           }
+          // GHOST-DUP (B3): this run's identity now exists — retire its
+          // observation preview on THIS frame, before the notify below.
+          _refreshUserProjections();
         }
         notifyListeners();
       }
@@ -1841,6 +1927,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     }
     live = null;
     pendingInput = null;
+    _localOwnedRunId = null; // GHOST-DUP B3: the turn is over; so is ownership
+    _turnSendAt = null;
+    _turnSendWatermark = null;
     _turnToken = null; // retire every late continuation of this turn
     phase = ChatPhase.idle;
     // A cleanup failure must not swallow the "ended without a final"
@@ -1849,6 +1938,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     error = cleanupFailed
         ? const UiMessage.local(MessageKey.chatStateM025)
         : errorMessage;
+    _refreshUserProjections(); // GHOST-DUP B1: settle publishes state AND
+    // projections together — one final frame, never a half-cleared overlay.
     notifyListeners(); // AUDIT-04: terminals always notify
   }
 
@@ -1941,6 +2032,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       await _settleTurn(token, page: page); // AUDIT-04: settle notifies idle
       return true;
     }
+    // GHOST-DUP B1: the replaced page may retire previews or deliver the
+    // pending row — republish projections + state with the SAME frame the
+    // caller's flow expects; a settled claim must not wait for the next
+    // visible event.
+    _refreshUserProjections();
+    notifyListeners();
     return false;
   }
 

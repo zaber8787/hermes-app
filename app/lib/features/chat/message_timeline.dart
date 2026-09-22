@@ -7,6 +7,7 @@ import 'chat_controller.dart' show RemoteHint, RemoteMessageRow;
 import 'copy_actions.dart';
 import 'live_turn.dart';
 import 'message_content.dart';
+import 'turn_history_match.dart' show foldedTurnTextEquals;
 import 'typing_dots.dart';
 
 class MessageTimeline extends StatelessWidget {
@@ -275,15 +276,36 @@ class LiveTurnView extends StatelessWidget {
     required this.turn,
     required this.detailed,
     this.onResolve,
+    this.transcriptUserAnchor,
+    this.representedUserIds = const {},
   });
   final LiveTurn turn;
   final bool detailed;
   final Future<void> Function(String choice)? onResolve;
+
+  /// GHOST-DUP B4: presentation-only transcript boundary. A completed
+  /// run.completed transcript may re-carry the CURRENT turn's user row;
+  /// when the pending bubble or a durable history row already renders it,
+  /// the transcript copy is dropped — assistant/tool rows always render
+  /// untouched, and no stored row is ever removed or reordered.
+  final String? transcriptUserAnchor;
+  final Set<String> representedUserIds;
+
   @override
   Widget build(BuildContext context) {
     final strings = AppStrings.of(context);
     if (turn.transcript != null && turn.transcript!.isNotEmpty) {
-      return MessageTimeline(messages: turn.transcript!, detailed: detailed);
+      final anchor = transcriptUserAnchor?.trim();
+      final rows = turn.transcript!
+          .where((m) {
+            if (!m.isUserTurn) return true;
+            if (representedUserIds.contains(m.id)) return false;
+            return !(anchor != null &&
+                anchor.isNotEmpty &&
+                foldedTurnTextEquals(m.content, anchor));
+          })
+          .toList();
+      return MessageTimeline(messages: rows, detailed: detailed);
     }
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,

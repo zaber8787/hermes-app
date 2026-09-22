@@ -777,6 +777,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                               turn: c.live!,
                               detailed: c.detailed,
                               onResolve: c.resolveApproval,
+                              // GHOST-DUP B4: hide the transcript's copy of
+                              // the user row this page already renders.
+                              transcriptUserAnchor: c.pendingInput,
+                              representedUserIds: {
+                                for (final m in c.messages) m.id,
+                              },
                             ),
                         ],
                       ),
