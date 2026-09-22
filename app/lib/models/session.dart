@@ -18,11 +18,17 @@ class Session {
     required this.activity,
     required this.source,
     this.pinned = false,
+    this.hidden,
   });
   final String id, title, source;
   final int count;
   final double startedAt, activity;
   final bool pinned;
+
+  /// BULK-HIDE B1: server-side hidden, NULL when the server field is
+  /// unknown. Never default-false: an absent field must not erase the
+  /// local mirror's opinion.
+  final bool? hidden;
   factory Session.fromJson(Json json) {
     final start = (json['started_at'] as num?)?.toDouble() ?? 0;
     return Session(
@@ -36,6 +42,10 @@ class Session {
           start,
       source: textOf(json['source']),
       pinned: json['pinned'] == true || json['pinned'] == 1,
+      hidden: switch (json['hidden']) {
+        final b? => b == true || b == 1,
+        _ => null,
+      },
     );
   }
   Session withActivity(double timestamp) => Session(
@@ -46,6 +56,7 @@ class Session {
     activity: timestamp,
     source: source,
     pinned: pinned,
+    hidden: hidden,
   );
   Session withTitle(String newTitle) => Session(
     id: id,
@@ -55,6 +66,17 @@ class Session {
     activity: activity,
     source: source,
     pinned: pinned,
+    hidden: hidden,
+  );
+  Session withHidden(bool? value) => Session(
+    id: id,
+    title: title,
+    count: count,
+    startedAt: startedAt,
+    activity: activity,
+    source: source,
+    pinned: pinned,
+    hidden: value,
   );
   Session withPinned(bool value) => Session(
     id: id,
@@ -64,12 +86,18 @@ class Session {
     activity: activity,
     source: source,
     pinned: value,
+    hidden: hidden,
   );
   String get readFingerprint => '$count:$activity';
 }
 
 class Skill {
-  const Skill(this.name, this.description, this.category, {this.enabled = true});
+  const Skill(
+    this.name,
+    this.description,
+    this.category, {
+    this.enabled = true,
+  });
   final String name, description, category;
 
   /// R3b: /v1/skills elements carry no switch semantics — absent means on.
@@ -129,14 +157,13 @@ String rewriteSkills(String input, List<Skill> skills) {
   while (i < tokens.length && tokens[i].startsWith('/')) {
     final name = tokens[i].substring(1);
     if (appHandledCommands.contains(name)) {
-      throw const AppFormatException(
-        UiMessage.local(MessageKey.sessionM013),
-      );
+      throw const AppFormatException(UiMessage.local(MessageKey.sessionM013));
     }
     // 不是 skill 名稱：gateway 內建指令原文直通（api_server 不做 slash 攔截，
     // 模型看得到 slash 語意會解釋/代辦）；對不上的當錯字擋掉。
     if (!skills.any((s) => s.name == name)) {
-      if (names.isEmpty && i == 0 &&
+      if (names.isEmpty &&
+          i == 0 &&
           gatewayPassthroughCommands.any((c) => c.$1 == name)) {
         return trimmed;
       }
@@ -146,9 +173,7 @@ String rewriteSkills(String input, List<Skill> skills) {
     }
     names.add(name);
     if (names.length > 5) {
-      throw const AppFormatException(
-        UiMessage.local(MessageKey.sessionM015),
-      );
+      throw const AppFormatException(UiMessage.local(MessageKey.sessionM015));
     }
     i++;
   }

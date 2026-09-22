@@ -21,10 +21,14 @@ class AppSettings {
   /// public builds compile both to '' and the app stays on the settings
   /// page until the user supplies their own server. Nothing hardcodes any
   /// operator's host, and no port-wide 8642->8700 guesswork happens.
-  static const defaultUrl =
-      String.fromEnvironment('HERMES_APP_DEFAULT_URL', defaultValue: '');
-  static const legacyUrl =
-      String.fromEnvironment('HERMES_APP_LEGACY_URL', defaultValue: '');
+  static const defaultUrl = String.fromEnvironment(
+    'HERMES_APP_DEFAULT_URL',
+    defaultValue: '',
+  );
+  static const legacyUrl = String.fromEnvironment(
+    'HERMES_APP_LEGACY_URL',
+    defaultValue: '',
+  );
 }
 
 /// Minimal identity of a turn this client started but has not seen finish:
@@ -79,10 +83,9 @@ class PendingTurn {
       historyAfterId != null;
 
   /// Compare tag for claim/amend/clear; null = unowned (legacy or empty).
-  String? get token =>
-      ownerTab == null && ownerTurn == null
-          ? null
-          : '${ownerTab ?? ''}|${ownerTurn ?? ''}';
+  String? get token => ownerTab == null && ownerTurn == null
+      ? null
+      : '${ownerTab ?? ''}|${ownerTurn ?? ''}';
 
   /// False only for legacy records written WITHOUT a `user_text` field. A
   /// genuinely empty string (`''`, a whitespace-free re-send) keeps true so
@@ -141,6 +144,7 @@ class LocalStore {
     if (kIsWeb) return Uri.base.origin;
     return AppSettings.defaultUrl;
   }
+
   Future<void> saveSettings(AppSettings value) async {
     await vault.write('server.key', value.key);
     await prefs.setString('server.url', value.url);
@@ -275,17 +279,20 @@ class LocalStore {
     String? ownerTurn,
     DateTime? leaseUntil,
     Map<String, dynamic> recovery = const {},
-  }) => prefs.setString(_scope(server, sid, 'pending'), jsonEncode({
-    'run_id': runId,
-    'user_text': userText,
-    'started_at': startedAt.toIso8601String(),
-    if (ownerTurn != null && leaseUntil != null) ...{
-      'owner_tab': tabId,
-      'owner_turn': ownerTurn,
-      'lease_until': leaseUntil.toIso8601String(),
-    },
-    ...recovery,
-  }));
+  }) => prefs.setString(
+    _scope(server, sid, 'pending'),
+    jsonEncode({
+      'run_id': runId,
+      'user_text': userText,
+      'started_at': startedAt.toIso8601String(),
+      if (ownerTurn != null && leaseUntil != null) ...{
+        'owner_tab': tabId,
+        'owner_turn': ownerTurn,
+        'lease_until': leaseUntil.toIso8601String(),
+      },
+      ...recovery,
+    }),
+  );
 
   /// STUCK-BUSY B3: the persisted recovery keys carried over from an
   /// existing record (amend / touch / legacy-save must not erase them).
@@ -334,19 +341,13 @@ class LocalStore {
     final at = now ?? DateTime.now();
     final rec = _pendingRaw(server, sid);
     if (rec == null) {
-      return const PendingRecoveryResult(
-        PendingRecoveryOutcome.missing,
-        null,
-      );
+      return const PendingRecoveryResult(PendingRecoveryOutcome.missing, null);
     }
     final current = rec['owner_tab'] == null && rec['owner_turn'] == null
         ? null
         : '${rec['owner_tab']}|${rec['owner_turn']}';
     if (current != token) {
-      return const PendingRecoveryResult(
-        PendingRecoveryOutcome.mismatch,
-        null,
-      );
+      return const PendingRecoveryResult(PendingRecoveryOutcome.mismatch, null);
     }
     final turn = PendingTurn.fromJson(rec);
     if (turn.hasRecoveryMetadata) {
@@ -536,8 +537,7 @@ class LocalStore {
       sid,
       runId: rec['run_id'] as String?,
       userText: rec['user_text'] as String? ?? '',
-      startedAt:
-          DateTime.tryParse(rec['started_at'] as String? ?? '') ?? now,
+      startedAt: DateTime.tryParse(rec['started_at'] as String? ?? '') ?? now,
       ownerTurn: rec['owner_turn'] as String?,
       leaseUntil: now.add(lease),
       recovery: _recoveryKeys(rec),
@@ -564,18 +564,107 @@ class LocalStore {
         return removed || _pendingRaw(server, sid) == null;
       });
 
-  // ---- P2: hidden (archived) sessions; local-only, never deletes server-side ----
-  Set<String> _hiddenSet(String server) {
-    final raw = prefs.getStringList('hidden.$server') ?? const [];
-    return raw.toSet();
+  // ---- BULK-HIDE B2/B3: hidden namespace — one serializer per server ----
+  // All hidden writers (single, batch, snapshot, migration, legacy) share
+  // ONE lock per server: they mutate the same list. Five HTTP PATCHes may
+  // run in parallel; the read-modify-write below never does.
+
+  /// Typed storage refusal: the write must not be reported as applied.
+  Future<void> _writeHiddenSet(String server, Set<String> set) async {
+    final ok = await prefs.setStringList('hidden.$server', set.toList());
+    if (!ok) throw const HiddenPersistenceFailure();
+  }
+
+  Set<String> _hiddenSet(String server) =>
+      (prefs.getStringList('hidden.$server') ?? const []).toSet();
+
+  /// Re-read a hidden-namespace key across contexts. Some backends —
+  /// notably the widget-test mock — make reload() RESET instead of
+  /// refresh; when the reload comes back empty for a key the cache had,
+  /// the pre-reload view wins. A genuinely foreign-deleted key self-heals
+  /// through the next snapshot sync (server is the truth; B3).
+  Future<Set<String>> _rereadList(String key) async {
+    final before = prefs.getStringList(key);
+    try {
+      await prefs.reload();
+    } on Object {
+      /* reload unsupported: keep the cache */
+    }
+    return (prefs.getStringList(key) ?? before ?? const []).toSet();
   }
 
   bool isHidden(String server, String sid) => _hiddenSet(server).contains(sid);
-  Future<void> setHidden(String server, String sid, bool hidden) async {
-    final set = _hiddenSet(server);
-    hidden ? set.add(sid) : set.remove(sid);
-    await prefs.setStringList('hidden.$server', set.toList());
-  }
+
+  Future<void> setHidden(String server, String sid, bool hidden) =>
+      withStoreTx('hidden.$server', () async {
+        final set = await _rereadList('hidden.$server');
+        hidden ? set.add(sid) : set.remove(sid);
+        await _writeHiddenSet(server, set);
+      });
+
+  /// Remove an id from BOTH hidden mirrors — the DELETE-success cleanup
+  /// (B2: pure local, never the upgraded hide) and legacy resolution.
+  Future<void> forgetHidden(String server, String sid) =>
+      withStoreTx('hidden.$server', () async {
+        final set = (await _rereadList('hidden.$server'))..remove(sid);
+        await _writeHiddenSet(server, set);
+        final legacy = (await _rereadList('hidden.legacyPending.$server'))
+          ..remove(sid);
+        await prefs.setStringList(
+          'hidden.legacyPending.$server',
+          legacy.toList(),
+        );
+      });
+
+  /// A COMPLETE list snapshot with known server flags lands atomically:
+  /// latest server value (true OR false) wins over the mirror; ids absent
+  /// from the snapshot are untouched (pruning needs a contract promise we
+  /// do not have). A legacy id the server confirms true leaves the
+  /// pending set; server-false legacy ids KEEP their pending marker
+  /// (B3: an old local preference is never silently erased).
+  Future<void> syncHiddenSnapshot(
+    String server,
+    Map<String, bool> knownFlags,
+  ) => withStoreTx('hidden.$server', () async {
+    final set = await _rereadList('hidden.$server');
+    final legacy = await _rereadList('hidden.legacyPending.$server');
+    knownFlags.forEach((id, flag) {
+      flag ? set.add(id) : set.remove(id);
+      if (flag) legacy.remove(id);
+    });
+    await _writeHiddenSet(server, set);
+    await prefs.setStringList('hidden.legacyPending.$server', legacy.toList());
+  });
+
+  Set<String> _legacyPending(String server) =>
+      (prefs.getStringList('hidden.legacyPending.$server') ?? const []).toSet();
+
+  Set<String> legacyPending(String server) => _legacyPending(server);
+
+  /// First run of the dual-write build: freeze the old LOCAL-ONLY hidden
+  /// ids as "pending sync" (an old preference, not a completed write) and
+  /// drop the schema marker — all inside the same hidden lock.
+  Future<void> ensureHiddenMigration(String server) =>
+      withStoreTx('hidden.$server', () async {
+        if (prefs.getBool('hidden.migrated.$server') == true) return;
+        await prefs.setStringList(
+          'hidden.legacyPending.$server',
+          (await _rereadList('hidden.$server')).toList(),
+        );
+        await prefs.setBool('hidden.migrated.$server', true);
+      });
+
+  /// An explicit successful operation for this id retires its legacy
+  /// marker (server-confirmed truth from now on).
+  Future<void> resolveLegacyHidden(String server, Iterable<String> ids) =>
+      withStoreTx('hidden.$server', () async {
+        final legacy = (await _rereadList('hidden.legacyPending.$server'))
+          ..removeAll(ids);
+        await prefs.setStringList(
+          'hidden.legacyPending.$server',
+          legacy.toList(),
+        );
+      });
 
   // ---- P2: last-known titles so renamed/hidden rows render before refresh ----
   Future<void> cacheTitle(String server, String sid, String title) =>
@@ -594,11 +683,15 @@ class LocalStore {
       prefs.remove(_scope(server, sid, 'lost'));
 }
 
-
 /// Thrown when a pending-record write was REFUSED — the caller must not
 /// claim the recovery budget (or a clear) persisted.
 class PendingPersistenceFailure implements Exception {
   const PendingPersistenceFailure();
+}
+
+/// BULK-HIDE B2: storage refused the hidden write (setStringList false).
+class HiddenPersistenceFailure implements Exception {
+  const HiddenPersistenceFailure();
 }
 
 enum PendingRecoveryOutcome {

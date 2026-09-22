@@ -23,64 +23,90 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.commonParenthesized: ' ({value})',
   MessageKey.languageEnglish: 'English',
   MessageKey.languageTraditionalChinese: '繁體中文',
-  MessageKey.startupM001: 'Secure storage could not be read; re-enter your connection settings.',
+  MessageKey.startupM001:
+      'Secure storage could not be read; re-enter your connection settings.',
   MessageKey.connectionM001: 'Set a valid Server URL and API key first',
-  MessageKey.apiM001: 'Timed out waiting for the server; check your network and retry.',
-  MessageKey.apiM002: 'Cannot reach the server: make sure this device can reach the URL and the gateway is running.',
-  MessageKey.apiM003: 'The secure connection to the server failed; check the certificate settings.',
+  MessageKey.apiM001:
+      'Timed out waiting for the server; check your network and retry.',
+  MessageKey.apiM002:
+      'Cannot reach the server: make sure this device can reach the URL and the gateway is running.',
+  MessageKey.apiM003:
+      'The secure connection to the server failed; check the certificate settings.',
   MessageKey.apiM004: 'Network connection failed: {detail}',
-  MessageKey.apiM005: 'Timed out waiting for the server: the network is unreachable or the gateway did not answer; retry.',
+  MessageKey.apiM005:
+      'Timed out waiting for the server: the network is unreachable or the gateway did not answer; retry.',
   MessageKey.apiM006: 'Key rejected',
   MessageKey.apiM007: 'Server request failed',
-  MessageKey.apiM008: 'The server response was cut off before finishing; retry.',
+  MessageKey.apiM008:
+      'The server response was cut off before finishing; retry.',
   MessageKey.apiM009: 'The server returned data that could not be parsed',
-  MessageKey.apiM010: 'The server does not match the P1 contract (auth / session streaming)',
+  MessageKey.apiM010:
+      'The server does not match the P1 contract (auth / session streaming)',
   MessageKey.apiM011: 'Malformed conversation data',
   MessageKey.apiM012: 'Malformed live-sync data',
   MessageKey.apiM013: 'The server did not respond with SSE',
-  MessageKey.apiM014: 'The attachment does not exist, was already downloaded, or the server has attachment transfer disabled.',
-  MessageKey.apiM015: 'The server has attachment transfer disabled (browser.extension_control.enabled=false); files cannot be sent right now.',
-  MessageKey.apiM016: 'The attachment exceeds the server size limit; use a smaller file.',
+  MessageKey.apiM014:
+      'The attachment does not exist, was already downloaded, or the server has attachment transfer disabled.',
+  MessageKey.apiM015:
+      'The server has attachment transfer disabled (browser.extension_control.enabled=false); files cannot be sent right now.',
+  MessageKey.apiM016:
+      'The attachment exceeds the server size limit; use a smaller file.',
   MessageKey.apiM017: 'The server does not support this attachment format.',
-  MessageKey.apiM018: 'The attachment data or filename is invalid; pick the file again.',
+  MessageKey.apiM018:
+      'The attachment data or filename is invalid; pick the file again.',
   MessageKey.apiM019: 'The attachment has expired; fetch it again.',
   MessageKey.apiM020: 'Key rejected; attachments cannot be transferred.',
   MessageKey.apiM021: 'No permission to transfer attachments.',
-  MessageKey.apiM022: 'Attachments are being transferred too often; try again later.',
-  MessageKey.apiM023: 'Attachment transfer failed; check the connection and retry.',
+  MessageKey.apiM022:
+      'Attachments are being transferred too often; try again later.',
+  MessageKey.apiM023:
+      'Attachment transfer failed; check the connection and retry.',
   MessageKey.apiM024: 'The attachment receipt is invalid; retry the upload.',
-  MessageKey.apiM025: 'The attachment upload failed verification; the draft was kept, retry.',
+  MessageKey.apiM025:
+      'The attachment upload failed verification; the draft was kept, retry.',
   MessageKey.apiM026: 'The attachment failed verification; fetch it again.',
   MessageKey.apiM027: 'The server did not accept the steer',
   MessageKey.apiM028: 'Failed to create the conversation',
   MessageKey.diagnosticsM001: 'The diagnostics file could not be written',
-  MessageKey.attachmentM001: 'The attachment receipt is missing a valid artifact_id; retry the upload.',
+  MessageKey.attachmentM001:
+      'The attachment receipt is missing a valid artifact_id; retry the upload.',
   MessageKey.attachmentM002: 'The attachment has not finished uploading.',
-  MessageKey.attachmentTooLarge: 'The attachment exceeds 500 MiB; use a smaller file.',
-  MessageKey.attachmentCacheMissing: 'The attachment cache is gone; remove it and pick the file again.',
-  MessageKey.attachmentBatchM001: 'The attachment could not be saved; pick the file again.',
+  MessageKey.attachmentTooLarge:
+      'The attachment exceeds 500 MiB; use a smaller file.',
+  MessageKey.attachmentCacheMissing:
+      'The attachment cache is gone; remove it and pick the file again.',
+  MessageKey.attachmentBatchM001:
+      'The attachment could not be saved; pick the file again.',
   MessageKey.attachmentBatchM002: '{count} file is too large',
   MessageKey.attachmentBatchM002Plural: '{count} files are too large',
   MessageKey.attachmentBatchM003: '{count} file could not be read',
   MessageKey.attachmentBatchM003Plural: '{count} files could not be read',
   MessageKey.attachmentBatchM004: '{count} file failed to attach',
   MessageKey.attachmentBatchM004Plural: '{count} files failed to attach',
-  MessageKey.attachmentBatchM005: 'Could not attach ({parts}); use the + button to pick files instead.',
+  MessageKey.attachmentBatchM005:
+      'Could not attach ({parts}); use the + button to pick files instead.',
   MessageKey.attachmentBatchM006: '{parts}; {count} succeeded.',
   MessageKey.attachmentBatchM006Plural: '{parts}; {count} succeeded.',
-  MessageKey.attachmentBatchM007: 'Attachments are still being processed; wait a moment.',
-  MessageKey.attachmentBatchM008: 'The attachment receipts expired; send again to refresh the uploads.',
-  MessageKey.attachmentBatchM009: 'Attachment upload failed; the draft was kept, retry.',
-  MessageKey.galleryM001: 'That media file could not be read; try a different file.',
+  MessageKey.attachmentBatchM007:
+      'Attachments are still being processed; wait a moment.',
+  MessageKey.attachmentBatchM008:
+      'The attachment receipts expired; send again to refresh the uploads.',
+  MessageKey.attachmentBatchM009:
+      'Attachment upload failed; the draft was kept, retry.',
+  MessageKey.galleryM001:
+      'That media file could not be read; try a different file.',
   MessageKey.galleryM002: 'Failed to read the gallery',
   MessageKey.galleryM003: 'Photos & videos',
   MessageKey.galleryM004: 'Other files',
-  MessageKey.galleryM005: 'Showing only some photos (system permission is limited selection)',
+  MessageKey.galleryM005:
+      'Showing only some photos (system permission is limited selection)',
   MessageKey.galleryM006: 'Select more',
   MessageKey.galleryM007: 'Gallery permission is needed to show thumbnails',
   MessageKey.galleryM008: 'Open permissions',
-  MessageKey.chatStateM001: 'The foreground re-check failed; check the connection and re-check.',
-  MessageKey.chatStateM002: 'History changed (the session history was rewritten); the latest page was reloaded.',
+  MessageKey.chatStateM001:
+      'The foreground re-check failed; check the connection and re-check.',
+  MessageKey.chatStateM002:
+      'History changed (the session history was rewritten); the latest page was reloaded.',
   MessageKey.chatStateM003: 'Synced API turn',
   MessageKey.chatTurnIncomplete:
       'This turn ended without a final response. The available results have '
@@ -108,40 +134,56 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.chatStateM006: 'Running',
   MessageKey.chatStateM007: 'Waiting for approval on another client',
   MessageKey.chatStateM008: 'Stopping',
-  MessageKey.chatStateM009: 'The background task\'s status cannot be read; use "Re-check" to confirm the result.',
+  MessageKey.chatStateM009:
+      'The background task\'s status cannot be read; use "Re-check" to confirm the result.',
   MessageKey.chatStateStoppedByYou: 'Stopped by you',
-  MessageKey.chatStateM010: 'The background task\'s status vanished; use "Re-check" to confirm the result.',
-  MessageKey.chatStateM011: 'Background task progress is temporarily unavailable; press "Re-check" to retry.',
+  MessageKey.chatStateM010:
+      'The background task\'s status vanished; use "Re-check" to confirm the result.',
+  MessageKey.chatStateM011:
+      'Background task progress is temporarily unavailable; press "Re-check" to retry.',
   MessageKey.chatStateM012: 'The turn was already finished by the server',
   MessageKey.chatStateM013: 'Reply failed: {error}',
   MessageKey.chatStateM014: 'Could not load history: {error}',
-  MessageKey.chatStateM015: 'The result is unconfirmed; use "Re-check" or resend',
-  MessageKey.chatStateM016: 'Background task progress is temporarily unavailable; return to this page or pull to refresh.',
+  MessageKey.chatStateM015:
+      'The result is unconfirmed; use "Re-check" or resend',
+  MessageKey.chatStateM016:
+      'Background task progress is temporarily unavailable; return to this page or pull to refresh.',
   MessageKey.chatStateM017: 'Open the app to see details',
   MessageKey.chatStateM018: 'Background task failed: {detail}',
   MessageKey.chatStateM019: 'Loading earlier messages failed: {error}',
-  MessageKey.chatStateM020: 'This conversation is already running in another tab; this page will not send a duplicate.',
-  MessageKey.chatStateM021: 'Another tab took over this conversation\'s shared record; this page is now a read-only observer.',
+  MessageKey.chatStateM020:
+      'This conversation is already running in another tab; this page will not send a duplicate.',
+  MessageKey.chatStateM021:
+      'Another tab took over this conversation\'s shared record; this page is now a read-only observer.',
   MessageKey.chatStateM022: 'The stream ended early',
   MessageKey.chatStateM023: 'Message not sent: {error}',
   MessageKey.chatStateM024: 'History failed to load; pull down to retry.',
-  MessageKey.chatStateM025: 'Local cleanup did not finish; it will be retried on next entry.',
-  MessageKey.chatStateM026: 'Connection lost; reconnecting and checking history in {seconds}s. The message will not be resent.',
-  MessageKey.chatStateM027: 'Connection lost; the turn may not have finished. Use "Re-check" to confirm, or resend the message.',
-  MessageKey.chatStateM028: 'The last connection dropped; that turn may not have finished',
+  MessageKey.chatStateM025:
+      'Local cleanup did not finish; it will be retried on next entry.',
+  MessageKey.chatStateM026:
+      'Connection lost; reconnecting and checking history in {seconds}s. The message will not be resent.',
+  MessageKey.chatStateM027:
+      'Connection lost; the turn may not have finished. Use "Re-check" to confirm, or resend the message.',
+  MessageKey.chatStateM028:
+      'The last connection dropped; that turn may not have finished',
   MessageKey.chatStateM029: 'There is no in-progress turn to stop',
   MessageKey.chatStateM030: 'Stop requested; waiting for the server to confirm',
   MessageKey.chatStateM031: 'The task no longer exists; history was checked',
   MessageKey.chatStateM032: 'Stop unconfirmed: {error}',
-  MessageKey.chatStateM033: 'The stop result is temporarily unavailable; use "Re-check" or try later.',
-  MessageKey.chatStateM034: 'It finished, but the history refresh failed; pull down to retry.',
+  MessageKey.chatStateM033:
+      'The stop result is temporarily unavailable; use "Re-check" or try later.',
+  MessageKey.chatStateM034:
+      'It finished, but the history refresh failed; pull down to retry.',
   MessageKey.chatStateM035: 'Steer failed: {error}',
   MessageKey.chatSteer: 'Steer',
   MessageKey.chatRemoteBusy: 'Active on another device',
   MessageKey.chatRemoteUnconfirmed: '⋯ (not yet confirmed in history)',
-  MessageKey.chatRemoteTruncated: '⋯ (long content; the full text appears after history sync)',
-  MessageKey.chatActivityStaleSummary: 'Live status fetch failed; showing the last confirmed snapshot{time}. More in-progress turns may exist.',
-  MessageKey.chatM001: 'Use steer on an in-progress conversation in detailed mode.',
+  MessageKey.chatRemoteTruncated:
+      '⋯ (long content; the full text appears after history sync)',
+  MessageKey.chatActivityStaleSummary:
+      'Live status fetch failed; showing the last confirmed snapshot{time}. More in-progress turns may exist.',
+  MessageKey.chatM001:
+      'Use steer on an in-progress conversation in detailed mode.',
   MessageKey.chatM002: 'Send failed; the draft was kept.',
   MessageKey.chatM003: 'Add instructions or adjust direction',
   MessageKey.chatM004: 'Send',
@@ -155,7 +197,8 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.chatM012: 'Simple conversation',
   MessageKey.chatM013: 'In progress',
   MessageKey.chatM014: 'Checking status…',
-  MessageKey.chatM015: 'Backgrounded; the connection may drop. Returning to the foreground checks history immediately.',
+  MessageKey.chatM015:
+      'Backgrounded; the connection may drop. Returning to the foreground checks history immediately.',
   MessageKey.chatM016: '⋯ (too many in-progress turns; showing a subset)',
   MessageKey.chatM019: 'You requested a stop for this conversation',
   MessageKey.chatM020: 'Collapse',
@@ -171,7 +214,8 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.chatM030: 'This session is running on another device',
   MessageKey.chatM031: 'Checking status; sending is paused',
   MessageKey.chatM032: 'Enter inserts a newline; use the send key to send',
-  MessageKey.chatM033: 'Send a message; Enter sends / Shift+Enter adds a newline',
+  MessageKey.chatM033:
+      'Send a message; Enter sends / Shift+Enter adds a newline',
   MessageKey.chatM034: 'Send',
   MessageKey.chatM035: 'Drop it here and I\'ll attach it',
   MessageKey.commandsM001: 'Starting a new conversation failed: {error}',
@@ -185,12 +229,15 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.commandsM009: 'Observing',
   MessageKey.commandsM010: 'Uncertain',
   MessageKey.commandsM011: 'Live activity: no snapshot yet',
-  MessageKey.commandsM012: 'Live activity: this server does not support live snapshots',
-  MessageKey.commandsActivityStale: 'Live activity: fetch failed, last success {time}; more turns may be in progress',
+  MessageKey.commandsM012:
+      'Live activity: this server does not support live snapshots',
+  MessageKey.commandsActivityStale:
+      'Live activity: fetch failed, last success {time}; more turns may be in progress',
   MessageKey.commandsM015: 'Live activity: no other in-progress turns',
   MessageKey.commandsM016: 'Active on other devices:\n{lines}',
   MessageKey.commandsM017: 'Status: {phase} | run: {runId} | {count} message',
-  MessageKey.commandsM017Plural: 'Status: {phase} | run: {runId} | {count} messages',
+  MessageKey.commandsM017Plural:
+      'Status: {phase} | run: {runId} | {count} messages',
   MessageKey.commandsM018: ' | active on another device ({line})',
   MessageKey.commandsM019: ' | checking status; sending paused',
   MessageKey.commandsM020: 'Session: {sid}',
@@ -198,11 +245,13 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.commandsM022: 'Messages: {count} loaded locally',
   MessageKey.commandsM023: 'Observers on this page: {count}',
   MessageKey.commandsM023Plural: 'Observers on this page: {count}',
-  MessageKey.commandsM024: '(too many in-progress turns; the snapshot shows a subset)',
+  MessageKey.commandsM024:
+      '(too many in-progress turns; the snapshot shows a subset)',
   MessageKey.commandsM025: 'Error: {error}',
   MessageKey.commandsM026: 'Reconnects: {count}',
   MessageKey.commandsM027: 'Re-check now',
-  MessageKey.commandsM028: 'Clear the context and start a brand-new conversation',
+  MessageKey.commandsM028:
+      'Clear the context and start a brand-new conversation',
   MessageKey.commandsM029: 'Same as /reset: start a brand-new conversation',
   MessageKey.commandsM030: 'Show session and in-progress turn status',
   MessageKey.copyM001: 'Copied {label}',
@@ -215,7 +264,8 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.copyM008: 'This message has no link',
   MessageKey.copyM009: 'Copy',
   MessageKey.streamM001: 'The stream\'s session_id does not match',
-  MessageKey.streamM002: 'The server stream reported an error; refresh history to confirm.',
+  MessageKey.streamM002:
+      'The server stream reported an error; refresh history to confirm.',
   MessageKey.contentM001: 'This link could not be opened.',
   MessageKey.contentM002: 'Copy code',
   MessageKey.contentM003: 'Image saved ({saved})',
@@ -234,12 +284,16 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.contentM016: 'The path is readable only on the server',
   MessageKey.contentM017: 'Open link',
   MessageKey.contentM018: 'Copy path',
-  MessageKey.contentM019: 'Path copied; the path is readable only on the server',
-  MessageKey.contentM020: 'Save cancelled; the attachment is still on the server and can be downloaded again.',
+  MessageKey.contentM019:
+      'Path copied; the path is readable only on the server',
+  MessageKey.contentM020:
+      'Save cancelled; the attachment is still on the server and can be downloaded again.',
   MessageKey.contentM021: 'Attachment saved',
-  MessageKey.contentM022: 'The server does not support file downloads; the path was copied instead',
+  MessageKey.contentM022:
+      'The server does not support file downloads; the path was copied instead',
   MessageKey.contentM023: 'The attachment download failed; retry.',
-  MessageKey.contentM024: 'Save cancelled; the attachment is kept locally and can be saved again.',
+  MessageKey.contentM024:
+      'Save cancelled; the attachment is kept locally and can be saved again.',
   MessageKey.contentM025: 'Saving the attachment failed; retry.',
   MessageKey.downloadCancelled: 'Save cancelled',
   MessageKey.downloadBrowserStarted: 'The browser download has started',
@@ -260,7 +314,8 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.timelineM011: 'Streaming · content not yet confirmed',
   MessageKey.timelineM012: 'Your approval is needed',
   MessageKey.timelineM013: 'This action is flagged as sensitive',
-  MessageKey.timelineM014: 'This approval event has no run_id and cannot be answered here; use the CLI instead.',
+  MessageKey.timelineM014:
+      'This approval event has no run_id and cannot be answered here; use the CLI instead.',
   MessageKey.timelineM015: 'Answered: {choice}',
   MessageKey.approvalOnce: 'Allow once',
   MessageKey.approvalSession: 'Allow for this conversation',
@@ -272,7 +327,8 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.sessionsRenameFailed: 'Rename failed',
   MessageKey.sessionsM002: 'Pinning failed: {error}',
   MessageKey.sessionsM003: 'Delete conversation',
-  MessageKey.sessionsM004: 'Delete “{title}”? This removes the entire conversation from the server.',
+  MessageKey.sessionsM004:
+      'Delete “{title}”? This removes the entire conversation from the server.',
   MessageKey.sessionsM005: 'Delete failed',
   MessageKey.sessionsM006: 'New conversation',
   MessageKey.sessionsM007: 'Connected',
@@ -288,10 +344,36 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.sessionsM017: 'There are no conversations to browse.',
   MessageKey.sessionsM018: 'No conversations match “{query}”.',
   MessageKey.sessionsM019: '{count} conversation · most recent activity first',
-  MessageKey.sessionsM019Plural: '{count} conversations · most recent activity first',
-  MessageKey.sessionsM020: 'The skills catalog has not loaded; pull down to retry.',
+  MessageKey.sessionsM019Plural:
+      '{count} conversations · most recent activity first',
+  MessageKey.sessionsM020:
+      'The skills catalog has not loaded; pull down to retry.',
   MessageKey.sessionsM021: '{count} message · {month}/{day} · {source}',
   MessageKey.sessionsM021Plural: '{count} messages · {month}/{day} · {source}',
+  // BULK-HIDE (plan B5)
+  MessageKey.sessionsSelect: 'Select',
+  MessageKey.sessionsSelectCurrent: 'Select all in current list',
+  MessageKey.sessionsClearSelection: 'Clear selection',
+  MessageKey.sessionsSelectedCount: '{count} selected',
+  MessageKey.sessionsSelectedFiltered: '{count} are outside the current list',
+  MessageKey.sessionsHideSelected: 'Hide selected conversations',
+  MessageKey.sessionsUnhideSelected: 'Unhide selected conversations',
+  MessageKey.sessionsVisibilityProgress: 'Updating: {done}/{total}',
+  MessageKey.sessionsVisibilitySummary:
+      '{success} completed; {failed} not completed',
+  MessageKey.sessionsVisibilityRetry: 'Retry unfinished items',
+  MessageKey.sessionsLocalSyncFailed:
+      'Updated on the server; local sync failed',
+  MessageKey.sessionsVisibilityUnknown:
+      'The update is unconfirmed. Refresh or retry.',
+  MessageKey.sessionsSelectionMissing:
+      '{count} conversations no longer exist and were removed from the selection',
+  MessageKey.sessionsHiddenLegacy:
+      '{count} earlier hidden settings have not been synced',
+  MessageKey.sessionsSelectLegacy: 'Select items to sync',
+  MessageKey.sessionsVisibilityUnavailable:
+      'Hidden status cannot be confirmed on this server',
+  MessageKey.sessionsMenu: 'More actions',
   MessageKey.sessionsM022: 'Unpin',
   MessageKey.sessionsM023: 'Pin to the top',
   MessageKey.sessionsM024: 'Unhide',
@@ -306,7 +388,8 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.managementM003: 'Current global model: {global}',
   MessageKey.managementM004: '(unknown)',
   MessageKey.managementM005: 'Current global model: {global}',
-  MessageKey.managementM006: 'Open from a conversation page to switch that conversation\'s model; this list is the global default set.',
+  MessageKey.managementM006:
+      'Open from a conversation page to switch that conversation\'s model; this list is the global default set.',
   MessageKey.managementM007: 'Use {model} for this conversation',
   MessageKey.managementM008: 'Switching the model failed',
   MessageKey.managementM009: 'Use',
@@ -317,37 +400,49 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.managementM013: 'Core skill: cannot be disabled',
   MessageKey.managementM014: 'Toggles take effect on the next turn.',
   MessageKey.managementM015: '(no file yet)',
-  MessageKey.managementM016: 'How memory applies to conversations: MEMORY.md is injected into every conversation; USER.md likewise.',
-  MessageKey.managementM017: '{chars}/{limit} characters · last modified {mtime}',
+  MessageKey.managementM016:
+      'How memory applies to conversations: MEMORY.md is injected into every conversation; USER.md likewise.',
+  MessageKey.managementM017:
+      '{chars}/{limit} characters · last modified {mtime}',
   MessageKey.managementM018: 'Save failed: {error}',
-  MessageKey.managementM019: 'Over the {limit}-character limit (an agent-side convention, not a hard gate) — you can still force save.',
+  MessageKey.managementM019:
+      'Over the {limit}-character limit (an agent-side convention, not a hard gate) — you can still force save.',
   MessageKey.managementM020: 'Expand {title}',
   MessageKey.managementM021: 'Collapse {title}',
-  MessageKey.settingsM001: 'Enter a valid http(s) Server URL (host included, no credentials or query parameters).',
+  MessageKey.settingsM001:
+      'Enter a valid http(s) Server URL (host included, no credentials or query parameters).',
   MessageKey.settingsM002: 'Enter the API key.',
   MessageKey.settingsM003: 'Connection OK; streaming chat is available.',
-  MessageKey.settingsM004: 'Compatibility checks passed, but the health check failed.',
-  MessageKey.settingsM005: 'Cannot connect: make sure this device can reach the server (if it lives on a private network, join that network first), and check the URL and API key.',
+  MessageKey.settingsM004:
+      'Compatibility checks passed, but the health check failed.',
+  MessageKey.settingsM005:
+      'Cannot connect: make sure this device can reach the server (if it lives on a private network, join that network first), and check the URL and API key.',
   MessageKey.settingsM006: 'Secure storage failed; settings were not saved.',
   MessageKey.settingsM007: 'Connection settings',
   MessageKey.settingsM008: 'unavailable',
   MessageKey.settingsM009: 'App version: {version}',
-  MessageKey.settingsM010: 'The diagnostics file contains SSE events and heartbeat timings, never conversation content or keys. Save it and send the file back.',
-  MessageKey.settingsM011: 'The diagnostics file was saved; you can send it back.',
+  MessageKey.settingsM010:
+      'The diagnostics file contains SSE events and heartbeat timings, never conversation content or keys. Save it and send the file back.',
+  MessageKey.settingsM011:
+      'The diagnostics file was saved; you can send it back.',
   MessageKey.settingsM012: 'Exporting the diagnostics file failed; retry.',
   MessageKey.settingsM013: 'Export diagnostics log',
   MessageKey.settingsM014: 'Connect your Hermes',
-  MessageKey.settingsM015: 'Enter your Hermes server URL and API key. Make sure the device can reach the server; on a private network, join it first.',
+  MessageKey.settingsM015:
+      'Enter your Hermes server URL and API key. Make sure the device can reach the server; on a private network, join it first.',
   MessageKey.settingsM016: 'Show key',
   MessageKey.settingsM017: 'Hide key',
-  MessageKey.settingsM018: 'The key is stored in this device\'s secure storage.',
+  MessageKey.settingsM018:
+      'The key is stored in this device\'s secure storage.',
   MessageKey.settingsM019: 'Test connection',
   MessageKey.settingsM020: 'Save settings',
   MessageKey.settingsServerUrl: 'Server URL',
   MessageKey.settingsApiKey: 'API key',
   MessageKey.settingsLanguage: 'Language',
-  MessageKey.settingsLanguageSaveFailed: 'The language preference could not be saved; keeping the current language.',
-  MessageKey.settingsNotificationLanguageSyncFailed: 'Notification language sync failed; notifications may keep the old language. It will be retried automatically.',
+  MessageKey.settingsLanguageSaveFailed:
+      'The language preference could not be saved; keeping the current language.',
+  MessageKey.settingsNotificationLanguageSyncFailed:
+      'Notification language sync failed; notifications may keep the old language. It will be retried automatically.',
   MessageKey.systemM001: 'Delegation completed',
   MessageKey.systemM002: 'Auto-continued',
   MessageKey.systemM003: 'Internal notice',
@@ -367,7 +462,8 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.sessionM010: 'Approval mode',
   MessageKey.sessionM011: 'Verbose output',
   MessageKey.sessionM012: 'Server version',
-  MessageKey.sessionM013: 'This command is handled by the client and cannot be stacked with skills or sent as a message.',
+  MessageKey.sessionM013:
+      'This command is handled by the client and cannot be stacked with skills or sent as a message.',
   MessageKey.sessionM014: 'Unknown command: /{name}',
   MessageKey.sessionM015: 'At most 5 skills can be stacked.',
 };
@@ -403,7 +499,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.apiM012: '即時同步資料格式錯誤',
   MessageKey.apiM013: '伺服器未回傳 SSE',
   MessageKey.apiM014: '附件不存在、已下載或伺服器未啟用附件傳輸。',
-  MessageKey.apiM015: '伺服器未啟用附件傳輸（browser.extension_control.enabled=false），目前不能傳送檔案。',
+  MessageKey.apiM015:
+      '伺服器未啟用附件傳輸（browser.extension_control.enabled=false），目前不能傳送檔案。',
   MessageKey.apiM016: '附件超過伺服器大小上限，請縮小檔案。',
   MessageKey.apiM017: '伺服器不支援此附件格式。',
   MessageKey.apiM018: '附件資料或檔名無效，請重新選取檔案。',
@@ -466,19 +563,13 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatStateM019: '較早訊息載入失敗：{error}',
   MessageKey.chatStateM020: '這個對話已在另一個分頁執行中；本頁不會重複送出。',
   MessageKey.chatStateM021: '此對話的共用紀錄已由其他分頁接手，本頁轉為唯讀觀察。',
-  MessageKey.chatTurnIncomplete:
-      '該回合未正常收尾。已保留目前結果，你可以繼續輸入。',
-  MessageKey.chatRecoveryCountdown:
-      '正在核對上一回合，最多再等 {seconds} 秒。重新整理不會延長等待。',
-  MessageKey.chatRecoveryUncertain:
-      '尚無法確認結果。可再核對一次，或清除本機等待紀錄；這不會停止伺服器任務或重送訊息。',
-  MessageKey.chatRecoveryExhausted:
-      '已用完重新核對次數。可清除本機等待紀錄；若伺服器仍在執行，送出會繼續暫停。',
+  MessageKey.chatTurnIncomplete: '該回合未正常收尾。已保留目前結果，你可以繼續輸入。',
+  MessageKey.chatRecoveryCountdown: '正在核對上一回合，最多再等 {seconds} 秒。重新整理不會延長等待。',
+  MessageKey.chatRecoveryUncertain: '尚無法確認結果。可再核對一次，或清除本機等待紀錄；這不會停止伺服器任務或重送訊息。',
+  MessageKey.chatRecoveryExhausted: '已用完重新核對次數。可清除本機等待紀錄；若伺服器仍在執行，送出會繼續暫停。',
   MessageKey.chatClearLocalWaiting: '清除本機等待紀錄',
-  MessageKey.chatTerminalHistoryUnknown:
-      '該回合已結束，但未能確認完整結果。請重新載入歷史。',
-  MessageKey.chatRecoveryStorageFailed:
-      '本機無法保存等待紀錄，此裝置無法追蹤復原進度；你的訊息並未重送。',
+  MessageKey.chatTerminalHistoryUnknown: '該回合已結束，但未能確認完整結果。請重新載入歷史。',
+  MessageKey.chatRecoveryStorageFailed: '本機無法保存等待紀錄，此裝置無法追蹤復原進度；你的訊息並未重送。',
   MessageKey.chatStateM022: '串流提早結束',
   MessageKey.chatStateM023: '訊息未送出：{error}',
   MessageKey.chatStateM024: '歷史載入失敗，下拉可重試。',
@@ -497,7 +588,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatRemoteBusy: '其他裝置進行中',
   MessageKey.chatRemoteUnconfirmed: '⋯（尚未於歷史確認）',
   MessageKey.chatRemoteTruncated: '⋯（內容較長，歷史同步後顯示全文）',
-  MessageKey.chatActivityStaleSummary: '即時狀態擷取失敗，顯示最後一次成功核對的結果{time}；可能還有未顯示的進行中回合。',
+  MessageKey.chatActivityStaleSummary:
+      '即時狀態擷取失敗，顯示最後一次成功核對的結果{time}；可能還有未顯示的進行中回合。',
   MessageKey.chatM001: '請在詳細模式中對進行中的對話插話。',
   MessageKey.chatM002: '傳送失敗，草稿已保留。',
   MessageKey.chatM003: '補充指示或調整方向',
@@ -649,6 +741,24 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.sessionsM020: 'Skills 目錄尚未載入，可下拉重試。',
   MessageKey.sessionsM021: '{count} 則訊息 · {month}/{day} · {source}',
   MessageKey.sessionsM021Plural: '{count} 則訊息 · {month}/{day} · {source}',
+  // BULK-HIDE (plan B5)
+  MessageKey.sessionsSelect: '選取',
+  MessageKey.sessionsSelectCurrent: '全選目前列表',
+  MessageKey.sessionsClearSelection: '清除選取',
+  MessageKey.sessionsSelectedCount: '已選 {count} 筆',
+  MessageKey.sessionsSelectedFiltered: '其中 {count} 筆不在目前列表',
+  MessageKey.sessionsHideSelected: '隱藏所選對話',
+  MessageKey.sessionsUnhideSelected: '取消隱藏所選對話',
+  MessageKey.sessionsVisibilityProgress: '處理中：{done}/{total}',
+  MessageKey.sessionsVisibilitySummary: '已完成 {success} 筆，{failed} 筆未完成',
+  MessageKey.sessionsVisibilityRetry: '重試未完成項目',
+  MessageKey.sessionsLocalSyncFailed: '伺服器已更新，本機同步失敗',
+  MessageKey.sessionsVisibilityUnknown: '尚無法確認是否更新，請重新核對或重試',
+  MessageKey.sessionsSelectionMissing: '{count} 筆對話已不存在，已移出選取',
+  MessageKey.sessionsHiddenLegacy: '有 {count} 筆舊隱藏設定尚未同步',
+  MessageKey.sessionsSelectLegacy: '選取待同步項目',
+  MessageKey.sessionsVisibilityUnavailable: '目前伺服器未提供可確認的隱藏狀態',
+  MessageKey.sessionsMenu: '更多操作',
   MessageKey.sessionsM022: '取消釘選',
   MessageKey.sessionsM023: '釘選在最上面',
   MessageKey.sessionsM024: '取消隱藏',
@@ -684,7 +794,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.settingsM002: '請輸入 API key。',
   MessageKey.settingsM003: '連線成功，串流聊天可用。',
   MessageKey.settingsM004: '相容性通過，但健康檢查失敗。',
-  MessageKey.settingsM005: '無法連線：請確認裝置可連線至伺服器（若伺服器在私人網路，先連上該網路），並檢查 URL 與 API key。',
+  MessageKey.settingsM005:
+      '無法連線：請確認裝置可連線至伺服器（若伺服器在私人網路，先連上該網路），並檢查 URL 與 API key。',
   MessageKey.settingsM006: '安全儲存失敗，設定尚未儲存。',
   MessageKey.settingsM007: '連線設定',
   MessageKey.settingsM008: '無法讀取',
@@ -694,7 +805,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.settingsM012: '診斷檔匯出失敗，請重試。',
   MessageKey.settingsM013: '匯出診斷 log',
   MessageKey.settingsM014: '連接你的 Hermes',
-  MessageKey.settingsM015: '輸入你的 Hermes server URL 與 API key。確認裝置可連線至伺服器；若使用私人網路，請先連上該網路。',
+  MessageKey.settingsM015:
+      '輸入你的 Hermes server URL 與 API key。確認裝置可連線至伺服器；若使用私人網路，請先連上該網路。',
   MessageKey.settingsM016: '顯示金鑰',
   MessageKey.settingsM017: '隱藏金鑰',
   MessageKey.settingsM018: '金鑰儲存在此裝置的安全儲存空間。',
@@ -704,7 +816,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.settingsApiKey: 'API 金鑰',
   MessageKey.settingsLanguage: '語言',
   MessageKey.settingsLanguageSaveFailed: '語言設定儲存失敗，已維持原本的語言。',
-  MessageKey.settingsNotificationLanguageSyncFailed: '通知語言同步失敗，通知可能仍為舊語言；稍後會自動重試。',
+  MessageKey.settingsNotificationLanguageSyncFailed:
+      '通知語言同步失敗，通知可能仍為舊語言；稍後會自動重試。',
   MessageKey.systemM001: '委派完成',
   MessageKey.systemM002: '自動續行',
   MessageKey.systemM003: '內部通知',

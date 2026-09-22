@@ -45,8 +45,7 @@ class ApiException implements Exception, UiCarriesMessage {
 
   /// Bridge for descriptor-valued helpers: local hints keep their key,
   /// raw text keeps the legacy raw form.
-  factory ApiException.fromUiMessage(UiMessage m, [int? status]) =>
-      m is UiLocal
+  factory ApiException.fromUiMessage(UiMessage m, [int? status]) => m is UiLocal
       ? ApiException.local(m.key, status: status, args: m.args)
       : ApiException((m as UiRaw).text, status);
 
@@ -104,9 +103,11 @@ class HermesRepository {
   }
 
   /// Pollable run status (GET /v1/runs/{id}); 404 once the gateway forgets it.
-  Future<Json> runStatus(String runId) =>
-      _json('GET', '/v1/runs/${Uri.encodeComponent(runId)}',
-          deadline: metadataTimeout);
+  Future<Json> runStatus(String runId) => _json(
+    'GET',
+    '/v1/runs/${Uri.encodeComponent(runId)}',
+    deadline: metadataTimeout,
+  );
 
   void releaseStreamKeepalive(String sid) {
     final leases = _keepalives.remove(sid);
@@ -233,8 +234,7 @@ class HermesRepository {
 
   /// Contract §1: check compatibility BEFORE loading other resources.
   Future<void> checkCapabilities() async {
-    final c = await _json('GET', '/v1/capabilities',
-        deadline: metadataTimeout);
+    final c = await _json('GET', '/v1/capabilities', deadline: metadataTimeout);
     if ((c['auth'] as Map?)?['required'] != true ||
         (c['features'] as Map?)?['session_chat_streaming'] != true) {
       throw const ApiException.local(MessageKey.apiM010);
@@ -376,7 +376,9 @@ class HermesRepository {
       }
       unawaited(Diagnostics.current?.record('sse.open', stream: stream));
       await lease.start();
-      final iterator = StreamIterator(parseSse(response.stream.timeout(readTimeout)));
+      final iterator = StreamIterator(
+        parseSse(response.stream.timeout(readTimeout)),
+      );
       try {
         while (true) {
           // Race the next frame against detach(): completing `cancel` cuts the
@@ -440,30 +442,24 @@ class HermesRepository {
   }
 
   Future<Json> artifactCapabilities() async {
-    final c = await _json('GET', '/v1/capabilities',
-        deadline: metadataTimeout);
+    final c = await _json('GET', '/v1/capabilities', deadline: metadataTimeout);
     final browser =
         (c['features'] as Map?)?['browser_extension_control'] as Map?;
     return Map<String, dynamic>.from(browser ?? {});
   }
 
   ApiException _artifactError(int status, {bool download = false}) =>
-      ApiException.local(
-        switch (status) {
-          404 => download
-              ? MessageKey.apiM014
-              : MessageKey.apiM015,
-          413 => MessageKey.apiM016,
-          415 => MessageKey.apiM017,
-          400 => MessageKey.apiM018,
-          410 => MessageKey.apiM019,
-          401 => MessageKey.apiM020,
-          403 => MessageKey.apiM021,
-          429 => MessageKey.apiM022,
-          _ => MessageKey.apiM023,
-        },
-        status: status,
-      );
+      ApiException.local(switch (status) {
+        404 => download ? MessageKey.apiM014 : MessageKey.apiM015,
+        413 => MessageKey.apiM016,
+        415 => MessageKey.apiM017,
+        400 => MessageKey.apiM018,
+        410 => MessageKey.apiM019,
+        401 => MessageKey.apiM020,
+        403 => MessageKey.apiM021,
+        429 => MessageKey.apiM022,
+        _ => MessageKey.apiM023,
+      }, status: status);
 
   Future<Json> uploadAttachment(
     AttachmentSource source,
@@ -504,7 +500,11 @@ class HermesRepository {
     }
     final receipt = Map<String, dynamic>.from(
       jsonDecode(
-              await utf8.decoder.bind(response.stream).join().timeout(readTimeout))
+            await utf8.decoder
+                .bind(response.stream)
+                .join()
+                .timeout(readTimeout),
+          )
           as Map,
     );
     if (!artifactIdPattern.hasMatch(receipt['artifact_id']?.toString() ?? '')) {
@@ -623,6 +623,34 @@ class HermesRepository {
     );
   }
 
+  /// BULK-HIDE B1/B2 TARGET contract (assumed, not yet server-verified —
+  /// see TASK/BULK-HIDE-PLAN A4): PATCH /api/sessions/{sid} {"hidden":
+  /// bool} is a SET (never a toggle), no bulk endpoint. Returns the
+  /// server-CONFIRMED flag; `null` means the exchange could not prove the
+  /// value (2xx without the field, even after the detail readback) — the
+  /// caller must treat that as outcome-unknown, never as success.
+  Future<bool?> setSessionHidden(String sid, bool hidden) async {
+    final json = await _json(
+      'PATCH',
+      '/api/sessions/${Uri.encodeComponent(sid)}',
+      body: {'hidden': hidden},
+      deadline: metadataTimeout,
+    );
+    final flag = _hiddenFlag(
+      json['hidden'] ?? (json['session'] as Map?)?['hidden'],
+    );
+    if (flag != null) return flag;
+    // 2xx that never echoed the flag: read the row back before believing.
+    return _hiddenFlag(
+      (await sessionDetail(sid))['hidden'],
+    ); // detail may 404 → throws, caller maps to failure
+  }
+
+  static bool? _hiddenFlag(Object? raw) => switch (raw) {
+    final b? => b == true || b == 1,
+    _ => null,
+  };
+
   /// Resolve a pending approval on a live run (POST /v1/runs/{id}/approval).
   /// choice: once | session | always | deny.
   Future<void> resolveApproval(String runId, String choice) async {
@@ -638,7 +666,8 @@ class HermesRepository {
   /// ("gpt-6-astra", "default") OR a dict (id/slug/is_current) — the old
   /// hard `Map.from(m)` threw on string elements and killed the whole block.
   /// Top-level {"model","provider"} is the GLOBAL current model for the UI.
-  Future<({List<Map<String, dynamic>> models, String global})> modelCatalog() async {
+  Future<({List<Map<String, dynamic>> models, String global})>
+  modelCatalog() async {
     final json = await _json('GET', '/api/model/options');
     final out = <Map<String, dynamic>>[];
     for (final p in (json['providers'] as List? ?? const [])) {
@@ -696,8 +725,7 @@ class HermesRepository {
   /// R3c: the two memory files, read through the proxy (no upstream
   /// endpoint exists). Items: {name, chars, limit, content|null, mtime}.
   Future<List<Map<String, dynamic>>> memories() async {
-    final json = await _json('GET', '/api/memories',
-        deadline: metadataTimeout);
+    final json = await _json('GET', '/api/memories', deadline: metadataTimeout);
     return (json['files'] as List)
         .map((e) => Map<String, dynamic>.from(e as Map))
         .toList();
