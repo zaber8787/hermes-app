@@ -1,6 +1,5 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
-import 'package:file_picker/file_picker.dart';
 import '../../api/hermes_repository.dart';
 import '../../l10n/message_key.dart';
 import '../../l10n/ui_message.dart';
@@ -8,6 +7,7 @@ import '../settings/local_store.dart';
 import 'attachment.dart';
 import 'draft_store.dart';
 import 'file_drop.dart';
+import 'picker_session.dart';
 
 /// addFiles 的 staging 故障分類：(b) 來源讀取失敗、(c) 其他暫存錯誤。
 /// (a) declared-size 超限走既有 ApiException 路徑，不經此類型。
@@ -19,17 +19,50 @@ class _StageFaultException implements Exception {
 }
 
 class AttachmentController extends ChangeNotifier {
-  AttachmentController(this.repo, this.store, this.sid, {DraftStore? blobs})
-    : drafts = store.attachments(repo.baseUrl, sid),
-      _blobs = blobs ?? newDraftStore();
+  AttachmentController(
+    this.repo,
+    this.store,
+    this.sid, {
+    DraftStore? blobs,
+    PickerFactory? pickFactory,
+    DateTime Function()? clock,
+    Timer Function(Duration, void Function())? timer,
+    Duration? pickTimeout,
+  }) : drafts = store.attachments(repo.baseUrl, sid),
+       _blobs = blobs ?? newDraftStore(),
+       _newSession = pickFactory ?? createPickerSession,
+       _clock = clock ?? DateTime.now,
+       _timer = timer ?? Timer.new,
+       _pickBudget = pickTimeout ?? defaultPickBudget;
+
+  /// Total wall budget for ONE pick: dialog wait + provider reads + the
+  /// whole batch staging share it; it is never reset per file (B3).
+  static const defaultPickBudget = Duration(minutes: 5);
+
   final HermesRepository repo;
   final LocalStore store;
   final String sid;
   List<AttachmentDraft> drafts;
   bool busy = false, _disposed = false;
+  final PickerFactory _newSession;
+  final DateTime Function() _clock;
+  final Timer Function(Duration, void Function()) _timer;
+  final Duration _pickBudget;
+
+  // ---- pick lifetime token machinery (IOS-PICKER-PLAN B3) ----
+  // Every await back into pick() rechecks: current token, not disposed,
+  // absolute deadline not passed. A superseded/aborted operation can never
+  // commit a draft, write prefs, or unlock a newer pick.
+  int _pickToken = 0;
+  PickerSession? _session;
+  Completer<PickerOutcome?>? _pickWait;
+  Timer? _pickTimer;
+  void Function()? _stageCancel;
+
   // Descriptors, never pretranslated strings (I18N-PLAN §4.3): consumers
   // render these with AppStrings.render / LocalizedText.
   UiMessage? error;
+
   /// Per-failure-count parts for the batch addFiles summary; the joined
   /// {parts} string is locale-dependent (AppStrings.joinParts), so the
   /// WIDGET renders M005 (batchSucceeded == 0) or M006 (partial success)
@@ -44,31 +77,207 @@ class AttachmentController extends ChangeNotifier {
 
   @override
   void dispose() {
+    if (_disposed) return;
     _disposed = true;
+    _pickToken++; // every late continuation of any pick is now inert
+    _pickTimer?.cancel();
+    _pickTimer = null;
+    final cancel = _stageCancel;
+    _stageCancel = null;
+    cancel?.call();
+    final session = _session;
+    _session = null;
+    session?.abort();
+    final wait = _pickWait;
+    _pickWait = null;
+    if (wait != null && !wait.isCompleted) wait.complete(null);
     super.dispose();
   }
 
+  bool _expiredAt(DateTime deadline) => !_clock().isBefore(deadline);
+
   Future<void> _save() => store.saveAttachments(repo.baseUrl, sid, drafts);
 
+  /// One pick, one busy window, one ABSOLUTE deadline covering the dialog
+  /// wait AND the whole batch staging (IOS-PICKER-PLAN B3). The timer only
+  /// models the environment waking up: on every wake the absolute clock
+  /// decides; focus merely wakes the check and can never cancel.
   Future<void> pick() async {
-    if (busy) return;
+    if (_disposed || busy) return;
+    final token = ++_pickToken;
     busy = true;
     error = null;
     batchParts = const [];
     batchSucceeded = 0;
     notifyListeners();
+    final deadline = _clock().add(_pickBudget);
+    final wait = Completer<PickerOutcome?>(); // null = aborted/timed out
+    _pickWait = wait;
+    PickerSession? session;
+    void expire() {
+      // Idempotent wake-time expiry: release the parked cancellable read;
+      // the session abort and unlock happen once in pick()'s finally.
+      if (token != _pickToken || _disposed) return;
+      _stageCancel?.call();
+      if (!wait.isCompleted) wait.complete(null);
+    }
+
+    void tick() {
+      if (token != _pickToken || _disposed) return;
+      if (_expiredAt(deadline)) {
+        expire();
+      } else {
+        _pickTimer = _timer(deadline.difference(_clock()), tick);
+      }
+    }
+
     try {
-      final selected = await FilePicker.pickFiles();
-      for (final picked in selected) {
-        await _stage(picked.readAsByteStream(), picked.name);
+      session = _session = _newSession();
+      // Focus/visibility wake-ups only re-check the deadline (B3.7):
+      // they never cancel, and before the deadline they never even expire.
+      session.onFocusHint = () {
+        if (token == _pickToken && _expiredAt(deadline)) expire();
+      };
+      _pickTimer = _timer(_pickBudget, tick);
+      unawaited(
+        session.outcome.then<void>(
+          (outcome) => _deliverWait(wait, token, deadline, outcome),
+          onError: (Object e) {
+            if (token != _pickToken || _disposed || wait.isCompleted) return;
+            wait.complete(
+              PickerFailed(
+                e is UiCarriesMessage
+                    ? messageForError(e)
+                    : const UiMessage.local(MessageKey.attachmentPickerFailed),
+              ),
+            );
+          },
+        ),
+      );
+      final outcome = await wait.future;
+      if (token != _pickToken || _disposed) return; // superseded or disposed
+      if (outcome == null) {
+        error = const UiMessage.local(MessageKey.attachmentPickerTimeout);
+        return;
+      }
+      switch (outcome) {
+        case PickerPicked(:final items):
+          for (final item in items) {
+            if (token != _pickToken || _disposed) return;
+            if (_expiredAt(deadline)) {
+              error = const UiMessage.local(MessageKey.attachmentPickerTimeout);
+              return;
+            }
+            await _stagePicked(item, token, deadline);
+            if (token != _pickToken || _disposed) return;
+            // A commit whose write crossed the deadline still settles —
+            // that file stays and NOTHING after it starts (B3 tail).
+            if (_expiredAt(deadline)) {
+              error = const UiMessage.local(MessageKey.attachmentPickerTimeout);
+              return;
+            }
+          }
+        case PickerCancelled():
+          break; // explicit cancel: silent (IOS-PICKER-PLAN B4)
+        case PickerEmptyUnexpected():
+          error = const UiMessage.local(MessageKey.attachmentPickerEmpty);
+        case PickerFailed(:final message):
+          error = message;
       }
     } catch (e) {
-      error = e is UiCarriesMessage
-          ? messageForError(e)
-          : const UiMessage.local(MessageKey.attachmentBatchM001);
+      if (token == _pickToken && !_disposed) {
+        error = e is UiCarriesMessage
+            ? messageForError(e)
+            : const UiMessage.local(MessageKey.attachmentBatchM001);
+      }
     } finally {
-      busy = false;
-      notifyListeners();
+      // An older operation NEVER unlocks a newer pick (B3.6).
+      if (token == _pickToken && !_disposed) {
+        _pickTimer?.cancel();
+        _pickTimer = null;
+        if (!wait.isCompleted) wait.complete(null);
+        if (_pickWait == wait) _pickWait = null;
+        session?.abort(); // idempotent terminal/late cleanup
+        _session = null;
+        busy = false;
+        notifyListeners();
+      }
+    }
+  }
+
+  /// A result that reaches pick() AFTER its deadline was already due is
+  /// judged as a timeout first — it is never staged (B3.7).
+  void _deliverWait(
+    Completer<PickerOutcome?> wait,
+    int token,
+    DateTime deadline,
+    PickerOutcome outcome,
+  ) {
+    if (token != _pickToken || _disposed || wait.isCompleted) return;
+    if (_expiredAt(deadline)) {
+      wait.complete(null); // judged timeout; the result is dropped (B3.7)
+      return;
+    }
+    wait.complete(outcome);
+  }
+
+  /// Picked-file staging: AUDIT-01 semantics (sized while spooling, drained
+  /// once, never re-enters pickSource) plus the B3 lifetime guards: the
+  /// upstream read is cancellable through [_stageCancel], and no commit
+  /// happens unless token, disposal and deadline all still hold.
+  Future<void> _stagePicked(
+    PickedAttachment item,
+    int token,
+    DateTime deadline,
+  ) async {
+    final known = item.knownSize;
+    if (known != null && known > attachmentMaxBytes) {
+      throw const ApiException.local(MessageKey.attachmentTooLarge);
+    }
+    final raw = item.openStream();
+    final bridge = StreamController<List<int>>();
+    final sub = raw.listen(
+      (chunk) {
+        if (!bridge.isClosed) bridge.add(chunk);
+      },
+      onError: (Object e, StackTrace st) {
+        if (!bridge.isClosed) bridge.addError(e, st);
+      },
+      onDone: () {
+        if (!bridge.isClosed) bridge.close();
+      },
+      cancelOnError: true,
+    );
+    _stageCancel = () {
+      unawaited(sub.cancel());
+      if (!bridge.isClosed) bridge.close();
+    };
+    try {
+      var seen = 0;
+      final counted = bridge.stream.map((chunk) {
+        seen += chunk.length;
+        if (seen > attachmentMaxBytes) {
+          throw const ApiException.local(MessageKey.attachmentTooLarge);
+        }
+        return chunk;
+      });
+      final ref = await _blobs.stage(_readGuarded(counted), _newKey());
+      // Late-result gate (B3.4): invalid after token/disposal/deadline —
+      // the ref is discarded and NEVER surfaces as a draft or prefs write.
+      if (token != _pickToken || _disposed || _expiredAt(deadline)) {
+        await _blobs.discard(ref);
+        return;
+      }
+      // Atomic commit zone (B3 tail): once started, the prefs write
+      // settles; the file is kept and the loop stops at the next check.
+      drafts = [
+        ...drafts,
+        AttachmentDraft(localPath: ref, filename: safeFilename(item.name)),
+      ];
+      await _save();
+    } finally {
+      _stageCancel = null;
+      unawaited(sub.cancel());
     }
   }
 
@@ -131,8 +340,7 @@ class AttachmentController extends ChangeNotifier {
           UiMessage.count(MessageKey.attachmentBatchM002, oversize),
         if (unreadable > 0)
           UiMessage.count(MessageKey.attachmentBatchM003, unreadable),
-        if (broken > 0)
-          UiMessage.count(MessageKey.attachmentBatchM004, broken),
+        if (broken > 0) UiMessage.count(MessageKey.attachmentBatchM004, broken),
       ];
       batchSucceeded = files.length - failed;
     }
@@ -191,27 +399,6 @@ class AttachmentController extends ChangeNotifier {
           ),
         ),
       );
-
-  /// File-picker path (AUDIT-01): runs INSIDE pick()'s busy window — it must
-  /// not re-enter the guarded public pickSource (that made the whole flow a
-  /// silent no-op). The picker stream is single-subscription, so it is sized
-  /// while spooling (no size-then-open double consumption) and drained once.
-  Future<void> _stage(Stream<List<int>> raw, String name) async {
-    var seen = 0;
-    final counted = raw.map((chunk) {
-      seen += chunk.length;
-      if (seen > attachmentMaxBytes) {
-        throw const ApiException.local(MessageKey.attachmentTooLarge);
-      }
-      return chunk;
-    });
-    final ref = await _blobs.stage(_readGuarded(counted), _newKey());
-    drafts = [
-      ...drafts,
-      AttachmentDraft(localPath: ref, filename: safeFilename(name)),
-    ];
-    await _save();
-  }
 
   String _newKey() =>
       '${DateTime.now().microsecondsSinceEpoch}-${drafts.length}';

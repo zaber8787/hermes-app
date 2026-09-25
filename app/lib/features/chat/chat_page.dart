@@ -12,6 +12,7 @@ import '../../models/session_activity.dart';
 import '../../models/session.dart';
 import '../../platform/chat_input_platform.dart';
 import '../../providers.dart';
+import '../attachments/attachment_controller.dart';
 import '../attachments/file_drop.dart';
 import '../attachments/gallery_picker.dart';
 import '../settings/local_store.dart';
@@ -21,6 +22,25 @@ import 'client_commands.dart';
 import 'viewers.dart';
 import 'typing_dots.dart';
 import 'message_timeline.dart';
+
+/// Attachment-button pick feedback (IOS-PICKER-PLAN B4 — presentation
+/// wiring only, never the chat state machine): await the pick, then show
+/// ONE SnackBar per unsuccessful result. A cancel leaves `error` null and
+/// stays silent; the controller stores only locale-free descriptors (no
+/// BuildContext, no pretranslated strings). Calling pick starts the DOM
+/// input on this synchronous path — no await before the browser click.
+Future<void> pickWithFeedback(
+  AttachmentController attachments,
+  BuildContext context,
+) async {
+  await attachments.pick();
+  if (!context.mounted) return;
+  final message = attachments.error;
+  if (message == null) return;
+  ScaffoldMessenger.of(context).showSnackBar(
+    SnackBar(content: Text(AppStrings.of(context).render(message))),
+  );
+}
 
 class ChatPage extends ConsumerStatefulWidget {
   const ChatPage({super.key, required this.session});
@@ -915,7 +935,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             : () async {
                                 final picked = await pickFromGallery(
                                   context,
-                                  onPickOther: attachments.pick,
+                                  onPickOther: () => unawaited(
+                                    pickWithFeedback(attachments, context),
+                                  ),
                                 );
                                 if (picked != null) {
                                   await attachments.pickSource(

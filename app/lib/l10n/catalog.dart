@@ -75,6 +75,13 @@ const Map<MessageKey, String> catalogEn = {
       'The attachment exceeds 500 MiB; use a smaller file.',
   MessageKey.attachmentCacheMissing:
       'The attachment cache is gone; remove it and pick the file again.',
+  MessageKey.attachmentPickerEmpty:
+      'No selected file was received. Please try again.',
+  MessageKey.attachmentPickerTimeout:
+      'File selection or reading timed out. Close the picker and try again. '
+      'Attachments already added are kept.',
+  MessageKey.attachmentPickerFailed:
+      'File selection could not be completed. Please try again.',
   MessageKey.attachmentBatchM001:
       'The attachment could not be saved; pick the file again.',
   MessageKey.attachmentBatchM002: '{count} file is too large',
@@ -519,6 +526,9 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.attachmentM002: '附件尚未上傳完成。',
   MessageKey.attachmentTooLarge: '附件超過 500 MiB，請縮小檔案。',
   MessageKey.attachmentCacheMissing: '附件快取已遺失，請移除後重新選取。',
+  MessageKey.attachmentPickerEmpty: '未收到選取的檔案，請再試一次。',
+  MessageKey.attachmentPickerTimeout: '選檔或讀取已逾時。請關閉選檔視窗後再試一次；已加入的附件會保留。',
+  MessageKey.attachmentPickerFailed: '無法完成選檔，請再試一次。',
   MessageKey.attachmentBatchM001: '無法保存附件，請重新選取檔案。',
   MessageKey.attachmentBatchM002: '{count} 個檔案太大',
   MessageKey.attachmentBatchM002Plural: '{count} 個檔案太大',

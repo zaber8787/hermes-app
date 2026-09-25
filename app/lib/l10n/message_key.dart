@@ -89,6 +89,10 @@ enum MessageKey {
   attachmentBatchM003Plural,
   attachmentBatchM004Plural,
   attachmentBatchM006Plural,
+  // IOS-PICKER B4: typed outcomes of a file-selection session.
+  attachmentPickerEmpty,
+  attachmentPickerTimeout,
+  attachmentPickerFailed,
   galleryM001,
   galleryM002,
   galleryM003,
