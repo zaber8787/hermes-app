@@ -15,6 +15,12 @@ import 'viewers.dart';
 
 enum ChatPhase { idle, sending, recovering, uncertain }
 
+/// SILENCE-DROP §3.1: WHY recovery started decides its wording. Only the
+/// live POST stream may claim an observed failure (streamEnded/streamError);
+/// neutral callers (silence/recheck) must never say "connection lost" —
+/// the client observed silence, not a drop.
+enum RecoveryCause { silence, streamEnded, streamError, recheck }
+
 /// Provenance of the stop-notice banner (I18N-PLAN §4.4). The stored JSON
 /// stop record keeps its exact schema; this enum replaces the old
 /// "does it start with '{'" display heuristic, and [stopNoticeMessage] is a
@@ -100,6 +106,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// Server emits `: keepalive` frames on idle chat streams, so silence longer
   /// than this means the socket is wedged rather than the run being slow.
   static const silenceLimit = Duration(seconds: 75);
+
+  /// SILENCE-DROP §3.1: a purely UX choice (independent of the server
+  /// keepalive cadence). Once a live send shows no BUSINESS output for this
+  /// long, a neutral "waiting" notice appears — heartbeats keep the run alive
+  /// but never count as output, so a long tool/think reads as "waiting", not
+  /// an error. Never gates recovery; 75s still does.
+  static const noOutputNoticeLimit = Duration(seconds: 30);
 
   List<Message> messages = [];
   bool detailed, loading = false, loadingOlder = false, hasOlder = true;
@@ -666,6 +679,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     }
     _detached = true;
     _silenceWatch?.cancel();
+    // SILENCE-DROP §3.1.6: the page leaves the SSE as the outcome owner; the
+    // waiting notice and turn cause die with this ownership mode (the poll
+    // UX must not inherit either).
+    _waitingSeconds = null;
+    _turnRecoveryCause = null;
     _recoveryEpoch++; // abandon any in-flight recover() loop
     _recovery = null;
     repo.cancelStream(sid);
@@ -967,6 +985,42 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   Timer? _silenceWatch;
   DateTime _lastEventAt = DateTime.now();
 
+  /// SILENCE-DROP §3.1.1: the second clock. Heartbeats refresh transport
+  /// freshness ([_lastEventAt]) but NOT this one, so a live-but-silent run
+  /// accumulates "waiting for Xs" wording instead of any error claim.
+  DateTime? _lastOutputAt;
+
+  /// Cached whole seconds of the waiting notice; null hides it. Only the
+  /// watchdog tick changes the value, so repaints stay cheap.
+  int? _waitingSeconds;
+
+  /// Turn-local recovery cause: the first start of a turn sets it; an
+  /// explicitly observed stream failure upgrades a neutral one, and a
+  /// neutral cause NEVER downgrades a failure (SILENCE-DROP §3.1.5).
+  RecoveryCause? _turnRecoveryCause;
+
+  bool get _observedStreamFailure =>
+      _turnRecoveryCause == RecoveryCause.streamEnded ||
+      _turnRecoveryCause == RecoveryCause.streamError;
+
+  /// Exposed for tests and the widget's color choice; wording is always
+  /// re-resolved from the LATEST cause at render/notify time.
+  RecoveryCause? get recoveryCause => _turnRecoveryCause;
+
+  /// SILENCE-DROP §3.2: "waiting for a reply (no output for Xs)" — only
+  /// while a FOREGROUND page is actually sending; it rides the normal
+  /// secondary tone in chat_page, never [error] and never [recoveryNotice].
+  UiMessage? get streamWaitingNotice =>
+      phase == ChatPhase.sending &&
+              !backgrounded &&
+              !_detached &&
+              _waitingSeconds != null
+          ? UiMessage.local(
+              MessageKey.chatStreamWaiting,
+              args: {'seconds': _waitingSeconds},
+            )
+          : null;
+
   @override
   void notifyListeners() {
     if (!_disposed) super.notifyListeners();
@@ -993,6 +1047,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     ChatViewers.unregister(sid, this); // eviction ledger follows dispose
     _silenceWatch?.cancel();
+    _waitingSeconds = null; // SILENCE-DROP §3.1.6: a dead controller shows nothing
     super.dispose();
   }
 
@@ -1626,7 +1681,14 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     phase = ChatPhase.sending;
     error = null;
     _setStop(StopNotice.none);
-    _lastEventAt = DateTime.now();
+    // SILENCE-DROP B1: transport-freshness clock rides the injectable seam
+    // (same one the recovery deadlines use) so timing is testable.
+    _lastEventAt = _clock();
+    // SILENCE-DROP §3.1.6: a new turn inherits NO waiting seconds and NO
+    // recovery cause from the previous one.
+    _lastOutputAt = _clock();
+    _waitingSeconds = null;
+    _turnRecoveryCause = null;
     _pendingStart = true; // claim in flight: detach defers to the mint point
     _detachArmed = false;
     notifyListeners();
@@ -1693,11 +1755,24 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         _silenceWatch?.cancel(); // stale timer: retire itself
         return;
       }
-      if (!backgrounded &&
-          phase == ChatPhase.sending &&
-          DateTime.now().difference(_lastEventAt) > silenceLimit) {
+      // SILENCE-DROP §3.2 (last row): background/detached pages show no
+      // waiting notice and arm no NEW silence recover — their existing
+      // lifecycle/poll UX stays in charge.
+      if (backgrounded || _detached || phase != ChatPhase.sending) return;
+      final now = _clock();
+      if (now.difference(_lastEventAt) > silenceLimit) {
         _silenceWatch?.cancel();
-        unawaited(recover());
+        unawaited(recover(cause: RecoveryCause.silence));
+        return;
+      }
+      final out = _lastOutputAt;
+      if (out != null && now.difference(out) > noOutputNoticeLimit) {
+        final secs = now.difference(out).inSeconds;
+        if (secs != _waitingSeconds) {
+          // §3.1.2: repaint ONLY when the notice appears or its value moves.
+          _waitingSeconds = secs;
+          notifyListeners();
+        }
       }
     });
     try {
@@ -1716,10 +1791,15 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         }
         if (_disposed) return;
         if (!identical(live, turn) || !identical(_turnToken, token)) continue;
-        _lastEventAt = DateTime.now();
+        _lastEventAt = _clock();
         if (event.type == 'heartbeat') {
-          continue; // Silence-proof liveness, no repaint.
+          continue; // Silence-proof liveness, no repaint. Heartbeats refresh
+          // transport freshness ONLY — the no-output clock keeps aging (§3.1.1).
         }
+        // Real business output: reset BOTH clocks and drop the waiting
+        // notice if it was showing (the notify below publishes it).
+        _lastOutputAt = _clock();
+        _waitingSeconds = null;
         live!.apply(event, sid);
         if (event.type == 'run.started' && turn.runId != null) {
           // Amend the recovery record: after this, reload can poll
@@ -1756,7 +1836,18 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       if (_disposed || !identical(live, turn)) return;
       if (_detached) return; // socket cut on purpose; _pollRun owns the outcome
       if (!turn.completed) {
-        throw const ApiException.local(MessageKey.chatStateM022);
+        // SILENCE-DROP §3.1.4: unfinished EOF is an OBSERVED stream end —
+        // route it straight to recovery with a typed cause instead of a
+        // generic M022 throw, so the backoff says "reply stream ended",
+        // not "the socket died". The `busy && token` guard kills the
+        // settle race: when settlement's own cancelStream delivers this
+        // `done`, the turn may already be retired — never resurrect a
+        // recovery loop for a settled turn (it would strand on a zombie
+        // phase AFTER idle).
+        if (busy && identical(_turnToken, token)) {
+          await recover(cause: RecoveryCause.streamEnded);
+        }
+        return;
       }
       await _finish(token: token);
     } on ApiException catch (e) {
@@ -1773,12 +1864,16 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           ),
         );
         // Keep input visible to the user; no automatic retry of a mutation.
-      } else {
-        await recover();
+      } else if (busy && identical(_turnToken, token)) {
+        // Same retire-guard as the EOF tail: an error racing a settlement
+        // must not fork a second observation of a retired turn.
+        await recover(cause: RecoveryCause.streamError);
       }
     } catch (_) {
       if (_disposed || !identical(live, turn) || _detached) return;
-      await recover();
+      if (busy && identical(_turnToken, token)) {
+        await recover(cause: RecoveryCause.streamError);
+      }
     } finally {
       if (identical(live, turn) || live == null) _silenceWatch?.cancel();
     }
@@ -1794,6 +1889,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _leaseTimer?.cancel();
     _leaseTimer = null;
     _pendingToken = null;
+    _waitingSeconds = null; // SILENCE-DROP §3.1.6: ownership loss resets UX state
+    _turnRecoveryCause = null;
     error = message;
     notifyListeners();
   }
@@ -1913,6 +2010,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _lastActiveSeen = null;
     _bootRetryUsed = false;
     _bootHistoryAfterId = null;
+    // SILENCE-DROP §3.1.6: settle retires the waiting notice and the turn's
+    // recovery cause with the rest of the turn's state.
+    _turnRecoveryCause = null;
+    _waitingSeconds = null;
+    _lastOutputAt = null;
     _deadlineTimer?.cancel();
     _deadlineTimer = null;
     _countdownTicker?.cancel();
@@ -1947,9 +2049,23 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// with 1,2,4,8,16,30s delays; never replay a possibly accepted chat POST.
   /// Original completion frames take precedence; otherwise require a persisted
   /// final after this exact new user row. No terminal run status assumptions.
-  Future<void> recover() {
+  ///
+  /// SILENCE-DROP §3.1.3: `cause` only selects WORDING. The default stays
+  /// neutral so generic callers never claim a connection drop; single-flight
+  /// means an in-flight loop is never forked — an explicit stream failure
+  /// arriving mid-loop merely upgrades the turn's cause for later rounds.
+  Future<void> recover({RecoveryCause cause = RecoveryCause.recheck}) {
     if (_disposed || !busy) return Future.value();
-    if (_recovery != null) return _recovery!;
+    // A settlement for THIS turn is already in flight (the gate opened):
+    // its outcome is terminal — starting a loop now would fork a zombie
+    // behind it (_settleCore already cleared _recovery while busy is still
+    // true mid-publish).
+    if (identical(_settledTurn, _turnToken)) return Future.value();
+    if (_recovery != null) {
+      _noteRecoveryCause(cause); // upgrade wording, never fork a loop
+      return _recovery!;
+    }
+    _noteRecoveryCause(cause);
     reconnects++;
     final epoch = ++_recoveryEpoch;
     final task = _recover(epoch);
@@ -1957,6 +2073,17 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     return task.whenComplete(() {
       if (epoch == _recoveryEpoch) _recovery = null;
     });
+  }
+
+  void _noteRecoveryCause(RecoveryCause cause) {
+    final explicit =
+        cause == RecoveryCause.streamEnded || cause == RecoveryCause.streamError;
+    if (explicit && !_observedStreamFailure) {
+      _turnRecoveryCause = cause; // neutral → observed failure: upgrade
+    } else {
+      _turnRecoveryCause ??= cause; // first cause of this turn wins
+    }
+    // neutral causes never downgrade an observed stream failure.
   }
 
   Future<void> _recover(int epoch) async {
@@ -1976,7 +2103,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         return;
       }
       error = UiMessage.local(
-        MessageKey.chatStateM026,
+        // SILENCE-DROP §3.2: the wording rides the cause observed SO FAR —
+        // re-read every round, because a late EOF/error upgrades a neutral
+        // backoff that started as silence/recheck.
+        _observedStreamFailure
+            ? MessageKey.chatStateM026
+            : MessageKey.chatStreamChecking,
         args: {'seconds': seconds},
       );
       notifyListeners();
@@ -2002,7 +2134,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       await store.markLost(serverUrl, sid);
     } catch (_) {}
     if (!_owns(token) || epoch != _recoveryEpoch) return;
-    error = const UiMessage.local(MessageKey.chatStateM027);
+    // SILENCE-DROP §3.2 rows 6-7: neutral causes (silence/recheck) must NOT
+    // claim the connection dropped — they say the turn's result is simply
+    // unconfirmed. Only an OBSERVED stream failure keeps the existing M027.
+    error = _observedStreamFailure
+        ? const UiMessage.local(MessageKey.chatStateM027)
+        : const UiMessage.local(MessageKey.chatStreamUnconfirmed);
     notifyListeners();
   }
 

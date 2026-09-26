@@ -634,6 +634,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   ),
                 ],
               ),
+            // SILENCE-DROP §3.3: "waiting for a reply" is its own
+            // secondary-tone line — never red, never folded into the
+            // error slot (the stream is alive; nothing failed).
+            if (c.streamWaitingNotice != null)
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  strings.render(c.streamWaitingNotice!),
+                  style: TextStyle(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
+                ),
+              ),
             if (c.error != null || c.recoveryNotice != null)
               Padding(
                 padding: const EdgeInsets.all(12),
@@ -644,7 +657,15 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       Text(
                         strings.render(c.error!),
                         style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
+                          // SILENCE-DROP §3.3: neutral recovery wording
+                          // (silence/recheck) renders in the secondary
+                          // tone; ONLY observed stream failures stay red.
+                          color: switch (c.error) {
+                            UiLocal(key: MessageKey.chatStreamChecking) ||
+                            UiLocal(key: MessageKey.chatStreamUnconfirmed) =>
+                              Theme.of(context).colorScheme.tertiary,
+                            _ => Theme.of(context).colorScheme.error,
+                          },
                         ),
                       ),
                     // STUCK-BUSY B2: the "ended without a final" notice has

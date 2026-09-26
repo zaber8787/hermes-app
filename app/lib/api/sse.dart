@@ -34,10 +34,14 @@ Stream<SseEvent> parseSse(Stream<List<int>> bytes) async* {
       continue;
     }
     if (line.startsWith(':')) {
-      // `: keepalive` is the server's only traffic on a quiet-but-live stream
-      // (30s cadence). Surface just that comment as a heartbeat event so the
-      // UI can tell "alive and thinking" from a wedged socket; other SSE
-      // comments stay silent per spec.
+      // `: keepalive` is how the gateway marks a live-but-idle POST SSE
+      // stream: api_server.py's chat-stream handler writes it whenever its
+      // event queue times out an empty 10s wait — the cadence is the
+      // SERVER's current choice (gateway/platforms/api_server.py, POST
+      // keepalive constant), not a parser contract, and older comments
+      // claiming a fixed 30s cadence were wrong. Surface just this comment
+      // as a heartbeat event so the UI can tell "alive and thinking" from
+      // a wedged socket; other SSE comments stay silent per spec.
       if (line.substring(1).trim() == 'keepalive' &&
           event == 'message' &&
           data.isEmpty) {

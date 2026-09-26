@@ -168,7 +168,7 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.chatStateM025:
       'Local cleanup did not finish; it will be retried on next entry.',
   MessageKey.chatStateM026:
-      'Connection lost; reconnecting and checking history in {seconds}s. The message will not be resent.',
+      'The reply stream was interrupted; checking history in {seconds}s. The message will not be resent.',
   MessageKey.chatStateM027:
       'Connection lost; the turn may not have finished. Use "Re-check" to confirm, or resend the message.',
   MessageKey.chatStateM028:
@@ -182,6 +182,14 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.chatStateM034:
       'It finished, but the history refresh failed; pull down to retry.',
   MessageKey.chatStateM035: 'Steer failed: {error}',
+
+  // ---- SILENCE-DROP §3.3: quiet-stream waiting / neutral check / unconfirmed
+  MessageKey.chatStreamWaiting: 'Waiting for a reply (no output for {seconds}s)',
+  MessageKey.chatStreamChecking:
+      'No stream updates received; checking history in {seconds}s. The message will not be resent.',
+  MessageKey.chatStreamUnconfirmed:
+      'The result of this turn is still unconfirmed. Use "Re-check" to check again.',
+
   MessageKey.chatSteer: 'Steer',
   MessageKey.chatRemoteBusy: 'Active on another device',
   MessageKey.chatRemoteUnconfirmed: '⋯ (not yet confirmed in history)',
@@ -584,7 +592,7 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatStateM023: '訊息未送出：{error}',
   MessageKey.chatStateM024: '歷史載入失敗，下拉可重試。',
   MessageKey.chatStateM025: '本機清理未完成，下次進入會自動重試。',
-  MessageKey.chatStateM026: '連線中斷，{seconds}s 後重連並核對歷史；不會重送訊息。',
+  MessageKey.chatStateM026: '回覆串流中斷，{seconds} 秒後核對歷史；不會重送訊息。',
   MessageKey.chatStateM027: '連線中斷，該回合可能未完成。請「重新核對」確認，或重送訊息。',
   MessageKey.chatStateM028: '上次連線中斷，該回合可能未完成',
   MessageKey.chatStateM029: '目前沒有可停止的進行中回合',
@@ -594,6 +602,12 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatStateM033: '停止結果暫時查不到，可「重新核對」或稍後再試。',
   MessageKey.chatStateM034: '已結束，但歷史刷新失敗，下拉可重試。',
   MessageKey.chatStateM035: '插話失敗：{error}',
+
+  // ---- SILENCE-DROP §3.3: quiet-stream waiting / neutral check / unconfirmed
+  MessageKey.chatStreamWaiting: '等待回覆（無輸出 {seconds} 秒）',
+  MessageKey.chatStreamChecking: '暫未收到串流更新，{seconds} 秒後核對歷史；不會重送訊息。',
+  MessageKey.chatStreamUnconfirmed: '尚無法確認這回合的結果。請使用「重新核對」確認。',
+
   MessageKey.chatSteer: '插話',
   MessageKey.chatRemoteBusy: '其他裝置進行中',
   MessageKey.chatRemoteUnconfirmed: '⋯（尚未於歷史確認）',

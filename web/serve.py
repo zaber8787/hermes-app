@@ -65,7 +65,9 @@ HOP_BY_HOP = {"host", "connection", "keep-alive", "proxy-authenticate",
               "upgrade", "origin"}
 
 session: ClientSession | None = None
-# drain 存活判定：靜默 10 分鐘（gateway 每 30s 一發 keepalive）判卡死放手；
+# drain 存活判定：靜默 10 分鐘判卡死放手（存活訊號是 gateway 的 idle
+# `: keepalive` comment，週期由 server 端決定——當前源碼約 10s，非本檔假設；
+# 出處 gateway/platforms/api_server.py 的 POST keepalive 常數）。
 # 6 小時只當最後保險絲，正常長任務不再被時間表砍。
 _DRAIN_SILENCE_SECONDS = 600
 _DRAIN_MAX_SECONDS = 6 * 3600
@@ -104,10 +106,11 @@ async def _drain_to_end(upstream, why):
     """Browser's gone but the run lives on: keep reading the SSE stream so
     the API server never sees a dropped connection (it interrupts runs on
     disconnect). Liveness, not a stopwatch: the gateway emits a `: keepalive`
-    comment every 30s while a run is live, so silence (not elapsed time)
-    marks a wedged stream. The old flat 1800s cap killed any run that ran
-    longer than 30min while detached (2026-09-18: two runs interrupted at
-    exactly +30min04s after the drain's deadline)."""
+    comment while a run is live (an idle-queue timeout whose cadence the
+    SERVER owns — ~10s in the current source, not a fixed 30s), so silence
+    (not elapsed time) marks a wedged stream. The old flat 1800s cap killed
+    any run that ran longer than 30min while detached (2026-09-18: two runs
+    interrupted at exactly +30min04s after the drain's deadline)."""
     log.info("browser left mid-stream (%s); keeping the run alive", why)
     try:
         deadline = asyncio.get_running_loop().time() + _DRAIN_MAX_SECONDS
@@ -122,7 +125,8 @@ async def _drain_to_end(upstream, why):
                     upstream.content.read(65536),
                     min(remaining, _DRAIN_SILENCE_SECONDS))
             except TimeoutError:
-                # 30s keepalive cadence means 10min of zero bytes = wedged.
+                # gateway keepalive cadence is server-owned (~10s currently),
+                # so 10min of zero bytes is far past any live stream.
                 log.warning("no stream traffic for %ds; releasing the run",
                             _DRAIN_SILENCE_SECONDS)
                 break

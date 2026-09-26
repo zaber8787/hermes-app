@@ -136,6 +136,12 @@ enum MessageKey {
   chatStateM033,
   chatStateM034,
   chatStateM035,
+
+  // ---- SILENCE-DROP §3.3: quiet-stream waiting / neutral check / unconfirmed
+  chatStreamWaiting,
+  chatStreamChecking,
+  chatStreamUnconfirmed,
+
   chatStateStoppedByYou,
   chatStateRunLabel,
 
