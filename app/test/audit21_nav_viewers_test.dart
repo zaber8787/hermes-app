@@ -65,7 +65,7 @@ class FakeNavRepo extends HermesRepository {
     int limit = 200,
   }) async => const [];
   @override
-  Stream<SseEvent> chat(String sid, String input) {
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     sends++;
     return events.stream;
   }

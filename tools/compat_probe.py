@@ -16,7 +16,8 @@ import tarfile
 import tempfile
 import time
 
-CASES = ("upload", "limits", "media", "history", "approval", "skills", "activity")
+CASES = ("upload", "limits", "media", "history", "approval", "skills", "activity", "push",
+         "cron_bridge", "wake", "wakecap")
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -25,6 +26,12 @@ def parser():
     p.add_argument("--mode", choices=("offline", "live"), default="offline")
     p.add_argument("--agent-root", type=Path, default=Path.home()/".hermes/hermes-agent")
     p.add_argument("--plugin-root", type=Path, default=REPO/"compat")
+    # UPD-COMPAT P0: fixed-SHA + isolated-interpreter injection. --revision
+    # names a git object readable from --agent-root (READ-ONLY there: only
+    # cat-file/archive run); --python selects the probe interpreter so the
+    # gate never silently uses the production checkout's venv.
+    p.add_argument("--revision", help="fixed full or abbreviated commit SHA to probe")
+    p.add_argument("--python", type=Path, help="interpreter (isolated staging venv) for workers")
     p.add_argument("--only", choices=CASES)
     p.add_argument("--full-size", action="store_true")
     p.add_argument("--json-output", type=Path)
@@ -48,18 +55,73 @@ def run_worker(args):
     return 0 if result["status"] == "PASS" else 1
 
 
+def plugin_version(root: Path) -> str:
+    try:
+        for line in (root/"plugin.yaml").read_text().splitlines():
+            if line.startswith("version:"):
+                return line.split(":", 1)[1].strip()
+    except OSError:
+        pass
+    return "unknown"
+
+
+def plugin_digest(root: Path) -> str:
+    """Content digest of the plugin under test (sorted relpaths, pycache-free)."""
+    import hashlib
+    files = sorted(p for p in root.rglob("*") if p.is_file() and "__pycache__" not in p.parts
+                   and not p.name.endswith(".pyc"))
+    h = hashlib.sha256()
+    for f in files:
+        h.update(str(f.relative_to(root)).encode())
+        h.update(f.read_bytes())
+    return h.hexdigest()
+
+
+def venv_identity(python: Path) -> dict:
+    probe = ("import hashlib,json,os,sys;"
+             "cfg=os.path.join(sys.prefix,'pyvenv.cfg');"
+             "print(json.dumps({'executable':sys.executable,'prefix':sys.prefix,"
+             "'base_prefix':sys.base_prefix,'version':sys.version.splitlines()[0],"
+             "'pyvenv_cfg_sha256':hashlib.sha256(open(cfg,'rb').read()).hexdigest() if os.path.exists(cfg) else None}))")
+    ident = json.loads(subprocess.check_output([str(python), "-B", "-c", probe], text=True))
+    if ident["prefix"] == ident["base_prefix"]:
+        raise RuntimeError(f"probe interpreter is not a virtualenv: {python}")
+    return ident
+
+
 def offline(args):
     root = args.agent_root.resolve()
-    revision = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
-    python = next((root/p for p in ("venv/bin/python", ".venv/bin/python") if (root/p).exists()), None)
-    if python is None:
-        raise RuntimeError("Hermes venv python not found")
+    # Gate rule: a fixed-revision probe must declare its interpreter (P0 spec);
+    # silently borrowing the checkout venv would import new code into production.
+    if args.revision and not args.python:
+        raise RuntimeError("--revision requires --python (isolated staging venv)")
+    # Read-only object access only: rev-parse --verify + archive. Never checkout.
+    if args.revision:
+        revision = subprocess.check_output(
+            ["git", "-C", str(root), "rev-parse", "--verify", f"{args.revision}^{{commit}}"],
+            text=True).strip()
+        source = "fixed-revision"
+    else:
+        revision = subprocess.check_output(["git", "-C", str(root), "rev-parse", "HEAD"], text=True).strip()
+        source = "clean-head"
+    if args.python:
+        # NOTE: never Path.resolve() here — uv venvs symlink bin/python to the base
+        # interpreter, and resolving would silently drop the venv's site-packages.
+        python = Path(args.python)
+        if not python.exists():
+            raise RuntimeError(f"probe python not found: {python}")
+    else:
+        python = next((root/p for p in ("venv/bin/python", ".venv/bin/python") if (root/p).exists()), None)
+        if python is None:
+            raise RuntimeError("Hermes venv python not found")
+    identity = venv_identity(python)
+    digest = plugin_digest(args.plugin_root.resolve())
     results = []
     with tempfile.TemporaryDirectory(prefix="compat-probe-") as scratch:
         scratch = Path(scratch)
         clean = scratch/"agent"
         clean.mkdir()
-        archive = subprocess.Popen(["git", "-C", str(root), "archive", "HEAD"], stdout=subprocess.PIPE)
+        archive = subprocess.Popen(["git", "-C", str(root), "archive", revision], stdout=subprocess.PIPE)
         with tarfile.open(fileobj=archive.stdout, mode="r|") as tar:
             tar.extractall(clean, filter="data")
         if archive.wait() != 0:
@@ -111,6 +173,10 @@ def offline(args):
                 "approval": "approval_context + approval aliases / session SSE worker / run controls",
                 "skills": "tools.skills_tool._find_all_skills",
                 "activity": "APIServerAdapter activity snapshot / run-status & chat hooks / registry",
+                "push": "session-stream approval/prepare/write/drain/status wrappers / ntfy publisher",
+                "cron_bridge": "app platform registration + cron scheduler identity/mirror/outcome shims / atomic bridge writer",
+                "wake": "messages provenance / auto-wake admission ledger, quota, receipts, dispatch CAS",
+                "wakecap": "hot-reload route sync: live/frozen routers resolve compat route rows to the current handlers",
                 "control": "clean HEAD without plugin", "lifecycle": "register/on_unload transactions",
             }[case]
             result["expected"] = "all selected behavior assertions pass"
@@ -119,8 +185,10 @@ def offline(args):
             print(f'{result["status"]:7} {case}: {result.get("detail", "")}', flush=True)
             if result.get("diagnostic"):
                 print(result["diagnostic"], file=sys.stderr)
-    return {"schema_version": 1, "mode": "offline", "source": "clean-head",
-            "agent_revision": revision, "plugin_version": "0.1.0", "results": results}
+    return {"schema_version": 2, "mode": "offline", "source": source,
+            "source_sha": revision, "agent_revision": revision, "python": str(python),
+            "venv_identity": identity, "plugin_version": plugin_version(args.plugin_root),
+            "plugin_digest": digest, "results": results}
 
 
 def main():

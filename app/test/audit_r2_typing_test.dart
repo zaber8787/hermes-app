@@ -40,7 +40,7 @@ class FakeR2Repo extends HermesRepository {
   @override
   Future<void> stop(String runId) async => stopped = runId;
   @override
-  Stream<SseEvent> chat(String sid, String input) {
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     sends++;
     return events.stream;
   }

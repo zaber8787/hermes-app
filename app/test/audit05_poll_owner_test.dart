@@ -39,7 +39,7 @@ class FakePollRepo extends HermesRepository {
   List<Message> history = const [];
   int sends = 0, statusCalls = 0, messagesCalls = 0, approvalCalls = 0;
   @override
-  Stream<SseEvent> chat(String sid, String input) {
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     sends++;
     return events.stream;
   }

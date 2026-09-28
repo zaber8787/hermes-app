@@ -30,6 +30,13 @@ class LiveTurn {
   UiMessage? approvalError;
   bool approvalBusy = false;
 
+  /// UPD-COMPAT §4: a live-owner handoff answers run.queued + done and the
+  /// stream ends BY DESIGN while the owner's delivery is still open. The
+  /// delivery_id is kept for provenance; queued marks the intentional end so
+  /// EOF reconciles read-only instead of claiming the connection dropped.
+  bool queued = false;
+  String? deliveryId;
+
   /// R4: the bridge's approval.request carries its OWN run_id; a stream that
   /// missed run.started still has a valid POST target. Null = nothing to
   /// answer here (pre-bridge events) — the card degrades to display-only.
@@ -70,6 +77,14 @@ class LiveTurn {
     switch (event.type) {
       case 'run.started':
         runId = textOf(data['run_id']);
+      case 'run.queued':
+        // Live-owner handoff: the delivery continues elsewhere. This is NOT
+        // completion; the stream's own EOF must fall through to read-only
+        // reconciliation, never a re-POST and never a dropped-connection claim.
+        queued = true;
+        if (data['delivery_id'] != null) {
+          deliveryId = textOf(data['delivery_id']);
+        }
       case 'assistant.delta':
         delta += textOf(data['delta']);
       case 'tool.started':

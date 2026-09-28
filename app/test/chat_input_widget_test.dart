@@ -30,7 +30,7 @@ class FakeInputRepo extends HermesRepository {
   List<Message> history = [];
   int sends = 0;
   @override
-  Stream<SseEvent> chat(String sid, String input) {
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     sends++;
     return events.stream;
   }

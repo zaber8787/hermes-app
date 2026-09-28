@@ -365,6 +365,18 @@ enum MessageKey {
   systemM005,
   systemM006,
   systemGeneric,
+
+  /// APPWAKE: projection label for the App's own auto-wake user rows.
+  systemWakeRead,
+
+  /// APPWAKE D: settings toggle, capability reason, session opt-out, hints.
+  settingsWake,
+  settingsWakeDesc,
+  settingsWakeUnavailable,
+  chatWakeSessionOff,
+  chatWakeSessionOn,
+  wakePendingCount,
+  wakeQuotaNotice,
   sessionM001,
   sessionM002,
   sessionM003,

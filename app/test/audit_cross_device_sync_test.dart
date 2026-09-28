@@ -45,7 +45,7 @@ class FakeSyncRepo extends HermesRepository {
   }
 
   @override
-  Stream<SseEvent> chat(String sid, String input) {
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     chatCalls++;
     return events.stream;
   }

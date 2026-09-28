@@ -1,3 +1,3 @@
 name: hermes-app-compat
-version: 0.1.0
-description: User compatibility fixes for hermes-app uploads, media, history, approvals and skills.
+version: 0.5.1
+description: User compatibility fixes for hermes-app uploads, media, history, approvals, skills, activity, ntfy push wake-ups, the P5 cron-delivery bridge (app platform + atomic report writer), and the auto-wake provenance/admission contract.

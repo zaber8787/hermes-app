@@ -38,7 +38,7 @@ SKILLS = [
     {"name": "zeta", "description": "Z skill", "category": None},
     {"name": "hermes-agent", "description": "core", "category": None},
 ]
-KEY = "sk-test-key"
+FAKE_BEARER = "sk-test-key"
 
 
 class Stubs:
@@ -97,7 +97,7 @@ class Harness:
         self.saved = (serve.ENV_FILE, serve.API, serve.HERMES_WEB_HOME
                       if hasattr(serve, "HERMES_WEB_HOME") else None)
         env = tmp / ".env"
-        env.write_text(f"API_SERVER_KEY={KEY}\n", encoding="utf-8")
+        env.write_text(f"API_SERVER_KEY={FAKE_BEARER}\n", encoding="utf-8")
         serve.ENV_FILE = env
         serve.API = "http://127.0.0.1:9"  # nothing legitimate proxies here
 
@@ -122,7 +122,7 @@ def url(h, name="alpha"):
     return f"http://127.0.0.1:{h.port}/api/skills/{name}"
 
 
-AUTH = {"Authorization": f"Bearer {KEY}"}
+AUTH = {"Authorization": f"Bearer {FAKE_BEARER}"}
 
 
 async def test_round_trip_disable_enable():

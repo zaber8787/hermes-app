@@ -16,9 +16,14 @@ class MessageTimeline extends StatelessWidget {
     required this.messages,
     required this.detailed,
     this.remoteRows = const [],
+    this.wakeRowIds = const {},
   });
   final List<Message> messages;
   final bool detailed;
+
+  /// APPWAKE C: rows projected as "auto-read schedule report" system lines.
+  /// Projection-only — the durable rows stay plain user anchors.
+  final Set<String> wakeRowIds;
 
   /// WAVE4: not-yet-durable remote user projections — rendered after the
   /// durable rows; never part of `messages` (offsets/fingerprints stay pure).
@@ -28,10 +33,10 @@ class MessageTimeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hints = {for (final r in remoteRows) r.message.id: r.hint};
-    final entries = projectMessages([
-      ...messages,
-      ...remoteRows.map((r) => r.message),
-    ]);
+    final entries = projectMessages(
+      [...messages, ...remoteRows.map((r) => r.message)],
+      wakeRowIds: wakeRowIds,
+    );
     Widget view(DisplayEntry e) =>
         EntryView(entry: e, hint: hints[e.message.id] ?? RemoteHint.none);
     if (detailed) {
@@ -168,7 +173,7 @@ class EntryView extends StatelessWidget {
           color: colors.surfaceContainerHighest,
           child: ExpansionTile(
             leading: const Icon(Icons.info_outline, size: 18),
-            title: Text(strings.resolve(DisplayEntry.labelKeyFor(m))),
+            title: Text(strings.resolve(DisplayEntry.labelKeyFor(m, e.label))),
             childrenPadding: const EdgeInsets.all(16),
             subtitle: MessageTime(m.timestamp),
             children: [FoldedText(m.content)],

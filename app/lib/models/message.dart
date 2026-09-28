@@ -36,6 +36,7 @@ class Message {
     this.toolName,
     this.reasoning = '',
     this.timestamp = 0,
+    this.cronProvenance,
   });
   final String id;
   final String role;
@@ -46,6 +47,12 @@ class Message {
   final String? toolName;
   final String reasoning;
   final double timestamp;
+
+  /// APPWAKE A: the server-verified minimal cron identity, present only on
+  /// rows the bridge accepted (display_metadata.hermes_app_cron). Text or
+  /// display_kind alone never proves provenance — absence means "not a
+  /// candidate", never "an unverified candidate".
+  final CronProvenance? cronProvenance;
 
   factory Message.fromJson(Json json, {String? fallbackId}) => Message(
     id: textOf(json['id'] ?? fallbackId),
@@ -59,10 +66,52 @@ class Message {
     toolName: json['tool_name'] as String?,
     reasoning: textOf(json['reasoning'] ?? json['reasoning_content']),
     timestamp: (json['timestamp'] as num?)?.toDouble() ?? 0,
+    cronProvenance: CronProvenance.tryParse(json['cron_provenance']),
   );
 
   bool get isUserTurn => role == 'user' && displayKind == null;
 }
+
+/// APPWAKE A minimal provenance contract: the server emits this ONLY for
+/// rows it validated as cron-bridge reports, exposing just the verified
+/// identity — never raw display_metadata. Client code must treat any
+/// malformed/missing block as "no provenance", never partially trust it.
+class CronProvenance {
+  const CronProvenance({
+    required this.schema,
+    required this.jobId,
+    required this.executionId,
+    required this.deliveryKey,
+  });
+  final int schema;
+  final String jobId;
+  final String executionId;
+  final String deliveryKey;
+
+  static CronProvenance? tryParse(Object? raw) {
+    if (raw is! Map) return null;
+    final jobId = raw['job_id'];
+    final executionId = raw['execution_id'];
+    final deliveryKey = raw['delivery_key'];
+    if (jobId is! String ||
+        jobId.trim().isEmpty ||
+        executionId is! String ||
+        executionId.trim().isEmpty ||
+        deliveryKey is! String ||
+        !_hex64.hasMatch(deliveryKey)) {
+      return null;
+    }
+    if (raw['schema'] != 1) return null;
+    return CronProvenance(
+      schema: 1,
+      jobId: jobId.trim(),
+      executionId: executionId.trim(),
+      deliveryKey: deliveryKey.toLowerCase(),
+    );
+  }
+}
+
+final _hex64 = RegExp(r'^[0-9a-f]{64}$');
 
 /// Contract §3: non-null kinds use a closed rendering whitelist; unknown kinds
 /// remain collapsed system events. Storage itself is NOT a closed enum.
@@ -82,21 +131,32 @@ const systemLabels = <String, MessageKey>{
 enum EntryKind { user, finalReply, narration, tool, system }
 
 class DisplayEntry {
-  const DisplayEntry(this.kind, this.message, {this.call, this.result});
+  const DisplayEntry(this.kind, this.message, {this.call, this.result, this.label});
   final EntryKind kind;
   final Message message;
   final ToolCall? call;
   final Message? result;
 
+  /// APPWAKE C: a projection-only override for rows rendered as system
+  /// events WITHOUT a display kind (wake rows stay role=user, displayKind
+  /// null so the user-turn anchor boundary is untouched).
+  final MessageKey? label;
+
   /// Catalog key for collapsed system-event chips (I18N-PLAN §4.4): derived
   /// from the raw display kind at render time, never a stored translation.
-  static MessageKey labelKeyFor(Message m) =>
-      systemLabels[m.displayKind] ?? MessageKey.systemGeneric;
+  static MessageKey labelKeyFor(Message m, [MessageKey? override]) =>
+      override ?? systemLabels[m.displayKind] ?? MessageKey.systemGeneric;
 }
 
 /// Contract §3–4. A turn's final is its LAST contentful, tool-free assistant.
 /// A tool-calling assistant may contribute BOTH narration and tool cards.
-List<DisplayEntry> projectMessages(List<Message> messages) {
+/// APPWAKE C: [wakeRowIds] renders those rows as system events at the UI
+/// projection ONLY — the turn/final computation keeps seeing them as the
+/// plain user anchors they are, and storage is never rewritten.
+List<DisplayEntry> projectMessages(
+  List<Message> messages, {
+  Set<String> wakeRowIds = const {},
+}) {
   final visible = messages.where((m) => m.displayKind != 'hidden').toList();
   final finals = <String>{};
   Message? candidate;
@@ -127,7 +187,13 @@ List<DisplayEntry> projectMessages(List<Message> messages) {
     if (m.displayKind != null || m.role == 'system') {
       entries.add(DisplayEntry(EntryKind.system, m));
     } else if (m.role == 'user') {
-      entries.add(DisplayEntry(EntryKind.user, m));
+      entries.add(
+        wakeRowIds.contains(m.id)
+            ? DisplayEntry(
+                EntryKind.system, m, label: MessageKey.systemWakeRead,
+              )
+            : DisplayEntry(EntryKind.user, m),
+      );
     } else if (m.role == 'assistant') {
       if (m.content.isNotEmpty || m.reasoning.isNotEmpty) {
         entries.add(

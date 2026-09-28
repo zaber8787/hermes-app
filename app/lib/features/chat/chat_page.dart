@@ -64,9 +64,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   // can still detach() (a throw there skipped detach and let the stale draft
   // haunt the input box on re-entry).
   late final ChatController chat;
+  bool _focused = false; // APPWAKE: editor focus feeds the typing gate
   // AUDIT-03: dispose() flushes the last unsent draft without touching ref.
   late final LocalStore _store;
   late final String _serverUrl;
+  bool _wakeSessionOff = false; // APPWAKE D: per-session opt-out
   @override
   void initState() {
     super.initState();
@@ -81,12 +83,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final serverUrl = ref.read(settingsProvider).url;
     _serverUrl = serverUrl;
     final saved = store.draft(serverUrl, widget.session.id);
+    _wakeSessionOff = store.autoWakeSessionOff(serverUrl, widget.session.id);
     // A draft identical to the last delivered user message is the ghost of an
     // already-sent turn (its clearing raced a disposed page); drop it here so
     // re-entry opens with an empty box.
     input.text = _isGhostDraft(saved, chat) ? '' : saved;
     input.addListener(() {
       setState(() {});
+      // APPWAKE: typing (focus or text) pauses auto-dispatch; putting the
+      // editor down resumes it (the controller owns the queue check).
+      chat.noteInputActive(_focused || input.text.trim().isNotEmpty);
       if (suppressDraft) return;
       // Debounced draft save so leaving (or dying) mid-typing keeps the text.
       draftTimer?.cancel();
@@ -144,6 +150,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   @override
   void dispose() {
+    // APPWAKE: this editor is gone — a stale "typing" flag must not park
+    // the queue forever for a controller that outlives the page.
+    chat.noteInputActive(false);
     draftTimer?.cancel();
     // AUDIT-03: the debounce window must never swallow the last keystrokes —
     // commit the current snapshot through the captured store (fire-and-forget,
@@ -437,6 +446,24 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  /// Pending-count / quota hint text; null = show nothing.
+  String? _wakeHintText(AppStrings strings, ChatController c) {
+    if (!ref.read(localStoreProvider).autoWakeEnabled(_serverUrl) ||
+        _wakeSessionOff) {
+      return null;
+    }
+    if (c.wakeQuotaHit) {
+      return strings.resolve(MessageKey.wakeQuotaNotice);
+    }
+    if (c.wakePendingCount > 0) {
+      return strings.resolve(
+        MessageKey.wakePendingCount,
+        args: {'count': '${c.wakePendingCount}'},
+      );
+    }
+    return null;
+  }
+
   @override
   Widget build(BuildContext context) {
     final strings = AppStrings.of(context);
@@ -496,6 +523,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   ),
                 );
               }
+              if (v == 'wake') {
+                // APPWAKE D: session-level opt-out (mirrored in the store;
+                // the dispatch gate re-reads it at every attempt).
+                setState(() => _wakeSessionOff = !_wakeSessionOff);
+                unawaited(
+                  ref
+                      .read(localStoreProvider)
+                      .setAutoWakeSessionOff(
+                        ref.read(settingsProvider).url,
+                        widget.session.id,
+                        _wakeSessionOff,
+                      ),
+                );
+              }
             },
             itemBuilder: (context) => [
               PopupMenuItem(
@@ -514,6 +555,23 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   title: Text(strings.resolve(MessageKey.chatM008)),
                 ),
               ),
+              // APPWAKE D: the menu only EXISTS where the server offers
+              // auto-wake — a pure install never shows an inert toggle.
+              if (c.wakeFeatureOffered)
+                PopupMenuItem(
+                  value: 'wake',
+                  child: ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.schedule_outlined),
+                    title: Text(
+                      strings.resolve(
+                        _wakeSessionOff
+                            ? MessageKey.chatWakeSessionOn
+                            : MessageKey.chatWakeSessionOff,
+                      ),
+                    ),
+                  ),
+                ),
             ],
           ),
           IconButton(
@@ -744,8 +802,35 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           MessageTimeline(
                             messages: c.messages,
                             remoteRows: c.remoteRows,
+                            wakeRowIds: c.wakeRowIds,
                             detailed: c.detailed,
                           ),
+                          // APPWAKE D: quiet status line while reports wait
+                          // for their (rate-limited) auto-read.
+                          if (c.wakeFeatureOffered &&
+                              _wakeHintText(strings, c) != null)
+                            Padding(
+                              key: const ValueKey('chat.wakeHint'),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 20,
+                                vertical: 2,
+                              ),
+                              child: Row(
+                                children: [
+                                  Icon(
+                                    Icons.schedule,
+                                    size: 14,
+                                    color:
+                                        Theme.of(context).colorScheme.outline,
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Text(
+                                    _wakeHintText(strings, c)!,
+                                    style: const TextStyle(fontSize: 12),
+                                  ),
+                                ],
+                              ),
+                            ),
                           // R2: every busy shape must look busy. The pending
                           // bubble follows one rule in both branches (never
                           // twice-drawn once history carries the row); the
@@ -971,6 +1056,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       Expanded(
                         child: Focus(
                           onKeyEvent: _inputKey,
+                          onFocusChange: (has) {
+                            _focused = has;
+                            chat.noteInputActive(
+                              has || input.text.trim().isNotEmpty,
+                            );
+                          },
                           child: TextField(
                             controller: input,
                             enabled: !preparing && !attachments.busy,

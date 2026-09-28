@@ -30,7 +30,7 @@ class FakeRepo extends HermesRepository {
   Object? activityError; // when set, the ACTIVITY snapshot read fails this way
   Json Function(String runId) status = (_) => {'status': 'running'};
   @override
-  Stream<SseEvent> chat(String sid, String input) {
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     sends++;
     return events.stream;
   }

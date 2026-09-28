@@ -75,7 +75,7 @@ class FakeBulkRepo extends HermesRepository {
   }
 
   @override
-  Stream<SseEvent> chat(String sid, String input) =>
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) =>
       throw StateError('selection mode must never send');
   @override
   void cancelStream(String sid) {}

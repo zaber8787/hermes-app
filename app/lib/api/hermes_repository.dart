@@ -353,9 +353,80 @@ class HermesRepository {
         .toList();
   }
 
+  // ---- APPWAKE: server admission endpoints (contract §2 / Batch B) --------
+  // All are metadata-class calls: transport failures are retry-safe ONLY for
+  // the idempotent ones (receipt GET/admit replay is ledger-keyed; release
+  // is CAS on reserved rows). The dispatch POST itself is never replayed.
+
+  Future<Json> autoWakeCapability() => _json(
+        'GET',
+        '/v1/capabilities',
+        deadline: metadataTimeout,
+      );
+
+  /// The settings-page view of the same capability: null on ANY failure —
+  /// a missing/unreachable feature never claims the toggle is available.
+  Future<Map<String, dynamic>?> autoWakeFeature() async {
+    try {
+      final feats = (await autoWakeCapability())['features'];
+      final wake = feats is Map ? feats['auto_wake'] : null;
+      return wake is Map ? Map<String, dynamic>.from(wake) : null;
+    } on Object {
+      return null;
+    }
+  }
+
+  /// Reserve a batch: dedup (already-consumed rows report `already`), quota,
+  /// busy, causal-suspect checks all happen in ONE server transaction.
+  Future<Json> wakeAdmit(String sid, List<String> deliveryKeys) async {
+    return _json(
+      'POST',
+      '/api/sessions/${Uri.encodeComponent(sid)}/auto-wake/admit',
+      body: {'delivery_keys': deliveryKeys},
+      deadline: metadataTimeout,
+    );
+  }
+
+  Future<Json> wakeReceipt(String sid, String batchId) => _json(
+        'GET',
+        '/api/sessions/${Uri.encodeComponent(sid)}/auto-wake/receipt',
+        query: {'batch_id': batchId},
+        deadline: metadataTimeout,
+      );
+
+  /// Fire-and-forget receipt advance (accepted with run id / terminal).
+  Future<void> wakeAck(
+    String sid,
+    String batchId,
+    String state, {
+    String? runId,
+  }) async {
+    await _json(
+      'POST',
+      '/api/sessions/${Uri.encodeComponent(sid)}/auto-wake/receipt',
+      body: {'batch_id': batchId, 'state': state, 'run_id': ?runId},
+      deadline: metadataTimeout,
+    );
+  }
+
+  /// Give up a reservation (pre-dispatch or lost race): rows are freed.
+  /// The receipt status ('ok' vs 'conflict') decides the caller's next move.
+  Future<Json> wakeRelease(String sid, String batchId) async {
+    return _json(
+      'POST',
+      '/api/sessions/${Uri.encodeComponent(sid)}/auto-wake/release',
+      body: {'batch_id': batchId},
+      deadline: metadataTimeout,
+    );
+  }
+
   /// Contract §2: run.started is the ONLY supported active run/session binding.
   /// Never automatically replay this POST after transport failure.
-  Stream<SseEvent> chat(String sid, String input) async* {
+  /// APPWAKE C: [wakeBatch] marks a server-reserved auto-wake dispatch — the
+  /// ledger CAS (409 in-flight / 410 consumed) surfaces through the SAME
+  /// ApiException status surface so the controller's read-only recovery,
+  /// never a blind re-POST, decides what happens next.
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) async* {
     final stream = ++_streamCounter;
     final lease = StreamKeepalive(stream);
     final cancel = Completer<void>();
@@ -366,7 +437,7 @@ class HermesRepository {
       final response = await _open(
         'POST',
         '/api/sessions/${Uri.encodeComponent(sid)}/chat/stream',
-        body: {'input': input},
+        body: {'input': input, 'wake_batch': ?wakeBatch},
         sse: true,
         abortTrigger: cancel.future,
       );

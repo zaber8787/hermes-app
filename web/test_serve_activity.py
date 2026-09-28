@@ -30,8 +30,8 @@ if not (_os.environ.get("HERMES_ENV_FILE") or "").strip():
     _os.environ["HERMES_ENV_FILE"] = _env_probe.name
 import serve  # noqa: E402
 
-KEY = "sk-act"
-BEARER = ("Bearer ", KEY)[0] + KEY[1:]
+FAKE_BEARER = "sk-act"
+BEARER = ("Bearer ", FAKE_BEARER)[0] + FAKE_BEARER[1:]
 SEEN = []
 
 
@@ -73,14 +73,14 @@ async def main():
         async with ClientSession(timeout=ClientTimeout(total=15)) as client:
             url = f"http://127.0.0.1:{port}"
             async with client.get(url + "/api/sessions/s%2F1/activity", headers={
-                    "Authorization": "Bearer " + KEY,
+                    "Authorization": "Bearer " + FAKE_BEARER,
                     "X-Hermes-Profile": "alpha"}) as r:
                 body = await r.json()
                 assert r.status == 200, r.status
                 assert body["object"] == "hermes.session.activity", body
                 assert r.headers.get("Cache-Control") == "no-store", r.headers
                 assert SEEN[-1]["path"] == "/api/sessions/s%2F1/activity", SEEN[-1]
-                assert SEEN[-1]["auth"] == "Bearer " + KEY, SEEN[-1]
+                assert SEEN[-1]["auth"] == "Bearer " + FAKE_BEARER, SEEN[-1]
                 assert SEEN[-1]["profile"] == "alpha", SEEN[-1]
             async with client.get(url + "/api/sessions/boom/activity",
                                   headers={"Authorization": BEARER}) as r:

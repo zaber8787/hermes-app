@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../api/hermes_repository.dart';
@@ -21,6 +23,11 @@ class SettingsPage extends ConsumerStatefulWidget {
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   late final TextEditingController url, key;
   bool obscure = true, busy = false, savingLanguage = false;
+  // APPWAKE D: toggle state + the server's offer (null = unknown/offline).
+  bool _wakeOn = false;
+  Map<String, dynamic>? _wakeFeature;
+  bool _wakeFeatureLoaded = false;
+  LocalStore? _wakeStore; // null in bare-override test harnesses only
   // A descriptor, never a translated string: it re-renders when the UI
   // language changes while this page stays open (I18N-PLAN §4.5).
   UiMessage? feedback;
@@ -32,6 +39,29 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     url = TextEditingController(text: s.url);
     key = TextEditingController(text: s.key);
     feedback = widget.initialError;
+    // localStoreProvider is only unimplemented in minimal test harnesses
+    // (the app root always overrides it); degrade to "off" without one.
+    LocalStore? store;
+    try {
+      store = ref.read(localStoreProvider);
+    } on Object {
+      store = null; // provider left unimplemented by a bare harness
+    }
+    _wakeStore = store;
+    _wakeOn = store?.autoWakeEnabled(s.url) ?? false;
+    if (store != null && s.configured) {
+      unawaited(_loadWakeFeature());
+    }
+  }
+
+  Future<void> _loadWakeFeature() async {
+    final feature = await ref.read(repositoryProvider).autoWakeFeature();
+    if (mounted) {
+      setState(() {
+        _wakeFeature = feature;
+        _wakeFeatureLoaded = true;
+      });
+    }
   }
 
   @override
@@ -302,6 +332,48 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               Text(
                 strings.resolve(MessageKey.settingsM018),
                 style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 24),
+              // APPWAKE D: the auto-read switch. OFF is the shipped default;
+              // an unavailable server explains itself instead of lying off.
+              Semantics(
+                key: const ValueKey('settings.autoWake'),
+                label: strings.resolve(MessageKey.settingsWake),
+                child: SwitchListTile(
+                  key: const ValueKey('settings.autoWake.switch'),
+                  contentPadding: EdgeInsets.zero,
+                  secondary: const Icon(Icons.schedule_outlined),
+                  title: Text(strings.resolve(MessageKey.settingsWake)),
+                  subtitle: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        strings.resolve(MessageKey.settingsWakeDesc),
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      if (_wakeFeatureLoaded &&
+                          _wakeFeature?['enabled'] != true)
+                        Text(
+                          key: const ValueKey('settings.autoWake.unavailable'),
+                          strings.resolve(MessageKey.settingsWakeUnavailable),
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                    ],
+                  ),
+                  value: _wakeOn && _wakeFeature?['enabled'] == true,
+                  onChanged: _wakeFeature?['enabled'] == true
+                      ? (v) {
+                          setState(() => _wakeOn = v);
+                          unawaited(
+                            _wakeStore?.setAutoWakeEnabled(
+                                  ref.read(settingsProvider).url,
+                                  v,
+                                ) ??
+                              Future<void>.value(),
+                          );
+                        }
+                      : null,
+                ),
               ),
               const SizedBox(height: 24),
               if (feedback != null)

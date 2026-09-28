@@ -54,12 +54,21 @@ class PendingTurn {
     this.recoveryDeadline,
     this.recoveryRetryUsed = false,
     this.historyAfterId,
+    this.origin,
+    this.wakeBatchId,
   });
   final String? runId;
   final String userText;
   final DateTime startedAt;
   final String? ownerTab, ownerTurn;
   final DateTime? leaseUntil;
+
+  /// APPWAKE: backward-compatible origin tag. Null = ordinary human send
+  /// (byte-identical old semantics); 'autoWake' marks a coordinator turn
+  /// carrying [wakeBatchId] (the durable server receipt identity).
+  final String? origin;
+  final String? wakeBatchId;
+  bool get isAutoWake => origin == 'autoWake';
 
   // ---- STUCK-BUSY B3: persisted recovery budget ---------------------------
   // The FIRST entry into recovery stamps started_at/deadline (now + initial
@@ -110,6 +119,8 @@ class PendingTurn {
     ),
     recoveryRetryUsed: json['recovery_retry_used'] == true,
     historyAfterId: (json['history_after_id'] as num?)?.toInt(),
+    origin: json['origin'] as String?,
+    wakeBatchId: json['wake_batch_id'] as String?,
   );
 }
 
@@ -232,6 +243,55 @@ class LocalStore {
     jsonEncode(values.map((a) => a.toJson()).toList()),
   );
 
+  // ---- APPWAKE: durable wake queue/cursor/receipt state (versioned) -------
+  // One JSON blob per normalized server + session. It holds the armed
+  // cutoff, the scan cursor (lastSeenOrder — scan progress, NOT proof every
+  // older row was woken), the queued report ids + delivery keys, consumed /
+  // ignored keys, batch/receipt identities and the uncertain flags. Bearer
+  // tokens are never part of any key. A corrupt blob reads as "none" and
+  // the next successful latest-page commit rebuilds a fresh armed baseline.
+  static const wakeStateVersion = 1;
+
+  Map<String, dynamic>? wakeState(String server, String sid) {
+    final raw = prefs.getString(_scope(server, sid, 'wakeState'));
+    if (raw == null) return null;
+    try {
+      final map = Map<String, dynamic>.from(jsonDecode(raw) as Map);
+      if (map['v'] != wakeStateVersion) return null; // foreign shape: none
+      return map;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// True only when the write PERSISTED — callers must not pretend the
+  /// queue survived a refused write (same discipline as pending).
+  Future<bool> saveWakeState(String server, String sid, Map<String, dynamic> state) =>
+      withStoreTx('wake.$server.$sid', () async {
+        final payload = {...state, 'v': wakeStateVersion};
+        return await prefs.setString(
+          _scope(server, sid, 'wakeState'),
+          jsonEncode(payload),
+        );
+      });
+
+  Future<void> clearWakeState(String server, String sid) =>
+      withStoreTx('wake.$server.$sid', () => prefs.remove(_scope(server, sid, 'wakeState')));
+
+  // The kill switches are plain booleans, DEFAULT OFF, scoped per server —
+  // enabling them is batch D; the coordinator must stay silent while off.
+  bool autoWakeEnabled(String server) =>
+      prefs.getBool(_scope(server, 'wake', 'enabled')) ?? false;
+  Future<void> setAutoWakeEnabled(String server, bool value) =>
+      prefs.setBool(_scope(server, 'wake', 'enabled'), value);
+
+  /// Session-level opt-out: true blocks dispatch for THAT session only;
+  // reports keep displaying normally.
+  bool autoWakeSessionOff(String server, String sid) =>
+      prefs.getBool(_scope(server, sid, 'wakeOff')) ?? false;
+  Future<void> setAutoWakeSessionOff(String server, String sid, bool value) =>
+      prefs.setBool(_scope(server, sid, 'wakeOff'), value);
+
   // ---- P2: in-flight turn identity so a page reload can rejoin the run ----
   // ---- AUDIT-21 (D2): the same record is also the cross-tab ownership
   // ledger. claim / compare-update / clear all run through the SAME
@@ -279,6 +339,7 @@ class LocalStore {
     String? ownerTurn,
     DateTime? leaseUntil,
     Map<String, dynamic> recovery = const {},
+    Map<String, dynamic> wake = const {},
   }) => prefs.setString(
     _scope(server, sid, 'pending'),
     jsonEncode({
@@ -290,9 +351,20 @@ class LocalStore {
         'owner_turn': ownerTurn,
         'lease_until': leaseUntil.toIso8601String(),
       },
+      ...wake,
       ...recovery,
     }),
   );
+
+  /// APPWAKE: the wake identity carried over from an existing record
+  /// (touch/amend must never drop it; a NEW claim sets it explicitly).
+  static Map<String, dynamic> _wakeKeys(Map<String, dynamic>? rec) {
+    final origin = rec?['origin'] is String ? rec!['origin'] as String : null;
+    final batch = rec?['wake_batch_id'] is String
+        ? rec!['wake_batch_id'] as String
+        : null;
+    return {'origin': ?origin, 'wake_batch_id': ?batch};
+  }
 
   /// STUCK-BUSY B3: the persisted recovery keys carried over from an
   /// existing record (amend / touch / legacy-save must not erase them).
@@ -438,6 +510,7 @@ class LocalStore {
           DateTime.tryParse(rec?['started_at'] as String? ?? '') ??
           now,
       recovery: _recoveryKeys(rec),
+      wake: _wakeKeys(rec),
     );
   });
 
@@ -463,6 +536,8 @@ class LocalStore {
     required String turnId,
     DateTime? startedAt,
     int? historyAfterId,
+    String? origin,
+    String? wakeBatchId,
     Duration lease = pendingLease,
   }) => withStoreTx('pending.$server.$sid', () async {
     final now = DateTime.now();
@@ -479,6 +554,7 @@ class LocalStore {
       ownerTurn: turnId,
       leaseUntil: now.add(lease),
       recovery: {'history_after_id': ?historyAfterId},
+      wake: {'origin': ?origin, 'wake_batch_id': ?wakeBatchId},
     );
     return '$tabId|$turnId';
   });
@@ -515,6 +591,7 @@ class LocalStore {
       ownerTurn: rec['owner_turn'] as String?,
       leaseUntil: now.add(lease),
       recovery: _recoveryKeys(rec),
+      wake: _wakeKeys(rec),
     );
     return true;
   });
@@ -541,6 +618,7 @@ class LocalStore {
       ownerTurn: rec['owner_turn'] as String?,
       leaseUntil: now.add(lease),
       recovery: _recoveryKeys(rec),
+      wake: _wakeKeys(rec),
     );
     return true;
   });

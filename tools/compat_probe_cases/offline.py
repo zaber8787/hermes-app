@@ -16,8 +16,8 @@ import traceback
 from unittest.mock import patch
 
 CAP = 524288000
-KEY = "compat-probe-only-0123456789abcdef0123456789"
-AUTH = {"Authorization": "Bearer " + KEY}
+FAKE_BEARER = "compat-probe-only-0123456789abcdef0123456789"
+AUTH = {"Authorization": "Bearer " + FAKE_BEARER}
 PNG = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j7n8AAAAASUVORK5CYII=")
 MIMES = ("application/octet-stream", "application/zip", "application/x-zip-compressed",
          "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -52,7 +52,7 @@ async def server():
     from aiohttp import ClientSession, ClientTimeout
     from gateway.config import PlatformConfig
     from gateway.platforms.api_server import APIServerAdapter
-    adapter = APIServerAdapter(PlatformConfig(enabled=True, extra={"key": KEY, "host": "127.0.0.1", "port": 0,
+    adapter = APIServerAdapter(PlatformConfig(enabled=True, extra={"key": FAKE_BEARER, "host": "127.0.0.1", "port": 0,
                                                                    "model_name": "compat-fixture"}))
     # Rate limit is independent from byte integrity; preserve production defaults
     # except in this disposable fixture, whose many negative cases exceed 30/min.
@@ -264,12 +264,20 @@ async def case_control(args):
 
 async def case_lifecycle(args):
     from gateway.platforms import api_server as api, api_server_runs as runs
+    from gateway.platform_registry import platform_registry
     from tools import approval, approval_context
     from hermes_cli.plugins import PluginContext
+    import cron.scheduler as sched
+    import cron.scheduler_delivery as sd
     manager = load_plugins()
     loaded = next(p for p in manager._plugins.values() if p.manifest.name == "hermes-app-compat")
     module = loaded.module
     state = getattr(api,"_hermes_app_compat_state_v1")
+    check(sd._deliver_result.__name__ == "deliver_result"
+          and sched._deliver_result is sd._deliver_result
+          and platform_registry.get("app") is not None
+          and state["manifest"]["cron_bridge"].get("registration") == "scoped",
+          "discovery installed cron shims and scoped app registration")
     current = api.APIServerAdapter._handle_artifact_upload
     module.register(PluginContext(loaded.manifest,manager))
     module.register(PluginContext(loaded.manifest,manager))
@@ -279,6 +287,13 @@ async def case_lifecycle(args):
     check(api.APIServerAdapter._handle_artifact_upload is not current, "unload restores method")
     check(not hasattr(api.APIServerAdapter,"_handle_media_download"), "unload removes added media method")
     check(not hasattr(api.APIServerAdapter,"_handle_session_activity"), "unload removes added activity method")
+    check(platform_registry.get("app") is None, "unload removes the scoped app platform")
+    check([sd._deliver_result.__name__, sd._live_route_metadata.__name__,
+           sd._standalone_send.__name__, sd._target_mirror_eligible.__name__,
+           sched._deliver_result.__name__] ==
+          ["_deliver_result", "_live_route_metadata", "_standalone_send",
+           "_target_mirror_eligible", "_deliver_result"],
+          "unload restores cron scheduler and facade bindings")
     from gateway.browser_control_artifacts import ArtifactStore
     check(ArtifactStore(Path("restored")).max_bytes == 10 * 1024 * 1024, "unload restores captured defaults")
     original = runs._handle_stop_run
@@ -288,13 +303,20 @@ async def case_lifecycle(args):
     check(state["manifest"]["approval"]["status"] == "skipped_incompatible", "missing target makes approval red")
     check(state["manifest"]["activity"]["status"] == "skipped_incompatible",
           "approval incompatibility fail-closes activity (no partial capability)")
+    check(state["manifest"]["push"]["status"] == "skipped_incompatible",
+          "approval incompatibility fail-closes push (native callback is its only producer)")
     check(approval_context._is_unattended_platform_approval_context is original_predicate and
           approval._is_unattended_platform_approval_context is original_predicate, "approval transaction restores both policy bindings")
     check(all(state["manifest"][u]["status"] == "applied" for u in ("upload","limits","media","history","skills")), "other five groups survive approval incompatibility")
+    check(state["manifest"]["cron_bridge"]["status"] == "applied",
+          "approval incompatibility leaves cron_bridge applied (independent seams)")
     runs._handle_stop_run = original
     manager.unload()
     module.register(PluginContext(loaded.manifest,manager))
-    check(all(state["manifest"][u]["status"] == "applied" for u in ("approval","activity")), "restored target re-applies approval and activity")
+    check(all(state["manifest"][u]["status"] == "applied" for u in ("approval","activity","push")),
+          "restored target re-applies approval, activity and push")
+    check(state["manifest"]["cron_bridge"].get("registration") == "scoped",
+          "re-registration renews the scoped app platform")
     # A second loader namespace must share ownership without stacking patches.
     import importlib.util
     from types import SimpleNamespace
@@ -326,6 +348,27 @@ async def case_lifecycle(args):
     check(approval_context._is_unattended_platform_approval_context is before and
           approval._is_unattended_platform_approval_context is before, "mid-commit failure rolls back installed policy bindings")
     manager.unload()
+    # Loader-deadline simulation (9863e315f1f): the ctx marks its load abandoned
+    # exactly when the plugin takes the unload lease — the next setattr must
+    # abort and roll back, with NO binding left behind.
+    module.register(PluginContext(loaded.manifest,manager))
+    manager.unload()
+    class AbandoningCtx:
+        def __init__(self): self._load_abandoned = False
+        def on_unload(self, cb):
+            self._load_abandoned = True
+            return object()  # lease accepted; abandonment lands immediately after
+    watched = (api.MAX_REQUEST_BYTES, api.APIServerAdapter._handle_artifact_upload,
+               api.APIServerAdapter._http_route_table, runs._mark_run_event)
+    module.register(AbandoningCtx())
+    check(all(state["manifest"][u]["status"] == "skipped_incompatible"
+              for u in ("limits","upload","media","history","approval","skills","activity","push",
+                        "cron_bridge")),
+          "loader timeout mid-commit leaves every unit red")
+    check(not state["groups"], "abandoned registration owns no group")
+    check((api.MAX_REQUEST_BYTES, api.APIServerAdapter._handle_artifact_upload,
+           api.APIServerAdapter._http_route_table, runs._mark_run_event) == watched,
+          "abandoned worker leaks no binding")
     module.register(PluginContext(loaded.manifest,manager))
     third_party = lambda self, request: None
     api.APIServerAdapter._handle_artifact_upload = third_party
@@ -336,26 +379,51 @@ async def case_lifecycle(args):
 async def run(args):
     logging.basicConfig(level=logging.ERROR)
     guard_network()
+    api = None
     try:
         manager = load_plugins()
         from gateway.platforms import api_server as api
         manifest = json.loads(json.dumps(getattr(api, "_hermes_app_compat_state_v1", {}).get("manifest", {})))
-        if args.worker != "control":
-            check(len(manifest)==7 and all(v["status"]=="applied" for v in manifest.values()), f"seven hook groups installed: {manifest}")
+        # The ten-applied assertion is a GATE, evaluated after behavior: each
+        # case's own assertions show what the installed subset actually does,
+        # while the gate keeps a partially skipped install from ever reading PASS.
+        manifest_ok = args.worker == "control" or (
+            len(manifest) == 10 and all(v["status"] == "applied" for v in manifest.values()))
         if args.worker == "approval":
             from .approval import case_approval
             outcome = await case_approval(args, server, check)
         elif args.worker == "activity":
             from .activity import case_activity
             outcome = await case_activity(args, server, check)
+        elif args.worker == "push":
+            from .push import case_push
+            outcome = await case_push(args, server, check)
+        elif args.worker == "cron_bridge":
+            from .cron_bridge import case_cron_bridge
+            outcome = await case_cron_bridge(args, server, check)
+        elif args.worker == "wake":
+            from .wake import case_wake
+            outcome = await case_wake(args, server, check)
+        elif args.worker == "wakecap":
+            from .wakecap import case_wakecap
+            outcome = await case_wakecap(args, server, check)
         else:
             outcome = await globals()["case_"+args.worker](args)
         status, detail = outcome or ("PASS", f"{len(DETAILS)} assertions")
+        if not manifest_ok:
+            status = "FAIL"
+            detail = f"behavior: {detail} | gate: ten hook groups not applied: {manifest}"
         return {"id":args.worker,"status":status,"detail":detail,"assertions":DETAILS,
                 "manifest":manifest,"peak_rss_kib":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}
     except Exception as exc:
+        try:
+            manifest = json.loads(json.dumps(getattr(api, "_hermes_app_compat_state_v1", {})
+                                             .get("manifest", {})))
+        except Exception:
+            manifest = {}
         return {"id":args.worker,"status":"FAIL" if isinstance(exc,AssertionError) else "ERROR",
-                "detail":str(exc),"diagnostic":traceback.format_exc(),"assertions":DETAILS}
+                "detail":str(exc),"diagnostic":traceback.format_exc(),"assertions":DETAILS,
+                "manifest":manifest}
 
 
 # Real named-profile homes/auth/scope; no policy or owner-check substitution.

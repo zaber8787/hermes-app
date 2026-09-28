@@ -32,7 +32,7 @@ class FakeTabRepo extends HermesRepository {
   int sends = 0, cancels = 0;
   Json Function(String runId) status = (_) => {'status': 'running'};
   @override
-  Stream<SseEvent> chat(String sid, String input) {
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     sends++;
     return events.stream;
   }

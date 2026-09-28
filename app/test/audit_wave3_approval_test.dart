@@ -33,7 +33,7 @@ class FakeApprovalRepo extends HermesRepository {
   final approvals = <List<String>>[];
   Object? approvalError; // when set, the next resolveApproval throws it
   @override
-  Stream<SseEvent> chat(String sid, String input) => events.stream;
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) => events.stream;
   @override
   Future<List<Message>> messages(
     String sid, {

@@ -1,13 +1,21 @@
 # hermes-app-compat
 
 Source only; installation is an operator action (see below).
-Targets Hermes HEAD `2a327c25af3eb146db7be627db4c2c3fc42e0494`.
+Supports two source backends selected by fingerprint triple at registration:
+baseline `2a327c25af3eb146db7be627db4c2c3fc42e0494` and target
+`d0288be5b3330d2442e3907185b8e9d0958297bb`. Any other source fails every
+fingerprint-gated group closed.
 
-Seven independent groups: bounded complete artifact uploads; 500 MiB and common
+Ten independent groups: bounded complete artifact uploads; 500 MiB and common
 MIME limits; authenticated media downloads; history image data URLs; session/run
-approval cards; skills signature compatibility; session/run activity snapshots.
+approval cards; skills signature compatibility; session/run activity snapshots;
+ntfy viewer-gone wake-ups; the P5 cron-delivery bridge (`app` platform +
+atomic report writer); and the auto-wake contract (server-verified cron
+provenance on the messages projection, plus the capability-gated admission
+ledger, per-report consumption records, shared hourly quota, and wake receipts).
 All upstream dependencies are in `compat.py`. Nothing writes Hermes core files.
-No notification or keepalive changes.
+The push unit adds notifications for already-existing session-SSE events; the
+SSE heartbeat/keepalive behavior is untouched.
 
 ## Validation
 
@@ -32,7 +40,7 @@ bash compat/install.sh
 hermes plugins enable hermes-app-compat
 ```
 
-The installer only rsyncs the four managed source/documentation files and prints the
+The installer only rsyncs the managed source/documentation files and prints the
 enable command. It does not enable, change config, restart, or delete operator files.
 `HERMES_HOME` selects an alternate profile home. The operator must restore any old
 in-tree artifact patch separately, then cold-restart through the normal gateway
@@ -62,6 +70,50 @@ room request IDs and stop authorization remain intact. Session workers bind appr
 context inside the executor. Stop, disconnect, worker exit and gateway shutdown
 release pending listeners. A proxy that keeps draining after the viewer leaves can
 retain a listener until the normal timeout; absence of a reply never means approval.
+
+On the TARGET backend session approvals ride the native notify lifecycle; the
+plugin adds only the listener-aware predicate and the queue mirror. A session
+turn handed to a live Bot Chat owner executes outside this process: once any
+such handoff has happened, activity snapshots answer 503 for the process
+(never a fabricated idle) until receipt tracking lands as its own batch.
+Registration honors the loader deadline: groups and the unload lease exist
+before the first setattr, and a load marked abandoned stops at the next
+binding and rolls back.
+
+Push (TARGET backend only; BASE is `skipped_incompatible`) publishes at most one
+ntfy wake-up per event when a session-SSE turn goes on living after its viewer
+disconnected: approval needed (unresolved card, high), reply ready (completed,
+byte-bounded plain-text preview, never data URLs), run failed (redacted error,
+high). A connected viewer means zero pushes; a terminal frame already written to
+the socket is acknowledged and never re-pushed; cancelled/interrupted never
+push; replays dedup through one per-run state. Detached turns keep running with
+native persistence/approval/stop semantics, and one discard consumer bounds the
+event queue. Config lives in the profile `config.yaml` `push:` block
+(`ntfy_server`/`ntfy_topic`); unconfigured runs keep the original disconnect
+behavior. Messages carry the `hermes-agent` echo tag so a shared ntfy platform
+topic can never loop them back as prompts. Live Bot Chat handoff turns are out
+of scope (documented unsupported).
+
+Cron bridge (TARGET backend only; BASE is `skipped_incompatible`) registers the
+`app` platform so a job can use `deliver="app:<exact_session_id>"`. One cron
+execution commits exactly one `[Cron report: name]` row
+(role=user, display_kind=internal_notification) into the session's live
+compression continuation, inside a single reviewed SessionDB transaction with
+dedup, active-turn-lease rejection, and hidden/archived/ended/source policy
+fail-closed (never a silent unhide, new session, or Discord fallback). Success
+means committed data: the next `GET /api/sessions/{id}/messages` shows it and
+the App renders it as a system event; no model turn is ever started by a
+delivery. A busy target returns observable `queued` via a durable plugin spool
+and bounded drainer (queued is never reported as delivered); the same execution
+always retries into the same row id, while a new execution of identical text is
+a new legitimate report. The app branch carries its execution identity through
+live metadata and the standalone ContextVar (wrapper-bound, fingerprinted),
+takes no generic mirror or thread seeding, and refuses multi-target jobs before
+any platform sends.
+
+Hindsight moved out of upstream core. See `HINDSIGHT-MIGRATION.md` for the
+catalog install path, verification, rollback, and the local-mode behavior
+difference to record before updating.
 
 Media paths use upstream validation with its default empty session key. This is
 operator-authenticated host-file delivery, not a new per-session filesystem boundary.

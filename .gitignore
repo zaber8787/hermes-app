@@ -79,3 +79,10 @@ key.properties
 .ios-picker-evidence/
 
 .silence-drop-evidence/
+.done-*
+
+.upd-compat-evidence/
+.ntfy-port-evidence/
+.cron-bridge-evidence/
+.appwake-evidence/
+.wakecap-fix-evidence/

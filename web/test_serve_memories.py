@@ -30,15 +30,15 @@ if not (_os.environ.get("HERMES_ENV_FILE") or "").strip():
     _os.environ["HERMES_ENV_FILE"] = _env_probe.name
 import serve  # noqa: E402
 
-KEY = "mm-test-key"
-AUTH = {"Authorization": f"Bearer {KEY}"}
+FAKE_BEARER = "mm-test-key"
+AUTH = {"Authorization": f"Bearer {FAKE_BEARER}"}
 
 
 class Harness:
     """proxy on an ephemeral port; HOME + env file point at a tmp dir."""
 
     def __init__(self, tmp: pathlib.Path):
-        (tmp / ".env").write_text(f"API_SERVER_KEY={KEY}\n", encoding="utf-8")
+        (tmp / ".env").write_text(f"API_SERVER_KEY={FAKE_BEARER}\n", encoding="utf-8")
         (tmp / "memories").mkdir(exist_ok=True)
         self.saved = (serve.ENV_FILE, serve.API,
                       os.environ.get("HERMES_WEB_HOME"))

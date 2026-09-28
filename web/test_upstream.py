@@ -503,6 +503,37 @@ async def test_stalled_upload_cut():
         await wait_quiet()
 
 
+async def test_patch_session_forwards_verbatim():
+    """UPD-COMPAT §4/§7: the six PATCH session fields AND an unknown field must
+    reach the gateway byte-identically; the proxy enforces no whitelist of its
+    own (gateway owns the six-field contract and the unknown-field 400)."""
+    seen = {}
+
+    async def echo(request):
+        seen["method"] = request.method
+        seen["auth"] = request.headers.get("Authorization")
+        seen["body"] = await request.read()
+        return web.json_response({"ok": True})
+
+    fake = web.Application()
+    fake.router.add_route("*", "/api/{tail:.*}", echo)
+    async with Harness(fake) as h:
+        for body in (b'{"title":"t","end_reason":"user","pinned":true,'
+                     b'"archived":false,"hidden":true,"unread":false}',
+                     b'{"title":"t","unknown_field":42}'):
+            async with h.client.patch(
+                f"http://127.0.0.1:{h.proxy_port}/api/sessions/s-1",
+                data=body,
+                headers={"Authorization": "Bearer k",
+                         "Content-Type": "application/json"},
+            ) as r:
+                assert r.status == 200, r.status
+                assert await r.json() == {"ok": True}
+            assert seen["method"] == "PATCH", seen
+            assert seen["auth"] == "Bearer k", seen
+            assert seen["body"] == body, seen["body"]
+
+
 TESTS = [
     test_streamed_upload_bounded_buffer,
     test_declared_oversize_413_before_read,
@@ -513,6 +544,7 @@ TESTS = [
     test_audit10_timeouts_intact,
     test_slow_upload_beats_header_deadline,
     test_stalled_upload_cut,
+    test_patch_session_forwards_verbatim,
 ]
 
 

@@ -23,7 +23,7 @@ class FakeRepo extends HermesRepository {
   int sends = 0, reads = 0;
   String? stopped;
   @override
-  Stream<SseEvent> chat(String sid, String input) {
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     sends++;
     return events.stream;
   }

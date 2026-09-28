@@ -34,7 +34,7 @@ class FakeFlushRepo extends HermesRepository {
   Json Function(String runId) status = (_) => {'status': 'running'};
   int sends = 0;
   @override
-  Stream<SseEvent> chat(String sid, String input) {
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     sends++;
     return events.stream;
   }

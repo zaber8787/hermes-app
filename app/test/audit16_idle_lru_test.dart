@@ -69,7 +69,7 @@ class FakeLruRepo extends HermesRepository {
   }
 
   @override
-  Stream<SseEvent> chat(String sid, String input) =>
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) =>
       turnEvents.putIfAbsent(sid, () => StreamController<SseEvent>.broadcast())
           .stream;
   @override

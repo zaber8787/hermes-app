@@ -39,7 +39,7 @@ class SBRepo extends HermesRepository {
   Future<Map<String, dynamic>> sessionDetail(String sid) async =>
       {'id': sid, 'message_count': 0};
   @override
-  Stream<SseEvent> chat(String sid, String input) {
+  Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     sends++;
     return events.stream;
   }

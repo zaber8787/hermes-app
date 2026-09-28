@@ -465,6 +465,18 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.systemM005: 'Style switch',
   MessageKey.systemM006: 'Skill invocation',
   MessageKey.systemGeneric: 'System event',
+  MessageKey.systemWakeRead: 'Auto-read schedule report',
+  MessageKey.settingsWake: 'Auto-read schedule reports',
+  MessageKey.settingsWakeDesc:
+      'When the app is visible and idle, delivered schedule reports trigger '
+      'ONE short auto-read request (merged, rate-limited; never while you are '
+      'typing or the app is in the background). Off by default.',
+  MessageKey.settingsWakeUnavailable:
+      'This server does not offer auto-wake.',
+  MessageKey.chatWakeSessionOff: 'Pause auto-read in this session',
+  MessageKey.chatWakeSessionOn: 'Resume auto-read in this session',
+  MessageKey.wakePendingCount: 'Schedule reports waiting: {count}',
+  MessageKey.wakeQuotaNotice: 'Hourly auto-read limit reached',
   MessageKey.sessionM001: 'Show all available commands',
   MessageKey.sessionM002: 'List conversations',
   MessageKey.sessionM003: 'Rejoin a conversation',
@@ -849,6 +861,16 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.systemM005: '風格切換',
   MessageKey.systemM006: 'Skill 呼叫',
   MessageKey.systemGeneric: '系統事件',
+  MessageKey.systemWakeRead: '自動讀取排程報告',
+  MessageKey.settingsWake: '自動讀取排程報告',
+  MessageKey.settingsWakeDesc:
+      'App 在前台且閒置時，新送達的排程報告會以一次簡短請求自動讀取並回覆'
+      '（合併批次、限速；你正在輸入或在背景時絕不送出）。預設關閉。',
+  MessageKey.settingsWakeUnavailable: '此伺服器不提供自動讀取功能。',
+  MessageKey.chatWakeSessionOff: '此交談暫停自動讀取',
+  MessageKey.chatWakeSessionOn: '此交談恢復自動讀取',
+  MessageKey.wakePendingCount: '排程報告待自動讀取：{count}',
+  MessageKey.wakeQuotaNotice: '已達本小時自動讀取上限',
   MessageKey.sessionM001: '所有可用指令說明',
   MessageKey.sessionM002: '列出對話',
   MessageKey.sessionM003: '接回某個對話',

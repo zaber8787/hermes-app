@@ -9,6 +9,7 @@ import '../../l10n/ui_message.dart';
 import '../../models/message.dart';
 import '../../models/session_activity.dart';
 import '../settings/local_store.dart';
+import 'auto_wake.dart';
 import 'live_turn.dart';
 import 'turn_history_match.dart';
 import 'viewers.dart';
@@ -136,6 +137,289 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void>? _foregroundCheck;
   Future<bool>? _reconcileFlight; // single-flight GET across ALL observers
 
+  // ---- APPWAKE: shadow detection + durable queue (dispatch lands later) --
+  // The observer is pure state + persistence: it never touches turns, and
+  // the controller only feeds it SUCCESSFUL history commits.
+  AutoWakeObserver? _wake;
+
+  /// APPWAKE: message ids this client recognizes as its OWN server-
+  /// confirmed auto-wake anchors — the timeline renders them as system
+  /// lines. Durable rows are untouched (user anchor preserved).
+  Set<String> get wakeRowIds => _wake?.anchors(messages) ?? const {};
+
+  /// chat_page's live editor signal (focus / IME composition / text).
+  /// Auto-dispatch is stricter than manual send: ANY editing pauses it;
+  /// putting the editor down hands the queue its debounced chance.
+  void noteInputActive(bool active) {
+    if (_inputActive == active) return;
+    _inputActive = active;
+    if (!active &&
+        !busy &&
+        ((_wake?.state?['queued']) as List?)?.isNotEmpty == true) {
+      _wakeSchedule();
+    }
+  }
+
+  bool _inputActive = false;
+  bool get inputActive => _inputActive;
+
+  /// Pending (discovered, not yet admitted) report count for the UI hint.
+  int get wakePendingCount => _wake?.pendingCount ?? 0;
+
+  AutoWakeObserver _wakeObserver() =>
+      _wake ??= AutoWakeObserver(store: store, serverUrl: serverUrl, sid: sid, now: _clock);
+
+  // ---- APPWAKE C dispatch state (plan §4/§5) ------------------------------
+  Json? _wakeCap; // null = not fetched / fetch failed; {} = no auto-wake
+  Timer? _wakeDebounce;
+  bool _wakeDispatching = false, _wakeQuotaHit = false, _wakePostHappened = false;
+  String? _wakeBatchInFlight; // ledger batch of the CURRENT auto-wake turn
+
+  /// Every trigger goes through the SAME debounce (1s = plan §5's merge
+  /// window; busy/quota use a longer one): repeated triggers never stack.
+  /// Consecutive no-progress failures (transport death, verdict release,
+  /// never-started POST): stretch the retry gap geometrically to a minute.
+  /// A healthy admit resets it — a dead-end ledger path can never churn.
+  int _wakeFailStreak = 0;
+  bool get _wakeSettingsOn =>
+      store.autoWakeEnabled(serverUrl) && !store.autoWakeSessionOff(serverUrl, sid);
+
+  void _wakeSchedule([int seconds = 1]) {
+    if (_disposed || !_wakeSettingsOn) return; // OFF = no timers, no traffic
+    _wakeDebounce?.cancel();
+    const ladder = [2, 5, 15, 30, 60];
+    final floor = _wakeFailStreak == 0
+        ? 1
+        : ladder[_wakeFailStreak > ladder.length ? ladder.length - 1 : _wakeFailStreak - 1];
+    _wakeDebounce = Timer(Duration(seconds: seconds > floor ? seconds : floor), () {
+      if (!_disposed) unawaited(_wakeDispatch());
+    });
+  }
+
+  Future<Json?> _wakeCapOnce() async {
+    final cached = _wakeCap;
+    if (cached != null) return cached;
+    try {
+      final feats = (await repo.autoWakeCapability())['features'];
+      final wake = feats is Map ? feats['auto_wake'] : null;
+      // {} = confirmed ABSENT (pure server): cached, never refetched.
+      _wakeCap = wake is Map ? Map<String, dynamic>.from(wake) : const {};
+    } on Object {
+      // Transient failure: NOT cached — the next trigger re-asks.
+    }
+    return _wakeCap;
+  }
+
+  void _wakeRunStarted(String? runId) {
+    final batchId = _wakeBatchInFlight;
+    if (batchId == null || runId == null) return;
+    unawaited(() async {
+      try {
+        await repo.wakeAck(sid, batchId, 'accepted', runId: runId);
+      } on Object {
+        // receipt lag is harmless: the batch is a server-side run now
+      }
+      await _wake?.advanceBatch(batchId, 'accepted');
+    }());
+  }
+
+  Future<void> _wakeTerminalAck(String batchId) async {
+    try {
+      await repo.wakeAck(sid, batchId, 'terminal');
+    } on Object {
+      // the terminal may never reach the ledger; the receipt GET decides
+    }
+    await _wake?.advanceBatch(batchId, 'terminal');
+    notifyListeners(); // the "auto-read" projection may appear now
+  }
+
+  /// 409/410 from the dispatch POST: the LEDGER already knows this batch.
+  /// Read-only recovery ONLY — history reconcile + receipt GET, NEVER a
+  /// second POST of the same sentence (plan §4, ghost-dup red line).
+  Future<void> _wakeGateVerdict(String batchId, int status, Object? token) async {
+    String? read;
+    try {
+      final r = await repo.wakeReceipt(sid, batchId);
+      final s = r['state'];
+      read = s is String ? s : null;
+    } on Object {
+      // receipt unreadable: fall back to committed-history proof below
+    }
+    if (_disposed || !identical(_turnToken, token)) return;
+    // A committed canonical row AFTER the batch watermark proves acceptance
+    // with server data — no guessing from the local clock.
+    var anchored = false;
+    final anchor = (_wake?.batch(batchId)?['anchor_after_id'] as num?)?.toInt();
+    if (anchor != null) {
+      for (final m in messages) {
+        final n = int.tryParse(m.id);
+        if (n != null &&
+            n > anchor &&
+            m.isUserTurn &&
+            m.content == AutoWakeContract.canonicalInput) {
+          anchored = true;
+          break;
+        }
+      }
+    }
+    final wake = _wake;
+    if (status == 410) {
+      _wakeFailStreak++; // released rows may re-claim, but never churn
+      if (read == 'released' && wake != null) {
+        await wake.abandonBatch(batchId); // rows return to the queue
+      } else {
+        await wake?.advanceBatch(batchId, 'terminal');
+      }
+    } else if (anchored || read == 'dispatching' || read == 'accepted') {
+      await wake?.advanceBatch(batchId, 'accepted');
+      unawaited(reconcileForeground()); // the run is real: observe it read-only
+    } else {
+      if (wake != null) await wake.markUncertain(batchId);
+      // NO anchor, NO running run: honest dead-end. No auto re-send — the
+      // reports stay unconsumed server-side and the queue keeps them for a
+      // later admitted batch (never a duplicate of THIS batch).
+    }
+    if (identical(_wakeBatchInFlight, batchId)) _wakeBatchInFlight = null;
+    await _settleTurn(token); // the never-proven turn retires through the gate
+    if (!_disposed) _wakeSchedule();
+  }
+
+  Future<void> _wakeDispatch() async {
+    if (_disposed || _wakeDispatching) return;
+    if (!store.autoWakeEnabled(serverUrl) ||
+        store.autoWakeSessionOff(serverUrl, sid)) {
+      return;
+    }
+    if (sendBlocked || _bootstrapping || busy || _detached || _inputActive) {
+      return; // gated — event triggers (settle/resume/attach/typing) reschedule
+    }
+    if (WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed ||
+        ChatViewers.count(sid) == 0) {
+      return; // hidden page / no viewer: never auto-send (plan §4)
+    }
+    final wake = _wakeObserver();
+    if (!wake.queuePersisted) return; // queue must be PROVEN on disk
+    final cap = await _wakeCapOnce();
+    if (_disposed || cap == null || cap['enabled'] != true) return;
+    if (cap['canonical_input'] != AutoWakeContract.canonicalInput) return;
+    // A different server sentence = a different contract version: stay
+    // silent rather than fire a sentence the ledger can't match.
+    final plan = AutoWakeObserver.plan(wake.state, now: _clock());
+    if (plan == null) return;
+    _wakeDispatching = true;
+    _wakePostHappened = false;
+    String? batchId;
+    var turnStarted = false, backoffScheduled = false;
+    try {
+      Json admitted;
+      try {
+        admitted = await repo.wakeAdmit(sid, plan.deliveryKeys);
+      } on Object {
+        _wakeSchedule(5); // transport/5xx: queue intact, ask again later
+        return;
+      }
+      if (_disposed) return;
+      final status = admitted['status'];
+      if (status == 'quota_exceeded' || status == 'busy') {
+        _wakeQuotaHit = status == 'quota_exceeded';
+        notifyListeners(); // UI hint may show the quota state now
+        final retry = (admitted['retry_after_s'] as num?)?.toInt();
+        backoffScheduled = true;
+        _wakeSchedule(status == 'busy' ? (retry ?? 5) : (retry ?? 60));
+        return;
+      }
+      if (status != 'admitted') return; // empty/error: nothing to do
+
+      batchId = admitted['batch_id'] as String?;
+      if (batchId == null) return;
+      _wakeQuotaHit = false;
+      final anchor =
+          (admitted['anchor_after_id'] as num?)?.toInt() ?? plan.anchorAfterId;
+      // PERSIST the receipt + queue shrink BEFORE the POST: a crash now
+      // leaves an admitted batch the ledger already counts — never a
+      // silently-lost queue that re-fires double later.
+      if (!await wake.recordBatch(
+        batchId: batchId,
+        anchorAfterId: anchor,
+        items: plan.items,
+      )) {
+        try {
+          await repo.wakeRelease(sid, batchId);
+        } on Object {
+          await wake.markUncertain(batchId);
+        }
+        return; // never dispatch a queue the disk refused to hold
+      }
+      if (_disposed) return;
+      // GATE RE-CHECK at the POST edge: the user typed, sent, hid or left
+      // during the admits/awaits — manual input ALWAYS wins (plan §4).
+      if (sendBlocked ||
+          busy ||
+          _detached ||
+          _inputActive ||
+          ChatViewers.count(sid) == 0 ||
+          WidgetsBinding.instance.lifecycleState !=
+              AppLifecycleState.resumed) {
+        var freed = false;
+        try {
+          freed = (await repo.wakeRelease(sid, batchId))['status'] == 'ok';
+        } on Object {
+          freed = false;
+        }
+        if (freed) {
+          await wake.abandonBatch(batchId); // rows return to the queue
+        } else {
+          await wake.markUncertain(batchId); // ledger decides; never re-fire
+        }
+        _wakeFailStreak++;
+        backoffScheduled = true;
+        _wakeSchedule(5);
+        return;
+      }
+      _wakeFailStreak = 0; // the ledger proved this batch is real
+      _wakeBatchInFlight = batchId; // set BEFORE the await: a crash now lands
+      // on a bootstrap-adoptable wake turn, never an orphan ledger row
+      await send(
+        AutoWakeContract.canonicalInput,
+        wakeBatch: batchId,
+        suppressPending: true,
+      );
+      turnStarted = busy || _wakePostHappened; // POST reached the server?
+    } finally {
+      _wakeDispatching = false;
+      if (batchId != null && !turnStarted) {
+        if (identical(_wakeBatchInFlight, batchId)) _wakeBatchInFlight = null;
+        // The POST never reached the server: hand the reservation back.
+        // A CONFLICT here means a racing ledger state already moved the
+        // batch — that's the ledger deciding; the rows stay consumed and
+        // a re-admit of the same keys is deduped. NEVER re-POST blindly.
+        var freed = false;
+        try {
+          freed = (await repo.wakeRelease(sid, batchId))['status'] == 'ok';
+        } on Object {
+          freed = false;
+        }
+        if (freed) {
+          await wake.abandonBatch(batchId);
+        } else if (wake.batch(batchId)?['state'] == 'dispatched') {
+          await wake.markUncertain(batchId);
+        }
+        _wakeFailStreak++;
+      }
+      if (!_disposed &&
+          !backoffScheduled &&
+          ((wake.state?['queued']) as List?)?.isNotEmpty == true) {
+        _wakeSchedule(); // overflow beyond the cap: next batch, debounced
+      }
+    }
+  }
+
+  /// Whether the last dispatch attempt hit the hourly quota (UI hint).
+  bool get wakeQuotaHit => _wakeQuotaHit;
+
+  /// The server offers auto-wake (fetched lazily; false until known).
+  bool get wakeFeatureOffered => _wakeCap?['enabled'] == true;
+
   /// AUDIT-09: no send may enter before bootstrap has decided whether a
   /// persisted pending turn owns this session.
   bool _bootstrapping = false;
@@ -206,6 +490,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         _armCountdownTicker(); // hidden pages skip repaints; re-arm on return
       }
       unawaited(reconcileForeground());
+      // APPWAKE: resume is a dispatch trigger (plan §4) — but only for an
+      // IDLE session; a busy one gets its chance at the settle instead.
+      if (!busy && !_bootstrapping) _wakeSchedule();
       notifyListeners();
     }
   }
@@ -319,12 +606,16 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     if (!busy) return null;
     final p = pendingInput;
     if (p != null && !pendingDelivered) return p;
-    if (live == null) {
+    if (live == null && !_wakeAdopted) {
+      // APPWAKE: an adopted auto-wake turn shows NO human bubble — the
+      // system-line projection owns it once anchored; before that, silence.
       final b = _bootUserText;
       if (b != null && !_bootstrapInspection().anchorFound) return b;
     }
     return null;
   }
+
+  bool _wakeAdopted = false; // bootstrap adopted a persisted auto-wake turn
 
   /// Left-the-page mode: our SSE is cut on purpose so the server counts this
   /// run as having no viewer (that arms its ntfy push and the run keeps
@@ -468,6 +759,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _claimedRows.clear();
       _localOwnedRunId = null;
       error = const UiMessage.local(MessageKey.chatStateM002);
+      // APPWAKE A: lineage moved — the delivery_key-keyed queue rides
+      // along; this only re-persists it under the continuing session.
+      unawaited(_wakeObserver().moveLineage());
     }
     final remoteGone =
         prev != null &&
@@ -710,7 +1004,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _detached = false;
     _watchTimer?.cancel();
     _watchTimer = null;
-    if (busy) unawaited(_pollRun(fresh: true));
+    if (busy) {
+      unawaited(_pollRun(fresh: true));
+    } else {
+      // APPWAKE: the page is on screen again — an idle queued batch gets
+      // its debounced chance (gates re-checked inside the dispatch).
+      _wakeSchedule();
+    }
   }
 
   /// AUDIT-05: the detached/poll mode has exactly ONE owner. Every non-terminal
@@ -1039,6 +1339,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _activityEpoch++;
     _leaseTimer?.cancel();
     _leaseTimer = null;
+    _wakeDebounce?.cancel(); // APPWAKE: no timer may fire after dispose
+    _wakeDebounce = null;
     _disposed = true;
     _recoveryEpoch++;
     _turnToken = null; // retire every observer of every retired turn
@@ -1123,6 +1425,19 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // await; without this frame the user stares at a stale pending/preview
     // until the next tick (the listener hole plan A2 proved).
     notifyListeners();
+    // APPWAKE A/C: shadow scan rides ONLY the successful latest-page commit
+    // of the CURRENT identity (never an old page, never a failed GET); the
+    // dispatch check runs AFTER the scan so it sees the fresh queue — the
+    // 1s debounce merges a burst into one request (plan §5).
+    unawaited(
+      _wakeObserver().onHistoryCommit(messages).then((_) {
+        if (_disposed) return;
+        notifyListeners(); // pending-count hints track the fresh queue
+        if (((_wake?.state?['queued']) as List?)?.isNotEmpty == true) {
+          _wakeSchedule();
+        }
+      }),
+    );
   }
 
   /// Cold-start / re-entry entry (replaces attach()+load from the page):
@@ -1131,6 +1446,14 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// replayed POST. No pending → today's idle behaviour (+ lost reconciliation).
   Future<void> bootstrap() async {
     attach(); // warm re-entry keeps its existing semantics
+    // APPWAKE D: ONLY an opted-in user is asked — a capability GET on a
+    // cold default-off path would cost every session open (and leak a
+    // pending timeout into every legacy test harness).
+    if (store.autoWakeEnabled(serverUrl)) {
+      unawaited(_wakeCapOnce().then((_) {
+        if (!_disposed) notifyListeners();
+      }));
+    }
     if (_disposed || busy || loading || _bootstrapping) return; // duplicate: no-op
     loading = _bootstrapping = true; // AUDIT-09: no send until decided
     error = null;
@@ -1176,6 +1499,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final adoptToken = _turnToken = Object();
     _pendingToken = pending.token;
     _bootRunId = pending.runId;
+    // APPWAKE: a persisted auto-wake turn rides on its ledger batch — the
+    // settle below will ack terminal, and its row projects as a system line.
+    _wakeAdopted = pending.isAutoWake;
+    _wakeBatchInFlight = pending.isAutoWake ? pending.wakeBatchId : null;
     _bootKnownText = pending.hasUserText;
     _bootUserText = pending.hasUserText ? pending.userText : null;
     _bootStartedAt = pending.startedAt;
@@ -1641,6 +1968,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       // projection must be rebuilt BEFORE the finally's notify paints. The
       // LATEST-page revision bookkeeping is deliberately NOT touched.
       _refreshUserProjections();
+      // APPWAKE A: an OLD page may close a cursor gap — scan it WITHOUT
+      // latest-page rights (it can queue rows, never advance the cursor).
+      unawaited(
+        _wakeObserver().onHistoryCommit(messages, latestPage: false),
+      );
     } catch (e) {
       error = UiMessage.local(
         MessageKey.chatStateM019,
@@ -1652,9 +1984,19 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  Future<void> send(String input, {String? draft}) async {
+  /// APPWAKE C: [wakeBatch] marks a server-admitted auto-wake dispatch —
+  /// the ledger CAS verdict (409/410) surfaces through the SAME ApiException
+  /// surface; [suppressPending] keeps a wake turn from rendering its
+  /// canonical sentence as a fake human bubble (the projection owns it).
+  Future<void> send(
+    String input, {
+    String? draft,
+    String? wakeBatch,
+    bool suppressPending = false,
+  }) async {
     if (sendBlocked || input.trim().isEmpty) return; // AUDIT-09 gate
     final spentDraft = draft ?? input;
+    final isWake = wakeBatch != null;
     var accepted = false;
     // NEW TURN identity (AUDIT-12): minted HERE, retired only by settle/dispose.
     // The busy state must be observable BEFORE the first await — every
@@ -1672,10 +2014,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _localOwnedRunId = null;
     _turnSendAt = null;
     _turnSendWatermark = null;
+    _wakeBatchInFlight = wakeBatch;
+    _wakeAdopted = false;
     _beforeSend
       ..clear()
       ..addAll(messages.map((m) => m.id));
-    pendingInput = input;
+    pendingInput = suppressPending ? null : input;
     live = LiveTurn();
     final turn = live!;
     phase = ChatPhase.sending;
@@ -1718,6 +2062,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       turnId: '${++_turnSeq}', // turn layer; the tab layer lives in the store
       startedAt: pendingSince,
       historyAfterId: historyAfterId,
+      // APPWAKE: an auto-wake turn carries its origin + ledger batch so a
+      // reload adopts it as a wake (system-line projection), not a ghost.
+      origin: isWake ? 'autoWake' : null,
+      wakeBatchId: wakeBatch,
     );
     _pendingStart = false;
     if (_disposed) return;
@@ -1776,15 +2124,17 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       }
     });
     try {
-      await for (final event in repo.chat(sid, input)) {
+      await for (final event in repo.chat(sid, input, wakeBatch: wakeBatch)) {
         if (!accepted) {
           accepted = true;
+          if (isWake) _wakePostHappened = true; // POST proven at the server
           // 送達即清: the first frame proves the server accepted this POST
           // (SSE opened), so the draft is spent NOW. Clearing only after this
           // future resolved missed every path where send() returns late or
           // never (detach→poll takeover, EOF→recover backoff) while the user
           // reopened the page and initState re-loaded the stale draft.
-          if (spentDraft.isNotEmpty &&
+          if (!isWake &&
+              spentDraft.isNotEmpty &&
               store.draft(serverUrl, sid) == spentDraft) {
             await store.saveDraft(serverUrl, sid, '');
           }
@@ -1830,6 +2180,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           // GHOST-DUP (B3): this run's identity now exists — retire its
           // observation preview on THIS frame, before the notify below.
           _refreshUserProjections();
+          // APPWAKE: the ledger batch is provably RUNNING now — advance the
+          // mirror + receipt (fire-forget; failures never touch the turn).
+          if (isWake) _wakeRunStarted(turn.runId);
         }
         notifyListeners();
       }
@@ -1845,13 +2198,30 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         // recovery loop for a settled turn (it would strand on a zombie
         // phase AFTER idle).
         if (busy && identical(_turnToken, token)) {
-          await recover(cause: RecoveryCause.streamEnded);
+          // UPD-COMPAT §4: an EOF after run.queued is the stream ending ON
+          // PURPOSE while a live owner still holds the delivery — route it to
+          // the neutral read-only reconcile (never "connection lost", never a
+          // re-POST). A plain unfinished EOF stays an observed stream end.
+          await recover(
+            cause: turn.queued
+                ? RecoveryCause.recheck
+                : RecoveryCause.streamEnded,
+          );
         }
         return;
       }
       await _finish(token: token);
     } on ApiException catch (e) {
       if (_disposed || !identical(live, turn) || _detached) return;
+      if (isWake) _wakePostHappened = true; // a response = the POST arrived
+      if (isWake && (e.status == 409 || e.status == 410)) {
+        // APPWAKE C read-only recovery: the ledger already knows about this
+        // batch (409 in-flight / 410 consumed-released). NEVER re-POST.
+        // Reconcile history (a committed canonical anchor is proof of
+        // acceptance) and land the batch honestly.
+        await _wakeGateVerdict(wakeBatch, e.status!, token);
+        return;
+      }
       if (e.status != null && e.status! >= 400 && e.status! < 500) {
         // 4xx = the server rejected the POST outright: nothing to recover.
         // Settle through the gate so the send gate stays shut until the
@@ -2043,6 +2413,20 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _refreshUserProjections(); // GHOST-DUP B1: settle publishes state AND
     // projections together — one final frame, never a half-cleared overlay.
     notifyListeners(); // AUDIT-04: terminals always notify
+    // 4) APPWAKE: an auto-wake turn that reached a SETTLED end closes its
+    //    ledger batch (fire-forget terminal ack), then the queue gets its
+    //    next chance now that the session is idle again.
+    final wakeBatch = _wakeBatchInFlight;
+    final adoptedWake = _wakeAdopted;
+    _wakeBatchInFlight = null;
+    _wakeAdopted = false;
+    if (wakeBatch != null && (adoptedWake || _wake?.batch(wakeBatch) != null)) {
+      unawaited(_wakeTerminalAck(wakeBatch));
+    }
+    if (!_disposed &&
+        ((_wake?.state?['queued']) as List?)?.isNotEmpty == true) {
+      _wakeSchedule(); // queued reports get their chance now that we're idle
+    }
   }
 
   /// Contract has NO replay/resume SSE endpoint. Reconnect read-only history
