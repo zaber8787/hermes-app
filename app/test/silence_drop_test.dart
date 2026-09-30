@@ -209,7 +209,14 @@ void main() {
       await tester.pump();
       expect(durations, [1, 2, 4, 8, 16, 30]);
       expect(c.phase, ChatPhase.uncertain);
-      expect((c.error! as UiLocal).key, MessageKey.chatStreamUnconfirmed);
+      // WEBSYNC F1: this turn HAS a runId (run.started arrived), so the
+      // exhausted state is the DELIVERED one, never a "connection lost" /
+      // resend wording. The ladder, the single POST and the reconnect count
+      // above are the silence-drop contract proper and are unchanged.
+      expect(
+        (c.error! as UiLocal).key,
+        MessageKey.chatDeliveredReplyLoading,
+      );
       expect((c.error! as UiLocal).key, isNot(MessageKey.chatStateM027));
       expect(repo.sends, 1);
       expect(c.reconnects, 1);

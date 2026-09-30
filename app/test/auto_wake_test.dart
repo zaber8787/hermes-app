@@ -140,16 +140,18 @@ void main() {
     expect(o.state!['lastSeenOrder'], 91);
   });
 
-  test('NO_REPLY and empty are ignored-consumed; mentions survive', () async {
+  test('NO_REPLY/HEARTBEAT_OK and empty are ignored-consumed; mentions survive', () async {
     final o = make();
     await commit(o, [Message(id: '1', role: 'user', content: 'hi')]);
     await commit(o, [
       report('2', 'NO_REPLY', exec: 'r1'),
       report('3', '   ', exec: 'r2'),
       report('4', 'we discussed NO_REPLY handling', exec: 'r3'),
+      report('5', 'HEARTBEAT_OK', exec: 'r4'),
     ]);
     expect(queued(o).map((q) => q['dk']), [dk('J:r3')]);
-    expect(o.state!['ignoredKeys'], containsAll([dk('J:r1'), dk('J:r2')]));
+    expect(o.state!['ignoredKeys'],
+        containsAll([dk('J:r1'), dk('J:r2'), dk('J:r4')]));
     // Reconcile must NOT reset ignored verdicts:
     await commit(o, [report('2', 'NO_REPLY', exec: 'r1')]);
     expect(queued(o).map((q) => q['dk']), [dk('J:r3')]);

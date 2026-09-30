@@ -42,5 +42,59 @@
     * https://docs.flutter.dev/platform-integration/web/initialization
   -->
   <script src="flutter_bootstrap.js" async></script>
+  <script>
+    // WEBSYNC F5: the service worker is exit-style (install/activate only —
+    // it never caches or pushes), so an ALREADY-OPEN tab cannot learn about
+    // a new release from the SW. Visible signal instead, without touching
+    // the no-cache bootstrap relay: this page snapshots the release's
+    // version.json at load (the very file publish.sh swaps atomically),
+    // rechecks it a few seconds later and every five minutes, and on a
+    // mismatch says so in the console and shows a click-to-reload chip.
+    // No silent navigation — an active send is never reloaded underneath
+    // the user; the chip is the only trigger.
+    (function () {
+      var mine = null, CHECK_MS = 300000, FIRST_MS = 15000, chip = null;
+      function zh() {
+        return (document.documentElement.lang || navigator.language || '')
+          .toLowerCase().indexOf('zh') === 0;
+      }
+      function show(fresh) {
+        console.warn('hermes-web: a newer build is live (' + mine.build +
+          ' -> ' + fresh.build + '); reload this tab to load it.');
+        if (chip) return;
+        chip = document.createElement('div');
+        chip.setAttribute('role', 'alert');
+        chip.textContent = zh()
+          ? '新版本已發佈 — 点此重新载入'
+          : 'A new version is available — click to reload';
+        chip.style.cssText = 'position:fixed;left:50%;bottom:14px;' +
+          'transform:translateX(-50%);z-index:2147483647;cursor:pointer;' +
+          'padding:8px 14px;border-radius:8px;font:13px/1.4 system-ui;' +
+          'background:#1b1b1bee;color:#fff;box-shadow:0 2px 10px #0006';
+        chip.addEventListener('click', function () { location.reload(); });
+        document.body.appendChild(chip);
+      }
+      function url() { return new URL('version.json', document.baseURI).href; }
+      async function probe() {
+        try {
+          var r = await fetch(url(), { cache: 'no-store' });
+          if (!r.ok) return null;
+          return await r.json();
+        } catch (e) { return null; }
+      }
+      async function start() {
+        mine = await probe();
+        if (!mine || !mine.build) return;
+        setTimeout(check, FIRST_MS);
+        setInterval(check, CHECK_MS);
+      }
+      async function check() {
+        var fresh = await probe();
+        if (fresh && fresh.build && fresh.build !== mine.build) show(fresh);
+      }
+      if (document.readyState === 'complete') start();
+      else window.addEventListener('load', start);
+    })();
+  </script>
 </body>
 </html>

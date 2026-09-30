@@ -322,6 +322,43 @@ class LocalStore {
     }
   }
 
+  /// WEBSYNC F9: the AUTHORITATIVE pending read for every compare/write.
+  /// Web Locks serialize the critical section across tabs, but the
+  /// shared_preferences web backend serves getString from a per-instance
+  /// `_preferenceCache` that only refreshes on getAll()/reload() — so a
+  /// tab that pre-loaded "empty" would still claim successfully INSIDE
+  /// the lock. Every transaction must therefore re-read through the
+  /// lock before deciding. Unlike the hidden-list helper, the "empty
+  /// falls back to the pre-reload view" rule is deliberately NOT applied
+  /// here: for the pending slot a foreign DELETION is real state, and
+  /// resurrecting it from a stale cache is exactly the bug class this
+  /// closes. A store whose reload throws keeps the cache (best effort —
+  /// the degraded path is labelled, not hidden).
+  Future<Map<String, dynamic>?> _rereadPending(String server, String sid) async {
+    try {
+      await prefs.reload();
+    } on Object {
+      /* reload unsupported on this backend: keep the cache */
+    }
+    return _pendingRaw(server, sid);
+  }
+
+  /// WEBSYNC F9 degraded path, stated out loud once per tab: without Web
+  /// Locks the critical section is only this-isolate chained, so claims
+  /// are NOT cross-tab exclusive (last-writer-wins); compare-and-set ops
+  /// stay safe. The flag `storeTxIsCrossTab` carries the same statement
+  /// for any caller that needs it programmatically.
+  static bool _noLocksWarned = false;
+  static void _warnNoWebLocksOnce() {
+    if (_noLocksWarned) return;
+    _noLocksWarned = true;
+    debugPrint(
+      'LocalStore: Web Locks unavailable in this browser — pending claims '
+      'are NOT cross-tab exclusive (last-writer-wins). Keep one tab per '
+      'server session; compare-and-set clear/amend/touch remain safe.',
+    );
+  }
+
   bool _leaseHeldByOther(Map<String, dynamic> rec, DateTime now) {
     final tab = rec['owner_tab'] as String?;
     if (tab == null) return false; // unowned (legacy): claimable
@@ -411,7 +448,7 @@ class LocalStore {
     DateTime? now,
   }) => withStoreTx('pending.$server.$sid', () async {
     final at = now ?? DateTime.now();
-    final rec = _pendingRaw(server, sid);
+    final rec = await _rereadPending(server, sid);
     if (rec == null) {
       return const PendingRecoveryResult(PendingRecoveryOutcome.missing, null);
     }
@@ -452,7 +489,7 @@ class LocalStore {
     DateTime? now,
   }) => withStoreTx('pending.$server.$sid', () async {
     final at = now ?? DateTime.now();
-    final rec = _pendingRaw(server, sid);
+    final rec = await _rereadPending(server, sid);
     if (rec == null) {
       return const RecoveryRetryResult(RecoveryRetryOutcome.missing, null);
     }
@@ -495,7 +532,7 @@ class LocalStore {
     DateTime? startedAt,
   }) => withStoreTx('pending.$server.$sid', () async {
     final now = DateTime.now();
-    final rec = _pendingRaw(server, sid);
+    final rec = await _rereadPending(server, sid);
     await _writePending(
       server,
       sid,
@@ -541,7 +578,8 @@ class LocalStore {
     Duration lease = pendingLease,
   }) => withStoreTx('pending.$server.$sid', () async {
     final now = DateTime.now();
-    final rec = _pendingRaw(server, sid);
+    if (kIsWeb && !storeTxIsCrossTab) _warnNoWebLocksOnce();
+    final rec = await _rereadPending(server, sid);
     if (rec != null && _leaseHeldByOther(rec, now)) return null;
     // A NEW claim belongs to a NEW turn: the old turn's recovery budget
     // must not leak into it (B3 — only metadata set after this claim
@@ -573,7 +611,7 @@ class LocalStore {
     Duration lease = pendingLease,
   }) => withStoreTx('pending.$server.$sid', () async {
     final now = DateTime.now();
-    final rec = _pendingRaw(server, sid);
+    final rec = await _rereadPending(server, sid);
     if (rec == null) return false;
     final held =
         rec['owner_tab'] == tabId &&
@@ -605,7 +643,7 @@ class LocalStore {
     Duration lease = pendingLease,
   }) => withStoreTx('pending.$server.$sid', () async {
     final now = DateTime.now();
-    final rec = _pendingRaw(server, sid);
+    final rec = await _rereadPending(server, sid);
     if (rec == null) return false;
     // token embeds the tab layer; equality already implies this tab owns it.
     if ('${rec['owner_tab']}|${rec['owner_turn']}' != token) return false;
@@ -629,7 +667,7 @@ class LocalStore {
   /// turn is now recorded here — leave their evidence alone.
   Future<bool> clearPending(String server, String sid, {String? token}) =>
       withStoreTx('pending.$server.$sid', () async {
-        final rec = _pendingRaw(server, sid);
+        final rec = await _rereadPending(server, sid);
         if (rec == null) return true;
         final current = rec['owner_tab'] == null && rec['owner_turn'] == null
             ? null

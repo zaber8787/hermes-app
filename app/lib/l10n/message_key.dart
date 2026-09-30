@@ -142,6 +142,12 @@ enum MessageKey {
   chatStreamChecking,
   chatStreamUnconfirmed,
 
+  // ---- WEBSYNC F1: three-state split of the exhausted-turn wording.
+  // Delivered-but-reply-loading vs stream-unavailable (not in history,
+  // resendable) vs plain unconfirmed (chatStreamUnconfirmed above).
+  chatDeliveredReplyLoading,
+  chatStreamUnavailable,
+
   chatStateStoppedByYou,
   chatStateRunLabel,
 

@@ -113,10 +113,11 @@ async def case_wake(args, server, check):
             got = await r.json()
         check(got["receipt"]["delivery_keys"] == [key1], "receipt names its rows")
 
-        # ---- NO_REPLY / empty: ignored-consumed, quota-free ------------------
+        # ---- NO_REPLY / HEARTBEAT_OK / empty: ignored-consumed, quota-free ---
         sid_n = "api_wake_ignored1"
         db.create_session(sid_n, model="compat-fixture", source="api_server")
         await deliver_report(bstore, sid_n, "NO_REPLY", job="jobN", execution="execN1")
+        await deliver_report(bstore, sid_n, "HEARTBEAT_OK", job="jobN", execution="execN3")
         await deliver_report(bstore, sid_n, "we discussed NO_REPLY policy today",
                              job="jobN", execution="execN2")
         async with client.get(f"/api/sessions/{sid_n}/messages", headers=AUTH) as r:
@@ -125,9 +126,9 @@ async def case_wake(args, server, check):
         async with client.post(f"/api/sessions/{sid_n}/auto-wake/admit", headers=AUTH,
                                json={"delivery_keys": keys}) as r:
             ign = await r.json()
-        check(ign["status"] == "admitted" and len(ign["ignored"]) == 1
+        check(ign["status"] == "admitted" and len(ign["ignored"]) == 2
               and len(ign["accepted"]) == 1,
-              "exact NO_REPLY ignored; a report MENTIONING it stays eligible")
+              "exact NO_REPLY/HEARTBEAT_OK ignored; a report MENTIONING it stays eligible")
 
         # ---- busy: a live turn lease defers admission, nothing consumed ------
         sid_b = "api_wake_busy1"

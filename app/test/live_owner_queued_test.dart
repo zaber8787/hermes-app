@@ -152,7 +152,11 @@ void main() {
       expect(delays, [1, 2, 4, 8, 16, 30]);
       expect(repo.sends, 1);
       expect(c.phase, ChatPhase.uncertain);
-      expect((c.error! as UiLocal).key, MessageKey.chatStreamUnconfirmed);
+      // WEBSYNC F1: this turn carries an acknowledged runId (run.started
+      // arrived before run.queued), so the exhausted wording is DELIVERED
+      // — F1 says a known run_id means the message was received, whatever
+      // the transport did after. Still never M027, still never a re-POST.
+      expect((c.error! as UiLocal).key, MessageKey.chatDeliveredReplyLoading);
       expect((c.error! as UiLocal).key, isNot(MessageKey.chatStateM027));
       c.dispose();
     },

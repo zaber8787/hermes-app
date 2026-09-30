@@ -66,10 +66,11 @@ def report_body(content: str) -> str:
 
 
 def is_ignored_report(content: str) -> bool:
-    """Empty or EXACTLY NO_REPLY after prefix removal — ignored-consumed.
-    A report merely CONTAINING the string elsewhere is never killed."""
+    """Empty or EXACTLY NO_REPLY/HEARTBEAT_OK after prefix removal —
+    ignored-consumed. A report merely CONTAINING the string elsewhere is
+    never killed."""
     body = report_body(content)
-    return body == "" or body == "NO_REPLY"
+    return body == "" or body in ("NO_REPLY", "HEARTBEAT_OK")
 
 
 def ledger_key(home: str, delivery_key: str) -> str:

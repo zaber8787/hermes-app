@@ -176,7 +176,7 @@ class AutoWakeObserver {
         continue; // delivery_key dedup, stable across pagination/restart
       }
       final body = reportBody(m.content);
-      if (body.isEmpty || body == 'NO_REPLY') {
+      if (body.isEmpty || body == 'NO_REPLY' || body == 'HEARTBEAT_OK') {
         ignored.add(dk); // ignored-CONSUMED: never re-evaluated
         continue;
       }
@@ -448,6 +448,8 @@ class DispatchPlan {
 /// The fixed wake sentence (server-owned; identical for every locale,
 /// device and install — it must NOT vary with UI language or clocks).
 class AutoWakeContract {
+  // i18n-exempt: cross-device protocol literal (server-owned wake sentence,
+  // matched byte-exactly by the admission ledger) — I18N-PLAN §5 class.
   static const canonicalInput = '請讀取新到的排程報告並簡短回覆。';
 }
 

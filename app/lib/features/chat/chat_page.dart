@@ -720,7 +720,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           // tone; ONLY observed stream failures stay red.
                           color: switch (c.error) {
                             UiLocal(key: MessageKey.chatStreamChecking) ||
-                            UiLocal(key: MessageKey.chatStreamUnconfirmed) =>
+                            UiLocal(key: MessageKey.chatStreamUnconfirmed) ||
+                            // WEBSYNC F1: delivered is a fact, not a fault.
+                            UiLocal(
+                              key: MessageKey.chatDeliveredReplyLoading,
+                            ) =>
                               Theme.of(context).colorScheme.tertiary,
                             _ => Theme.of(context).colorScheme.error,
                           },

@@ -190,6 +190,12 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.chatStreamUnconfirmed:
       'The result of this turn is still unconfirmed. Use "Re-check" to check again.',
 
+  // WEBSYNC F1: three-state split of the exhausted-turn wording.
+  MessageKey.chatDeliveredReplyLoading:
+      'Message delivered — your reply is still loading. Use "Re-check" to refresh it.',
+  MessageKey.chatStreamUnavailable:
+      'The reply stream is unavailable and this message was not found in history; it may not have been accepted. You can resend it — re-check first to avoid sending twice.',
+
   MessageKey.chatSteer: 'Steer',
   MessageKey.chatRemoteBusy: 'Active on another device',
   MessageKey.chatRemoteUnconfirmed: '⋯ (not yet confirmed in history)',
@@ -619,6 +625,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatStreamWaiting: '等待回覆（無輸出 {seconds} 秒）',
   MessageKey.chatStreamChecking: '暫未收到串流更新，{seconds} 秒後核對歷史；不會重送訊息。',
   MessageKey.chatStreamUnconfirmed: '尚無法確認這回合的結果。請使用「重新核對」確認。',
+  MessageKey.chatDeliveredReplyLoading: '訊息已送達，回覆載入中。可使用「重新核對」更新。',
+  MessageKey.chatStreamUnavailable: '回覆串流不可用，且歷史未見這則訊息，可能未入庫；可重送，建議先「重新核對」避免重複。',
 
   MessageKey.chatSteer: '插話',
   MessageKey.chatRemoteBusy: '其他裝置進行中',

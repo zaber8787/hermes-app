@@ -181,10 +181,13 @@ void main() {
     await opened.future;
     await c.recover();
     expect(c.phase, ChatPhase.uncertain);
-    expect(reads, 6);
+    // 6 ladder rounds + ONE WEBSYNC F1 terminal landing check (still a
+    // read-only history GET; the keepalive contract is the call list below
+    // — no restart on ANY recovery read).
+    expect(reads, 7);
     expect(calls.map((c) => c.method), ['start', 'stop']);
     await c.retryReconcile();
-    expect(reads, 12);
+    expect(reads, 14); // (6 ladder + 1 terminal) x2 — retry re-runs the same loop
     expect(calls.map((c) => c.method), ['start', 'stop']);
     c.dispose();
     await (await response.future).close();

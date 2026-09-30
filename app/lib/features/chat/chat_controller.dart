@@ -2481,9 +2481,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       if (budget != null && _clock().isAfter(budget)) {
         // The consumed 30s re-check window ended mid-backoff: stop with
         // the honest exhausted state, never loop on into a new window.
-        phase = ChatPhase.uncertain;
-        error = const UiMessage.local(MessageKey.chatRecoveryExhausted);
-        notifyListeners();
+        // WEBSYNC F1: still run the final read-only landing check —
+        // "budget spent" says nothing about whether the message arrived.
+        await _uncertainTerminal(token, epoch,
+            whenAbsent: MessageKey.chatRecoveryExhausted);
         return;
       }
       error = UiMessage.local(
@@ -2509,21 +2510,68 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // AUDIT-11 regression guard: exhausted rounds MUST leave recovering —
     // dropping this line strands the UI spinning in 「連線中斷…」 forever
     // (both the send-failure and keepalive-recovery paths end here).
-    phase = ChatPhase.uncertain;
     // 現況（8700 反代）：SSE 死掉不等於 server 殺 run——反代会替客戶端讀完
     // 串流，run 很可能仍在執行並照常落庫。這裡只在六輪歷史核對都拿不到結果
     // 時才標記 lost，作為「可能中斷」的保守提示；下次冷啟動的 bootstrap 會
     // 依 pending 紀錄用 read-only 輪詢重新驗證，而不是據此宣稱回合已死。
+    phase = ChatPhase.uncertain;
     try {
       await store.markLost(serverUrl, sid);
     } catch (_) {}
     if (!_owns(token) || epoch != _recoveryEpoch) return;
-    // SILENCE-DROP §3.2 rows 6-7: neutral causes (silence/recheck) must NOT
-    // claim the connection dropped — they say the turn's result is simply
-    // unconfirmed. Only an OBSERVED stream failure keeps the existing M027.
-    error = _observedStreamFailure
-        ? const UiMessage.local(MessageKey.chatStateM027)
-        : const UiMessage.local(MessageKey.chatStreamUnconfirmed);
+    // WEBSYNC F1 (three-state split): SILENCE-DROP §3.2 rows 6-7 already
+    // stopped claiming "dropped" for neutral causes; F1 goes one further and
+    // runs ONE final read-only landing check BEFORE any wording — a turn
+    // whose text demonstrably landed in history (or whose run the server
+    // acknowledged: run.started/run.queued) says "delivered, reply loading",
+    // and the resend bait is reserved for a turn positively NOT found in
+    // history (the old M027 fired on both).
+    await _uncertainTerminal(
+      token,
+      epoch,
+      whenAbsent: _observedStreamFailure
+          ? MessageKey.chatStreamUnavailable
+          : MessageKey.chatStreamUnconfirmed,
+    );
+  }
+
+  /// WEBSYNC F1 terminus shared by every exhausted-recovery path: one more
+  /// READ-ONLY reconciliation (history GET), then the three-state wording.
+  /// Acceptance evidence is POSITIVE only — a unique anchor in the freshly
+  /// read page (or a run the server acknowledged) — never inferred from a
+  /// failed or empty-and-never-checked read.
+  Future<void> _uncertainTerminal(
+    Object? token,
+    int epoch, {
+    required MessageKey whenAbsent,
+  }) async {
+    phase = ChatPhase.uncertain;
+    List<Message>? page;
+    try {
+      final fresh = await repo.messages(sid);
+      if (!_owns(token) || epoch != _recoveryEpoch) return;
+      page = fresh;
+      messages = mergeMessages([], fresh);
+      _offset = fresh.length;
+      hasOlder = fresh.length == 200;
+    } catch (_) {
+      // The check itself failed: fall back to the rows already in view
+      // (they are still positive evidence if the anchor happens to be in
+      // them) — absence is never concluded from a failed read.
+      page = List<Message>.from(messages);
+    }
+    if (!_owns(token) || epoch != _recoveryEpoch) return;
+    final inspection = inspectPendingHistory(
+      rows: page,
+      pendingText: pendingInput,
+      excludeIds: _beforeSend,
+    );
+    final landed =
+        inspection.anchorFound || inspection.ambiguous || live?.runId != null;
+    _refreshUserProjections();
+    error = landed
+        ? const UiMessage.local(MessageKey.chatDeliveredReplyLoading)
+        : UiMessage.local(whenAbsent);
     notifyListeners();
   }
 

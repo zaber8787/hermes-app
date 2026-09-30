@@ -503,14 +503,39 @@ async def skills_patch(request: web.Request) -> web.Response:
     })
 
 
+def _static_etag(target: pathlib.Path) -> str:
+    # WEBSYNC F6: stat-derived weak validator. aiohttp's own FileResponse
+    # ETag only covers files under ~128KiB, and main.dart.js is far above
+    # that — no-cache without a validator would re-download megabytes on
+    # every navigation. Size+mtime is exactly what a publish swap changes
+    # (and publish never edits a served file in place anymore).
+    st = target.stat()
+    return f'W/"{st.st_size:x}-{st.st_mtime_ns & 0xFFFFFFFF:x}"'
+
+
 async def static_handler(request: web.Request) -> web.StreamResponse:
     path = request.match_info.get("path") or "index.html"
     target = (ROOT / path).resolve()
     if not str(target).startswith(str(ROOT.resolve())) or not target.is_file():
-        return web.FileResponse(ROOT / "index.html")  # SPA 路由回落
+        # SPA 路由回落同样是 index.html 的內容：快取政策必須與 index 一致
+        # （WEBSYNC F6：回落分支曾漏掛 no-cache，舊 tab 可被它餵舊版）。
+        target = ROOT / "index.html"
+    if not target.is_file():
+        return web.Response(status=404)
+    etag = _static_etag(target)
+    if request.headers.get("If-None-Match") == etag:
+        return web.Response(status=304,
+                            headers={"ETag": etag, "Cache-Control": "no-cache"})
     resp = web.FileResponse(target)
-    if path == "index.html" or path == "flutter_bootstrap.js":
-        resp.headers["Cache-Control"] = "no-cache"  # 發佈即生效
+    # WEBSYNC F5/F6 policy choice, with the reason: the build carries a
+    # FIXED main.dart.js path (no content-hash URL), so max-age+immutable
+    # would be a lie — the correct pair is revalidate-always (no-cache)
+    # plus the weak ETag above: unchanged bodies come back as cheap 304s,
+    # and a swapped release can never be served from a stale cache entry.
+    # (Immutable URLs would instead require a hashed build chain — a
+    # bootstrap-format change we deliberately did not take here.)
+    resp.headers["Cache-Control"] = "no-cache"  # 發佈即生效
+    resp.headers["ETag"] = etag
     return resp
 
 
