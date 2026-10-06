@@ -33,8 +33,6 @@ import 'audit_cross_device_sync_test.dart' show FakeSyncRepo;
 const q = '幫我整理這份報告的重點';
 
 class GRepo extends FakeSyncRepo {
-  int stopCalls = 0;
-
   /// When set, every LATEST-page history GET waits on this future
   /// (listener-hole rigs).
   Completer<List<Message>>? historyGate;
@@ -390,8 +388,15 @@ void main() {
       await tester.pump();
       expect(
         userIds(tester),
-        ['1', 'pending'],
-        reason: 'one bubble for one turn — the preview overlaps pending',
+        ['1', 'remote:e1:oU', 'pending'],
+        // OFFLINE-SEND R3 §5.4 (contract update, surgical): this send is
+        // attempt-backed, so a runId-less same-text observation may NOT be
+        // hidden on text alone — it could belong to a different attempt
+        // with the same text. It renders instead as an UNCONFIRMED
+        // summary; nothing is deleted and the durable claim below still
+        // settles it (the no-loss guarantee this row always guarded).
+        reason: 'attempt-backed: identity-less preview stays visible, '
+            'unconfirmed — never text-hidden',
       );
       repo.post([const Message(id: '2', role: 'user', content: q)]);
       await tester.pump(const Duration(seconds: 6)); // rev moved -> GET
@@ -419,7 +424,10 @@ void main() {
       ];
       await tester.pump(const Duration(seconds: 6));
       await tester.pump();
-      expect(userIds(tester), ['1', 'pending']);
+      // R3 §5.4 (surgical): attempt-backed preview is no longer text-held —
+      // visible as an unconfirmed summary from the first frame; revealing
+      // the OTHER runId below keeps it independent, exactly as before.
+      expect(userIds(tester), ['1', 'remote:e1:oU', 'pending']);
       // Identity reveals: that observation belongs to ANOTHER run.
       repo.active = [
         runOf(
@@ -573,8 +581,14 @@ void main() {
       await tester.pump(); // settlement GET pending behind the gate
       expect(
         userIds(tester),
-        ['pending'],
-        reason: 'transcript user row is represented by the pending bubble',
+        ['7'],
+        // OFFLINE-SEND R3 §5.4 (contract update, surgical): the completed
+        // transcript row carries this run's OWN event-supplied durable id
+        // (identity, not a text guess), so it renders as the one
+        // representation and the pending bubble stands down. An
+        // attempt-backed transcript copy is never dropped on text
+        // equality — and never double-drawn either way.
+        reason: 'event-supplied durable row represents the turn exactly once',
       );
       gate.complete([
         Message(id: '7', role: 'user', content: q, timestamp: nowSec(tester)),

@@ -17,8 +17,10 @@ type only -- the topic is a secret and never reaches the log.
 """
 from __future__ import annotations
 
+import json
 import logging
 import queue
+from contextlib import suppress
 import threading
 import urllib.parse
 import urllib.request
@@ -27,6 +29,7 @@ log = logging.getLogger("hermes-app-compat.push")
 
 PRIORITY = {"default": "3", "high": "4", "urgent": "5"}
 TITLE_CAP = 120
+TITLE_BYTES = 120           # UTF-8 bytes for JSON-body titles (Unicode aware)
 BODY_BYTES = 1900          # UTF-8 bytes, well under ntfy's 4096 message limit
 TIMEOUT_SECONDS = 5
 _QUEUE_CAP = 128            # bounded backlog; a full queue drops, never grows
@@ -51,6 +54,9 @@ def utf8_cut(text: str, cap: int) -> str:
 
 
 def _send(job: tuple) -> None:
+    if job[0] == "json":
+        _send_json(job[1])
+        return
     server, topic, title, message, priority, tags = job
     try:
         url = server + "/" + urllib.parse.quote(topic, safe="")
@@ -63,6 +69,30 @@ def _send(job: tuple) -> None:
             response.read()
     except Exception as exc:  # push must never break the agent loop
         log.debug("ntfy publish failed: %s", type(exc).__name__)
+
+
+def _send_json(fields: tuple) -> None:
+    """JSON-body publish: the ONLY way a Unicode title reaches the hub
+    (HTTP header values stay ASCII). Body bytes keep the hard cap; the title
+    is byte-capped like before. One attempt, no retry, never raises."""
+    server, topic, title, message, priority, tags, on_result = fields
+    try:
+        payload = json.dumps({"topic": topic, "title": title, "message": message,
+                              "priority": PRIORITY.get(priority, PRIORITY["default"]),
+                              "tags": tags or []}, ensure_ascii=False).encode("utf-8")
+        request = urllib.request.Request(server, data=payload, method="POST")
+        request.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
+            response.read()
+    except Exception as exc:
+        log.debug("ntfy json publish failed: %s", type(exc).__name__)
+        if on_result is not None:
+            with suppress(Exception):
+                on_result(False, type(exc).__name__)
+        return
+    if on_result is not None:
+        with suppress(Exception):
+            on_result(True, None)
 
 
 def _loop() -> None:
@@ -97,3 +127,29 @@ def publish(server: str, topic: str, title: str, message: str, *,
         log.debug("ntfy publish dropped (bounded queue full)")
     except Exception as exc:
         log.debug("ntfy publish enqueue failed: %s", type(exc).__name__)
+
+
+def publish_json(server: str, topic: str, title: str, message: str, *,
+                 priority: str = "default", tags: list[str] | None = None,
+                 on_result=None) -> bool:
+    """Enqueue one JSON-body notification (Unicode title allowed). Returns
+    whether the LOCAL queue accepted it — accepted is not delivery; the
+    optional on_result(ok, sanitized_error_type) records the single POST
+    attempt's outcome. Never raises, never blocks, echoes the same tag."""
+    if not server or not topic:
+        return False
+    title = utf8_cut(title, TITLE_BYTES)
+    message = utf8_cut(message, BODY_BYTES)
+    safe_tags = ["hermes-agent"] + [
+        tag for tag in (tags or []) if tag and tag != "hermes-agent"]
+    try:
+        _ensure_worker()
+        _jobs.put_nowait(("json", (server, topic, title, message, priority,
+                                   safe_tags, on_result)))
+        return True
+    except queue.Full:
+        log.debug("ntfy publish dropped (bounded queue full)")
+        return False
+    except Exception as exc:
+        log.debug("ntfy publish enqueue failed: %s", type(exc).__name__)
+        return False

@@ -88,3 +88,11 @@ key.properties
 .wakecap-fix-evidence/
 .websync-evidence/
 .websync-evidence/
+.selfwake-evidence/
+.offlinesend-evidence/
+.crossdevstop-evidence/
+
+.toolcarddup-evidence/
+
+.approvalpush-evidence/
+scripts/watch-nudge.sh

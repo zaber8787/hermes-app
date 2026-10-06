@@ -44,6 +44,11 @@ class ActivityRun {
   bool get isTerminal => terminalStatuses.contains(status);
   bool get statusKnown => terminalStatuses.contains(status) || liveStatuses.contains(status);
 
+  // CROSSDEV-STOP R1: pure status predicates over the SAME sets (parsing and
+  // every existing consumer stay byte-compatible).
+  static bool isTerminalStatus(String s) => terminalStatuses.contains(s);
+  static bool isLiveStatus(String s) => liveStatuses.contains(s);
+
   static ActivityRun fromJson(Map<String, dynamic> json) {
     final observationId = json['observation_id'];
     final status = json['status'];

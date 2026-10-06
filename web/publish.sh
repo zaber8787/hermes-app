@@ -42,7 +42,10 @@ mv -Tf "$root/web/.current.tmp.$$" "$root/web/current"
 
 # 清理：保留 current 與下一個最新的 release 讓 in-flight 請求讀完；其餘
 # 只在「一小時內沒有任何新檔」時才刪除（并发發佈/剛上传的目錄自保）。
-current_target="$(readlink web/current)"
+# 路徑一律以 $root/web 為基準（歷史版本混用了 $root 與 $root/web 兩種
+# 相對基準，build_app.sh 之後 cwd 已不在 $root，readlink 失敗直接 set -e 中止）。
+cd "$root/web"
+current_target="$(readlink current)"
 mapfile -t ordered < <(ls -1dt releases/*-web* 2>/dev/null)
 if [ -n "$current_target" ]; then
   rest=()
@@ -56,4 +59,4 @@ for d in "${ordered[@]:2}"; do
     rm -rf -- "$d"
   fi
 done
-echo "web ${VERSION} live: $(readlink -f web/current) (prev kept: ${keep_prev:-none})"
+echo "web ${VERSION} live: $(readlink -f current) (prev kept: ${keep_prev:-none})"

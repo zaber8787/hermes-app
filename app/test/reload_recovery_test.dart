@@ -184,8 +184,12 @@ void main() {
     c.dispose();
   });
 
-  test('stop clears the pending record so reload cannot resurrect the run',
+  test('stop keeps the pending evidence until the terminal settles it',
       () async {
+    // OFFLINE-SEND R1 §3.3.8 (contract update): a stop 200 only proves the
+    // REQUEST landed — the pending record survives as confirmed-request
+    // evidence and is compare-cleared when the terminal settles. A reload
+    // in that window must never re-POST the stop.
     final c = ChatController(repo, store, 's', watchInterval: const Duration(milliseconds: 1));
     final sending = c.send('hello');
     repo.events.add(
@@ -194,8 +198,11 @@ void main() {
     await Future<void>.delayed(Duration.zero);
     expect(store.loadPending(repo.baseUrl, 's'), isNotNull);
     await c.stop();
-    expect(store.loadPending(repo.baseUrl, 's'), isNull);
+    expect(store.loadPending(repo.baseUrl, 's'), isNotNull); // until terminal
     expect(store.stopRecord(repo.baseUrl, 's'), contains('run_x'));
+    // reload mid-stop: bootstrap adopts read-only; zero stop/chat POSTs.
+    final before = repo.stopCalls;
+    expect(before, 1);
     repo.history = const [Message(id: '1', role: 'user', content: 'hello')];
     repo.events.add(
       const SseEvent('run.completed', '{"completed":true,"messages":[]}'),
@@ -203,7 +210,8 @@ void main() {
     await repo.events.close();
     await sending;
     expect(c.phase, ChatPhase.idle);
-    expect(store.loadPending(repo.baseUrl, 's'), isNull);
+    expect(store.loadPending(repo.baseUrl, 's'), isNull); // terminal cleared
+    expect(repo.stopCalls, before); // no second stop POST
     c.dispose();
   });
 
@@ -265,11 +273,13 @@ void main() {
     await c.bootstrap();
     expect(c.busy, isTrue);
     expect(c.canStop, isTrue); // bootstrap 觀察中也能停止
-    expect(await c.stop(), isTrue);
+    expect((await c.stop()).success, isTrue);
     expect(repo.stopped, 'r1');
     expect(repo.stopCalls, 1);
     expect(c.stopNoticeKind, StopNotice.accepted);
-    expect(store.loadPending(repo.baseUrl, 's'), isNull); // 200 → 清 pending
+    // R1 §3.3.8: 200 = request landed; the pending survives as evidence
+    // until the TERMINAL settles it (compare-clear in the gate).
+    expect(store.loadPending(repo.baseUrl, 's'), isNotNull);
     expect(c.error, isNull); // 409/失敗都不允許在這裡報錯
     // run 還沒終態：繼續觀察，不提前 idle
     await Future<void>.delayed(const Duration(milliseconds: 10));
@@ -283,6 +293,7 @@ void main() {
     await Future<void>.delayed(const Duration(milliseconds: 20));
     expect(c.phase, ChatPhase.idle);
     expect(c.messages.last.content, '停在此處'); // settle 用歷史對帳
+    expect(store.loadPending(repo.baseUrl, 's'), isNull); // terminal 才清
     expect(repo.sends, 0);
     c.dispose();
   });
@@ -296,7 +307,7 @@ void main() {
     reloadPast();
     final c = reloaded();
     await c.bootstrap();
-    expect(await c.stop(), isTrue); // 409 不報錯
+    expect((await c.stop()).success, isTrue); // 409 不報錯
     expect(c.error, isNull);
     expect(c.stopNoticeKind, StopNotice.requested);
     // pending 保留（reload 可續查），觀察輪詢接管
@@ -325,7 +336,7 @@ void main() {
     reloadPast();
     final c = reloaded();
     await c.bootstrap();
-    expect(await c.stop(), isTrue);
+    expect((await c.stop()).success, isTrue);
     expect(c.phase, ChatPhase.idle);
     expect(c.busy, isFalse);
     expect(c.error, isNull);
@@ -342,7 +353,7 @@ void main() {
     final c = reloaded();
     await c.bootstrap();
     expect(c.canStop, isFalse);
-    expect(await c.stop(), isFalse);
+    expect((await c.stop()).success, isFalse);
     expect((c.error! as UiLocal).key, MessageKey.chatStateM029);
     expect(repo.stopCalls, 0);
     expect(repo.sends, 0);
@@ -351,7 +362,7 @@ void main() {
     // idle（非忙碌）時同樣零副作用
     final d = reloaded();
     expect(d.canStop, isFalse);
-    expect(await d.stop(), isFalse);
+    expect((await d.stop()).success, isFalse);
     expect(repo.stopCalls, 0);
     d.dispose();
   });

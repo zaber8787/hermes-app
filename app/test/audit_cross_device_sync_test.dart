@@ -31,6 +31,11 @@ class FakeSyncRepo extends HermesRepository {
   List<Message> history = [];
   int historyReads = 0, detailReads = 0, activityReads = 0, chatCalls = 0;
 
+  // CROSSDEV-STOP R2 §5.5: the STOP ledger, kept apart from chatCalls —
+  // "no chat POSTs" alone can never prove "no stop POST".
+  int stopCalls = 0;
+  final stopRunIds = <String>[];
+
   // The activity fixture: move `rev` whenever the durable side changes.
   int revCount = 0, revLatest = 0;
   String epoch = 'e1';
@@ -49,6 +54,23 @@ class FakeSyncRepo extends HermesRepository {
     chatCalls++;
     return events.stream;
   }
+
+  @override
+  Future<void> stop(String runId) async {
+    stopCalls++;
+    stopRunIds.add(runId);
+  }
+
+  // CROSSDEV-STOP R2: the remote-scoped POST wrapper + the read-only
+  // status the reconciliation observer rides — recorded, never real HTTP.
+  @override
+  Future<void> stopWithDeadline(String runId) async {
+    stopCalls++;
+    stopRunIds.add(runId);
+  }
+
+  @override
+  Future<Json> runStatus(String runId) async => {'status': 'running'};
 
   @override
   Future<List<Message>> messages(
@@ -186,8 +208,9 @@ void main() {
   });
 
   testWidgets(
-    'remote run: temp user row before the durable write; send locked; '
-    'a typed send fires ZERO POSTs and /stop never targets the remote run',
+    'remote run: temp user row before the durable write; send locked; a '
+    'typed send fires ZERO POSTs and /stop posts stop to the exact remote '
+    'runId only (§5.5)',
     (tester)
     async {
       repo.post([const Message(id: '1', role: 'user', content: '甲')]);
@@ -222,16 +245,29 @@ void main() {
       await tester.pump();
       expect(repo.chatCalls, 0, reason: 'no POST ride-along');
 
-      // /stop while only a REMOTE run exists: must not aim at the remote id.
+      // CROSSDEV-STOP R2 §5.5 surgical expectation update: with exactly ONE
+      // fresh stoppable remote row and no local target, /stop NOW aims the
+      // stop POST at that exact runId — the chat-POST ban below is unchanged
+      // (a stop is not a send). The STOP LEDGER (not chatCalls alone) is
+      // what proves the targeting.
       await tester.enterText(find.byType(TextField), '/stop');
       await tester.pump();
       await tester.tap(find.byIcon(Icons.arrow_upward));
       await tester.pump();
+      await tester.pump(const Duration(seconds: 1));
       expect(
         repo.chatCalls,
         0,
-        reason: '/stop never targets a run this page does not own',
+        reason: '/stop must never POST chat — the ban survives §5.5',
       );
+      expect(
+        repo.stopRunIds,
+        ['runremote'],
+        reason:
+            '§5.5: one fresh stoppable remote row → exactly one stop POST '
+            'to the exact remote runId, nothing else',
+      );
+      expect(repo.stopCalls, 1);
     },
   );
 

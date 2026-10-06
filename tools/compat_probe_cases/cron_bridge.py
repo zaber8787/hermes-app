@@ -212,7 +212,9 @@ print("WORKER", result, error)
                   time.time(), time.time(), time.time()))
     conn.commit()
     conn.close()
-    check(store.drain_home(home)["delivered"] == 1, "spool replay after ack-crash dedups")
+    drain_out = store.drain_home(home)
+    check(drain_out["delivered"] == 0 and drain_out["deduped"] == 1,
+          "spool replay after ack-crash dedups (delivered/deduped counted apart)")
     check(len(db.get_messages(sid_s)) == 1, "ack-crash replay created no second row")
     # explicit fresh-thread propagation (mirrors upstream copy_context fallback)
     token = app_platform.DELIVERY_IDENTITY.set({"job_id": "jobCT", "execution_id": "execCT2",

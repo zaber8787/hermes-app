@@ -26,8 +26,23 @@ class IoHttpPort implements HttpPort {
     int? contentLength,
     Future<void>? abortTrigger,
     Duration? headersTimeout,
+    DispatchObservation? observation,
   }) async {
-    final request = await _client.openUrl(method, uri);
+    // R3 §5.2 (IO): openUrl IS the dispatch — the CALL returning a future
+    // means bytes may be in flight. A synchronous throw from the call
+    // itself (URL/argument validation, before any connection) is the only
+    // provable before-dispatch failure; anything from the awaited result
+    // (refused, DNS, handshake, abort) leaves the stage at
+    // dispatchInvoked and the outcome honestly unknown.
+    final Future<HttpClientRequest> opening;
+    try {
+      opening = _client.openUrl(method, uri);
+    } on Object {
+      observation?.failedBeforeDispatch('requestSetup');
+      rethrow;
+    }
+    observation?.dispatchInvoked();
+    final request = await opening;
     request.followRedirects = false; // Never forward credentials cross-host.
     if (contentLength != null) request.contentLength = contentLength;
     headers.forEach((k, v) => request.headers.set(k, v));
@@ -54,6 +69,9 @@ class IoHttpPort implements HttpPort {
       } catch (_) {}
       throw const PortTimeout();
     }
+    // R3: headers are PROVEN now (both 2xx and error paths) — record before
+    // anyone drains a single body byte.
+    observation?.headersReceived(response.statusCode);
     if (abortTrigger != null) {
       // detachSocket+destroy is the only dart:io way to cut a live response.
       unawaited(abortTrigger.then((_) async {

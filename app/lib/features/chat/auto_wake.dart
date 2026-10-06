@@ -74,11 +74,14 @@ class AutoWakeObserver {
     );
   }
 
-  /// Bridge report body minus the fixed "[Cron report: name]" prefix, for
-  /// the NO_REPLY / empty checks. WHOLE-body equality only — a report that
-  /// merely mentions NO_REPLY must never be killed.
-  static String reportBody(String content) =>
-      content.replaceFirst(_prefix, '').trim();
+  /// Bridge report body minus the fixed "[Cron report: name]" prefix AND
+  /// the cron header block (up to the dashed separator), for the
+  /// NO_REPLY / HEARTBEAT_OK / empty checks. WHOLE-body equality only — a
+  /// report that merely mentions those must never be killed.
+  static String reportBody(String content) => content
+      .replaceFirst(_prefix, '')
+      .replaceFirst(RegExp(r'^(.*?\n)?-{6,}\n', dotAll: true), '')
+      .trim();
 
   /// The successful LATEST-page commit is the only scan entry (plan §2:
   /// committed messages are the truth — stale GETs, old pages and repeat
@@ -176,7 +179,13 @@ class AutoWakeObserver {
         continue; // delivery_key dedup, stable across pagination/restart
       }
       final body = reportBody(m.content);
-      if (body.isEmpty || body == 'NO_REPLY' || body == 'HEARTBEAT_OK') {
+      final stripped = body
+          .replaceAll(RegExp(r'\n*請讀取新到的排程報告並簡短回覆。\s*$'), '')
+          .replaceAll(RegExp(r'\n*To stop or manage this job, send me a new '
+              r'message \(e\.g\. "stop reminder [^"]+"\)\.?\s*$'), '')
+          .trim();
+      if (stripped.isEmpty || stripped == 'NO_REPLY' ||
+          stripped == 'HEARTBEAT_OK') {
         ignored.add(dk); // ignored-CONSUMED: never re-evaluated
         continue;
       }

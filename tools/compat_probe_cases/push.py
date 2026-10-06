@@ -25,6 +25,31 @@ COMMAND2 = "rm -rf /tmp/compat-probe-never-executed-second"
 SENTINEL = "".join(["sk-", "a1b2c3d4e5f6g7h8i9j0abcdefgh"])  # synthetic; join keeps hygiene-gate's credential-value capture empty
 
 
+APPROVAL_TITLE_PREFIX = "Hermes 待核准\uff5c"  # compose() zh-TW initial template
+
+
+def _approval_posts(hub):
+    """JSON-body posts (Unicode title path) that are approval notes."""
+    out = []
+    for post in hub.posts:
+        try:
+            payload = json.loads(post["body"].decode("utf-8"))
+        except Exception:
+            continue
+        if str(payload.get("title", "")).startswith(APPROVAL_TITLE_PREFIX):
+            out.append(post)
+    return out
+
+
+async def _wait_approval(hub, count=1, timeout=25.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if len(_approval_posts(hub)) >= count:
+            return
+        await asyncio.sleep(0.02)
+    raise AssertionError(f"hub did not record {count}x immediate approval notes")
+
+
 class Hub:
     def __init__(self):
         self.posts = []
@@ -251,7 +276,12 @@ async def case_push(args, server, check):
             gates["after"].set()
             await drain_to_eof(response)
             check(outcomes["approval-inline"]["approved"], "guard obeyed the in-session approval")
-            check(await hub.settle() == 0, "attached approval + success pushed nothing")
+            posted = await hub.settle()
+            check(posted == 1 and len(_approval_posts(hub)) == 1
+                  and not hub.kind(TITLE_APPROVAL) and not hub.kind(TITLE_REPLY),
+                  "approval note is IMMEDIATE and once, viewer-independent (B4/R4); "
+                  "attached success still adds no reply push")
+            hub.posts.clear()
 
             # -- B: attached exception / attached success -> zero pushes
             response = await client.post(f"/api/sessions/{sid}/chat/stream",
@@ -271,15 +301,16 @@ async def case_push(args, server, check):
             response.close()
             await wait_detached(adapter, run_id)
             gates["approval"].set()
-            await hub.wait_for(TITLE_APPROVAL)
+            await _wait_approval(hub, 1)
             check("approval-armed" not in outcomes, "dangerous action stays blocked until resolved")
             code, _ = await resolve(client, run_id)
             check(code == 200, "detached approval resolves over HTTP via the polled request_id")
             settled = await wait_settled(adapter, run_id)
             await hub.settle()
             check(settled["status"] == "completed", "post-detached run completed, not cancelled")
-            check(len(hub.kind(TITLE_APPROVAL)) == 1 and len(hub.kind(TITLE_REPLY)) == 1
-                  and not hub.kind(TITLE_FAILED), "approval=1 reply=1 failed=0")
+            check(len(_approval_posts(hub)) == 1 and len(hub.kind(TITLE_REPLY)) == 1
+                  and not hub.kind(TITLE_FAILED) and not hub.kind(TITLE_APPROVAL),
+                  "approval=1 (immediate) reply=1 failed=0; no legacy-title duplicate")
             hub.posts.clear()
 
             # -- D: disconnect mid-turn; the turn keeps running (barrier), reply once
@@ -342,17 +373,18 @@ async def case_push(args, server, check):
             response.close()
             await wait_detached(adapter, run_id)
             gates["one"].set()
-            await hub.wait_for(TITLE_APPROVAL, 1)
+            await _wait_approval(hub, 1)
             code, _ = await resolve(client, run_id)
             await wait_outcome("two-1")
             check(code == 200 and outcomes["two-1"]["approved"], "first card resolved over HTTP")
             gates["two"].set()
-            await hub.wait_for(TITLE_APPROVAL, 2)
+            await _wait_approval(hub, 2)
             code, _ = await resolve(client, run_id)
             check(code == 200, "second card resolved over HTTP")
             await wait_settled(adapter, run_id)
             await hub.settle()
-            check(len(hub.kind(TITLE_APPROVAL)) == 2 and len(hub.kind(TITLE_REPLY)) == 1,
+            check(len(_approval_posts(hub)) == 2 and len(hub.kind(TITLE_REPLY)) == 1
+                  and not hub.kind(TITLE_APPROVAL),
                   "two distinct cards -> approval=2 reply=1 (no run-id-wide dedup)")
             hub.posts.clear()
 
@@ -365,7 +397,9 @@ async def case_push(args, server, check):
             await wait_outcome("two-1")
             check(code == 200, "first card resolved while attached")
             await hub.settle()
-            check(not hub.posts, "attached resolved card pushed nothing")
+            check(len(_approval_posts(hub)) == 1,
+                  "the first request's note is immediate (B4); the RESOLVED card "
+                  "adds nothing beyond that one note")
             response.close()
             await wait_detached(adapter, run_id)
             gates["two"].set()
@@ -373,8 +407,8 @@ async def case_push(args, server, check):
             check(code == 200, "post-detach second card denied via HTTP")
             await wait_settled(adapter, run_id)
             await hub.settle()
-            check(len(hub.kind(TITLE_APPROVAL)) == 1,
-                  "only the unresolved post-detach card pushed")
+            check(len(_approval_posts(hub)) == 2 and not hub.kind(TITLE_APPROVAL),
+                  "two requests -> exactly two immediate notes, none duplicated by detach")
             hub.posts.clear()
 
             # -- J: explicit stop after detach keeps cancel semantics, pushes nothing

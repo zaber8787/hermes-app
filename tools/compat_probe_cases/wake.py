@@ -278,6 +278,87 @@ async def case_wake(args, server, check):
         check(r.status == 400 and sync["error"]["code"] == "wake_transport_unsupported",
               "sync chat never consumes a wake batch")
 
+        # ---- SELFWAKE S1: exception never reverts an ALREADY-STARTED run ------
+        sid_l = "api_wake_launch1"
+        db.create_session(sid_l, model="compat-fixture", source="api_server")
+        await deliver_report(bstore, sid_l, "launch evidence report",
+                             job="jobL", execution="execL1")
+        kl = bstore.delivery_key(home=str(home), job_id="jobL",
+                                 execution_id="execL1", session_id=sid_l)
+        async with client.post(f"/api/sessions/{sid_l}/auto-wake/admit", headers=AUTH,
+                               json={"delivery_keys": [kl]}) as r:
+            ladmit = await r.json()
+        lbatch = ladmit["batch_id"]
+        # (a) PROVEN pre-launch rejection: concurrency admission refuses before
+        # the target stamps any evidence -> the claim goes back to reserved.
+        from gateway.platforms import api_server as api_mod
+        with __import__("unittest.mock", fromlist=["patch"]).patch.object(
+                api_adapter, "_concurrency_limited_response",
+                lambda: api_mod._error_response("limited", 429, code="busy")):
+            async with client.post(f"/api/sessions/{sid_l}/chat/stream", headers=AUTH,
+                                   json={"input": mod.CANONICAL_INPUT,
+                                         "wake_batch": lbatch}) as r:
+                check(r.status == 429, "pre-launch rejection answers with its status")
+        view = await asyncio.to_thread(wstore.receipt, home, batch_id=lbatch, resolved=sid_l)
+        check(view["receipt"]["state"] == "reserved",
+              "provably-undispatched exception returns the claim to reserved")
+        # (b) Post-launch exception (SSE prepare fails AFTER create_task): the
+        # run may already be executing — the batch must NOT return to reserved.
+        async def _boom(*_a, **_k):
+            raise RuntimeError("prepared SSE failed after task launch")
+        with __import__("unittest.mock", fromlist=["patch"]).patch.object(
+                api_adapter, "_prepare_sse_response", _boom):
+            async with client.post(f"/api/sessions/{sid_l}/chat/stream", headers=AUTH,
+                                   json={"input": mod.CANONICAL_INPUT,
+                                         "wake_batch": lbatch}) as r:
+                check(r.status >= 400, "post-launch prepare failure surfaces as an error")
+        await asyncio.sleep(0.2)
+        view2 = await asyncio.to_thread(wstore.receipt, home, batch_id=lbatch, resolved=sid_l)
+        state2 = view2["receipt"]["state"]
+        check(state2 in ("accepted", "terminal", "uncertain-consumed"),
+              "exception after launch NEVER reverts to reserved (double-run blocker)")
+        if state2 == "accepted":
+            await asyncio.to_thread(wstore.report, home, batch_id=lbatch,
+                                    resolved=sid_l, state="terminal")
+
+        # ---- SELFWAKE S1: durable merge keeps report + wake rows separate ------
+        seams = wake_ref()
+        merge_pass = seams.get("merge_pass")
+        check(callable(merge_pass), "wake merge-protection seam installed")
+        from agent.context_compressor import _DB_PERSISTED_MARKER
+        from agent import agent_runtime_helpers as arh
+
+        def _report_dict():
+            row = {"role": "user", "content": "[Cron report: jobP]\nbody text",
+                   "display_kind": "internal_notification",
+                   "display_metadata": json.dumps({"hermes_app_cron": {
+                       "schema": 1, "job_id": "jobP", "execution_id": "execP",
+                       "delivery_key": "a" * 64, "original_session_id": "x",
+                       "digest": "b" * 64}}), "_row_id": 42}
+            row[_DB_PERSISTED_MARKER] = True
+            return row
+        rep, wake = _report_dict(), {"role": "user", "content": mod.CANONICAL_INPUT}
+        out, made = merge_pass([rep, wake])
+        check(len(out) == 2 and made == 0
+              and rep["content"] == "[Cron report: jobP]\nbody text"
+              and rep.get(_DB_PERSISTED_MARKER) is True
+              and out[1] is wake and "display_kind" not in wake,
+              "report + canonical wake stay TWO durable rows; no metadata absorption")
+        rep2 = _report_dict()
+        out2, made2 = merge_pass([rep2, {"role": "user", "content": "a normal follow-up"}])
+        check(len(out2) == 1 and made2 == 1, "other merges are byte-for-byte unchanged")
+        plain_a, plain_b = {"role": "user", "content": "one"}, {"role": "user", "content": "two"}
+        out3, made3 = merge_pass([plain_a, plain_b])
+        check(len(out3) == 1 and made3 == 1 and plain_a["content"] == "one\n\n" + "two",
+              "plain adjacent users still merge exactly as upstream")
+        wire_a = _report_dict()
+        # The wire side is unchanged: request assembly merges API copies, and
+        # the ORIGINAL pass (kept for reference) still merges this pair.
+        out4, made4 = arh._merge_consecutive_users([_report_dict(),
+                                                    {"role": "user",
+                                                     "content": mod.CANONICAL_INPUT}])
+        check(len(out4) == 1 and made4 == 1, "original pass untouched (wire merge intact)")
+
         # ---- auth: anonymous admit is refused ---------------------------------
         async with client.post(f"/api/sessions/{sid}/auto-wake/admit",
                                json={"delivery_keys": [key1]}) as r:

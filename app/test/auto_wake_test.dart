@@ -148,10 +148,22 @@ void main() {
       report('3', '   ', exec: 'r2'),
       report('4', 'we discussed NO_REPLY handling', exec: 'r3'),
       report('5', 'HEARTBEAT_OK', exec: 'r4'),
+      // production shape: header block + heartbeat + cron footer + merged wake input
+      Message(
+        id: '6',
+        role: 'user',
+        displayKind: 'internal_notification',
+        content: '[Cron report: J]\nCronjob Response: J\n(job_id: J)\n'
+            '-------------\n\nHEARTBEAT_OK\n\n'
+            'To stop or manage this job, send me a new message '
+            '(e.g. "stop reminder J").\n\n請讀取新到的排程報告並簡短回覆。',
+        cronProvenance: CronProvenance(
+            schema: 1, jobId: 'J', executionId: 'r5', deliveryKey: dk('J:r5')),
+      ),
     ]);
     expect(queued(o).map((q) => q['dk']), [dk('J:r3')]);
     expect(o.state!['ignoredKeys'],
-        containsAll([dk('J:r1'), dk('J:r2'), dk('J:r4')]));
+        containsAll([dk('J:r1'), dk('J:r2'), dk('J:r4'), dk('J:r5')]));
     // Reconcile must NOT reset ignored verdicts:
     await commit(o, [report('2', 'NO_REPLY', exec: 'r1')]);
     expect(queued(o).map((q) => q['dk']), [dk('J:r3')]);

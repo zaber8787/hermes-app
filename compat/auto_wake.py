@@ -55,21 +55,36 @@ def provenance_of(row) -> dict | None:
 
 
 def report_body(content: str) -> str:
-    """Bridge body minus the fixed name prefix (whole-equality checks only)."""
+    """Bridge body minus the fixed name prefix and cron header block
+    (``[Cron report: x]``…dashes line); raw-delivery shape supported too."""
     if not isinstance(content, str):
         return ""
+    import re
     if content.startswith(CONTENT_PREFIX):
         newline = content.find("]\n")
         if newline != -1:
-            return content[newline + 2:].strip()
+            content = content[newline + 2:]
+        # cron header block: everything up to the dashed separator line
+        content = re.sub(r'(?s)^(.*?\n)?-{6,}\n', '', content, count=1)
     return content.strip()
 
 
+CRON_FOOTER_RE = (r'\n*To stop or manage this job, send me a new message '
+                  r'\(e\.g\. "stop reminder [^"]+"\)\.?\s*$')
+# observed: after the strict-alternation merge the stored survivor row may
+# carry the fixed wake input appended — strip it too, else a heartbeat that
+# was once woken on stays "eligible" forever
+WAKE_INPUT_RE = r'\n*請讀取新到的排程報告並簡短回覆。\s*$'
+
+
 def is_ignored_report(content: str) -> bool:
-    """Empty or EXACTLY NO_REPLY/HEARTBEAT_OK after prefix removal —
-    ignored-consumed. A report merely CONTAINING the string elsewhere is
-    never killed."""
+    """Empty or EXACTLY NO_REPLY/HEARTBEAT_OK after prefix, cron footer and
+    appended wake-input removal — ignored-consumed. A report merely
+    CONTAINING either string inside its body is never killed."""
+    import re
     body = report_body(content)
+    body = re.sub(WAKE_INPUT_RE, '', body)
+    body = re.sub(CRON_FOOTER_RE, '', body).strip()
     return body == "" or body in ("NO_REPLY", "HEARTBEAT_OK")
 
 

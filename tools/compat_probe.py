@@ -17,7 +17,7 @@ import tempfile
 import time
 
 CASES = ("upload", "limits", "media", "history", "approval", "skills", "activity", "push",
-         "cron_bridge", "wake", "wakecap")
+         "approval_inbox", "approval_push", "cron_bridge", "wake", "wakecap", "selfwake")
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -174,9 +174,12 @@ def offline(args):
                 "skills": "tools.skills_tool._find_all_skills",
                 "activity": "APIServerAdapter activity snapshot / run-status & chat hooks / registry",
                 "push": "session-stream approval/prepare/write/drain/status wrappers / ntfy publisher",
+                "approval_inbox": "session-stream/runs notify capture / pending GET / exact POST / settle bridge",
+                "approval_push": "immediate dispatcher / reminder timer / Unicode JSON title / exit hand-off and rollback",
                 "cron_bridge": "app platform registration + cron scheduler identity/mirror/outcome shims / atomic bridge writer",
                 "wake": "messages provenance / auto-wake admission ledger, quota, receipts, dispatch CAS",
                 "wakecap": "hot-reload route sync: live/frozen routers resolve compat route rows to the current handlers",
+                "selfwake": "server self-wake: durable intents in the receipt transaction, generation/cutoff, reconciliation, shadow/off gates, chain fuse, audit",
                 "control": "clean HEAD without plugin", "lifecycle": "register/on_unload transactions",
             }[case]
             result["expected"] = "all selected behavior assertions pass"

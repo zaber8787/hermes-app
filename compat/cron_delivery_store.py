@@ -105,8 +105,24 @@ def open_bridge(home: Path) -> sqlite3.Connection:
             conn.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)")
             conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('version', ?)",
                          (str(BRIDGE_VERSION),))
+            from . import self_wake
+            self_wake.ensure_bridge_schema(conn)
             conn.commit()
         return conn
+
+
+def _self_wake_intent(conn, home, session_id, key, row_id, reason):
+    """SELFWAKE: intent+receipt in ONE transaction. Registration only — the
+    worker decides everything else; this never touches models or HTTP."""
+    try:
+        from . import self_wake
+        return self_wake.on_delivered(conn, home=home, session_id=session_id,
+                                       delivery_key=key, row_id=row_id, reason=reason)
+    except Exception as exc:
+        # An intent is a TODO row, never delivery: the receipt still commits.
+        # Reconciliation recovers the gap (plan §1 crash-gap).
+        log.warning("selfwake intent skipped: %s", type(exc).__name__)
+        return None
 
 
 def _receipt(conn, key, home, execution_id, session_id, status, *, row_id=None, error=None,
@@ -200,11 +216,19 @@ def deliver(*, session_id: str, content: str, identity, media_files=None, home: 
         # the committed row's digest and refuses to overwrite (conflict).
     outcome = _attempt(home, session_id, content, identity, key)
     if outcome["status"] in ("delivered", "dedup"):
+        fresh = outcome["status"] == "delivered"
         with _bridge_lock:
             conn.execute("DELETE FROM pending WHERE delivery_key = ?", (key,))
             _receipt(conn, key, str(home), execution_id, session_id, "delivered",
                      row_id=outcome["row_id"], digest=report_digest(content))
+            if fresh:
+                # SELFWAKE hook: same transaction as the delivered receipt.
+                _self_wake_intent(conn, str(home), session_id, key, outcome["row_id"],
+                                  "delivered-direct")
             conn.commit()
+        if fresh:
+            from . import self_wake
+            self_wake.delivered_event(home)
     elif outcome["status"] == "queued":
         with _bridge_lock:
             _receipt(conn, key, str(home), execution_id, session_id, "queued")
@@ -328,18 +352,30 @@ def drain_home(home: Path, *, now: float | None = None):
         rows = conn.execute(
             "SELECT * FROM pending WHERE next_retry_at <= ? AND attempts < ? ORDER BY"
             " next_retry_at LIMIT 32", (now, DRAIN_MAX_ATTEMPTS)).fetchall()
-    delivered = queued = failed = 0
+    delivered = deduped = queued = failed = 0
+    fresh_keys = []
     for row in rows:
         identity = json.loads(row["identity"])
         outcome = _attempt(Path(row["home"]), row["session_id"], row["content"], identity,
                            row["delivery_key"])
         with _bridge_lock:
-            if outcome["status"] in ("delivered", "dedup"):
+            if outcome["status"] == "delivered":
+                # SELFWAKE: FRESH delivery only — dedup is a receipt echo and
+                # must never inflate this count or fire a wake.
                 conn.execute("DELETE FROM pending WHERE delivery_key = ?", (row["delivery_key"],))
                 _receipt(conn, row["delivery_key"], row["home"], identity["execution_id"],
                          row["session_id"], "delivered", row_id=outcome["row_id"],
                          digest=report_digest(row["content"]))
+                _self_wake_intent(conn, str(Path(row["home"])), row["session_id"],
+                                  row["delivery_key"], outcome["row_id"], "delivered-drainer")
                 delivered += 1
+                fresh_keys.append(Path(row["home"]))
+            elif outcome["status"] == "dedup":
+                conn.execute("DELETE FROM pending WHERE delivery_key = ?", (row["delivery_key"],))
+                _receipt(conn, row["delivery_key"], row["home"], identity["execution_id"],
+                         row["session_id"], "delivered", row_id=outcome["row_id"],
+                         digest=report_digest(row["content"]))
+                deduped += 1
             elif outcome.get("permanent"):
                 conn.execute("DELETE FROM pending WHERE delivery_key = ?", (row["delivery_key"],))
                 _receipt(conn, row["delivery_key"], row["home"], identity["execution_id"],
@@ -353,4 +389,7 @@ def drain_home(home: Path, *, now: float | None = None):
                                                           time.time(), row["delivery_key"]))
                 queued += 1
             conn.commit()
-    return {"delivered": delivered, "queued": queued, "failed": failed}
+    for home_path in fresh_keys:
+        from . import self_wake
+        self_wake.delivered_event(home_path)
+    return {"delivered": delivered, "deduped": deduped, "queued": queued, "failed": failed}

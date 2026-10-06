@@ -28,6 +28,7 @@ class AuditPort implements HttpPort {
     int? contentLength,
     Future<void>? abortTrigger,
     Duration? headersTimeout,
+    DispatchObservation? observation,
   }) async {
     final record = <String, dynamic>{
       'at': stamp(),
@@ -45,6 +46,7 @@ class AuditPort implements HttpPort {
         contentLength: contentLength,
         abortTrigger: abortTrigger,
         headersTimeout: headersTimeout,
+        observation: observation,
       );
       record['status'] = response.statusCode;
       return response;

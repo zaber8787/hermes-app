@@ -23,6 +23,7 @@ class WebHttpPort implements HttpPort {
     int? contentLength,
     Future<void>? abortTrigger,
     Duration? headersTimeout,
+    DispatchObservation? observation,
   }) async {
     // One abort gate: external cancel (detach) OR the headers deadline.
     final gate = Completer<void>();
@@ -32,8 +33,18 @@ class WebHttpPort implements HttpPort {
             gate.isCompleted ? null : gate.complete()),
       );
     }
-    final request =
-        AbortableStreamedRequest(method, uri, abortTrigger: gate.future);
+    // R3 §5.2 (Web): building the request can still fail SYNCHRONOUSLY
+    // (bad URL/arguments) — provably before any fetch existed. Once the
+    // request object exists, later failures (CORS, network, abort) are
+    // post-invoke: fetch gives the client NO bytes-sent visibility, so
+    // Web never claims a byte went out.
+    final AbortableStreamedRequest request;
+    try {
+      request = AbortableStreamedRequest(method, uri, abortTrigger: gate.future);
+    } on Object {
+      observation?.failedBeforeDispatch('requestSetup');
+      rethrow;
+    }
     request.headers.addAll(headers);
     if (contentLength != null) request.contentLength = contentLength;
     if (body != null) {
@@ -53,12 +64,29 @@ class WebHttpPort implements HttpPort {
     }
     var timedOut = false;
     final deadline = headersTimeout ?? this.headersTimeout;
-    final timer = Timer(deadline, () {
-      timedOut = true;
-      if (!gate.isCompleted) gate.complete();
-    });
+    // JS timers are 32-bit: a budget above setTimeout's ~24.8-day ceiling
+    // (unboundedTimeout is 30 days) would OVERFLOW and fire immediately —
+    // which would abort a perfectly healthy SSE open as a fake "headers
+    // timeout". Arm in legal chunks; the deadline only counts when the
+    // cumulative wait has genuinely elapsed.
+    const chunkMax = Duration(milliseconds: 0x7FFFFFF0);
+    Timer? timer;
+    void arm(Duration remaining) {
+      timer = Timer(remaining > chunkMax ? chunkMax : remaining, () {
+        if (remaining > chunkMax) {
+          arm(remaining - chunkMax);
+          return;
+        }
+        timedOut = true;
+        if (!gate.isCompleted) gate.complete();
+      });
+    }
+
+    arm(deadline);
     try {
+      observation?.dispatchInvoked(); // synchronously BEFORE fetch
       final response = await _client.send(request);
+      observation?.headersReceived(response.statusCode); // before any body
       return PortResponse(
         response.statusCode,
         response.headers,
@@ -68,7 +96,7 @@ class WebHttpPort implements HttpPort {
       if (timedOut) throw const PortTimeout();
       rethrow;
     } finally {
-      timer.cancel(); // headers are in: the body budget is the reader's now.
+      timer?.cancel(); // headers are in: the body budget is the reader's now.
     }
   }
 

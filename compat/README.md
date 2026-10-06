@@ -124,3 +124,39 @@ so raising it also raises the high-level request-body limit for non-artifact rou
 Live probes are opt-in (`--mode live --base-url ... --token-file ...`). They never
 install/restart or rewrite settings. Agent-turn cases require
 `--allow-test-agent-turns`; manual Flutter UI checks remain a deployment task.
+
+## Self-wake (server-side, opt-in)
+
+`wake.selfwake` in profile config: `false`/absent/malformed = off (fail closed —
+`settings()` returns a reason string, never guesses), `"shadow"` = record
+intents without ever admitting, `true` = the gateway worker owns dispatch.
+Toggling off voids undispatched pending/shadow intents; consumed or accepted
+batches are never released. Re-enabling bumps the enable generation so reports
+that landed while disabled stay history (reconcile only recovers the crash gap
+— a report row with NO receipt).
+
+The worker (arm via app-platform connect, stop via disconnect) consumes
+`selfwake_intents` in `cron_bridge.db`, decides everything against the B
+ledger (never capability state), and dispatches exactly one loopback
+`chat/stream + wake_batch` POST per batch. An App that consumed a key first is
+yielded to forever; the self side only ever adopts batches whose `owner`
+column says `self:*`. Uncertain outcomes (crash between CAS and terminal)
+settle once as `uncertain-consumed` with the missed-reply risk recorded in
+`selfwake_audit` — never a re-POST.
+
+Fuse: 3 fires / lineage (`chain_limit`, durable, survives restart/hour/
+compression) or 3 consecutive failed/uncertain settlements stops the lineage;
+reopening needs a human message on the session (`chain_human_checkpoint`) or
+`chain_release` (audited `chain-reset`). `causal_suspect` is a conservative
+heuristic, not full causal tracking.
+
+Wire coverage: `.selfwake-evidence/s4-wire-matrix.sh` proves the wake turn
+over OpenAI chat-completions and native Anthropic Messages fakes; the OpenAI
+Responses wire is host-gated upstream (loopback overrides speak chat
+completions — Hermes documents this), covered by the product suite instead.
+
+Rollback: set `wake: {selfwake: false}` (or remove the key) — no new admits,
+pending intents void at next tick, in-flight runs finish under the existing
+shutdown drain. Ledger/bridge rows stay for audit; there is nothing to
+migrate back. Full disable of the feature binary-wise is removing this plugin
+section only — wake/bridge/ntfy paths do not depend on `self_wake.py`.

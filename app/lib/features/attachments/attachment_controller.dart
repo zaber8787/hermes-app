@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 import '../../api/hermes_repository.dart';
 import '../../l10n/message_key.dart';
 import '../../l10n/ui_message.dart';
+import '../chat/local_attempt.dart';
 import '../settings/local_store.dart';
 import 'attachment.dart';
 import 'draft_store.dart';
@@ -450,6 +451,54 @@ class AttachmentController extends ChangeNotifier {
     for (final draft in old) {
       await _blobs.discard(draft.localPath);
     }
+    notifyListeners();
+  }
+
+  // ---- OFFLINE-SEND R2 §4.4: attempt-scoped clearing ------------------------
+
+  /// Remove ONLY the exact drafts THIS attempt was confirmed to have
+  //  consumed (an accepted send). A blob still referenced by any journal
+  /// entry — an abandoned/unknown tombstone keeps the draft's refs — or by
+  /// a composer entry that survived is NEVER discarded.
+  Future<void> clearForAttempt(List<AttachmentDraft> consumed) async {
+    final consumedPaths = {for (final d in consumed) d.localPath};
+    if (!drafts.any((d) => consumedPaths.contains(d.localPath))) return;
+    final kept = [
+      for (final d in drafts)
+        if (!consumedPaths.contains(d.localPath)) d,
+    ];
+    final removed = [
+      for (final d in drafts)
+        if (consumedPaths.contains(d.localPath)) d,
+    ];
+    drafts = kept;
+    await _save();
+    final stillReferenced = <String>{
+      for (final d in kept) d.localPath,
+      for (final a in store.listAttempts(repo.baseUrl, sid))
+        for (final s in a.attachmentSnapshots)
+          if (a.disposition != AttemptDisposition.settled) s.localPath,
+    };
+    for (final draft in removed) {
+      if (stillReferenced.contains(draft.localPath)) continue;
+      await _blobs.discard(draft.localPath);
+    }
+    notifyListeners();
+  }
+
+  /// Merge an attempt snapshot's attachment references back into the
+  /// composer by BLOB IDENTITY — entries the user already has (newer
+  /// receipts included) are left untouched, never overwritten.
+  Future<void> mergeForRestore(List<AttachmentDraft> snapshot) async {
+    if (snapshot.isEmpty) return;
+    final have = {for (final d in drafts) d.localPath};
+    final add = [
+      for (final d in snapshot)
+        if (!have.contains(d.localPath)) d,
+    ];
+    if (add.isEmpty) return;
+    drafts = [...drafts, ...add];
+    await _save();
     notifyListeners();
   }
 }

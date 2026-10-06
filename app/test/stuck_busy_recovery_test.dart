@@ -19,7 +19,7 @@ class SBRepo extends HermesRepository {
   final events = StreamController<SseEvent>();
   List<Message> history = [];
   int sends = 0, reads = 0, statusCalls = 0;
-  List<Message> Function()? messagesOverride;
+  FutureOr<List<Message>> Function()? messagesOverride;
   FutureOr<Json> Function(String runId) status = (_) => {'status': 'running'};
   SessionActivity Function(String) activity = SessionActivity.quiet;
   Object? activityError;

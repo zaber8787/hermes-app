@@ -92,6 +92,26 @@ def open_ledger(home: Path) -> sqlite3.Connection:
             conn.execute("CREATE TABLE IF NOT EXISTS meta(key TEXT PRIMARY KEY, value TEXT)")
             conn.execute("INSERT OR IGNORE INTO meta(key, value) VALUES('version', ?)",
                          (str(LEDGER_VERSION),))
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(wake_batches)")}
+            if "owner" not in cols:
+                # SELFWAKE S3: request-owner association (backward-compatible;
+                # legacy/App batches stay NULL = app/unknown, never taken over).
+                conn.execute("ALTER TABLE wake_batches ADD COLUMN owner TEXT")
+            conn.execute("""CREATE TABLE IF NOT EXISTS selfwake_chain(
+                session_id TEXT PRIMARY KEY, fires INTEGER NOT NULL DEFAULT 0,
+                last_fire_at REAL, fused INTEGER NOT NULL DEFAULT 0, updated_at REAL)""")
+            cols = {r[1] for r in conn.execute("PRAGMA table_info(selfwake_chain)")}
+            if "fails" not in cols:
+                # SELFWAKE S4: consecutive failed/uncertain settlements;
+                # 3 in a row fault-fuses the lineage (audited, manual reset).
+                conn.execute("ALTER TABLE selfwake_chain ADD COLUMN fails"
+                             " INTEGER NOT NULL DEFAULT 0")
+            conn.execute("""CREATE TABLE IF NOT EXISTS selfwake_audit(
+                seq INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL,
+                session_original TEXT, session_resolved TEXT, trigger TEXT,
+                key_prefixes TEXT, row_ids TEXT, batch_id TEXT, run_id TEXT,
+                phase TEXT NOT NULL, from_state TEXT, to_state TEXT, reason TEXT,
+                quota_used INTEGER, chain_count INTEGER, latency REAL)""")
             conn.commit()
         return conn
 
@@ -165,7 +185,7 @@ def _batch_view(conn, batch_id: str):
     }
 
 
-def admit(home: Path, *, session_id: str, resolved: str, keys, db, now=None):
+def admit(home: Path, *, session_id: str, resolved: str, keys, db, now=None, owner=None):
     """Validate + claim one batch inside ONE ledger transaction."""
     if _bindings is None:
         raise LedgerUnavailable("wake ledger bindings missing")
@@ -246,9 +266,9 @@ def admit(home: Path, *, session_id: str, resolved: str, keys, db, now=None):
         batch_id = "wb_" + secrets.token_hex(12)
         conn.execute(
             "INSERT INTO wake_batches(batch_id, session_id, state, canonical_input,"
-            " batch_keys, created_at, updated_at) VALUES(?,?, 'reserved', ?, ?, ?, ?)",
+            " batch_keys, created_at, updated_at, owner) VALUES(?,?, 'reserved', ?, ?, ?, ?, ?)",
             (batch_id, resolved, CANONICAL_INPUT,
-             json.dumps(sorted(k for k, _, _ in claims)), at, at))
+             json.dumps(sorted(k for k, _, _ in claims)), at, at, owner))
         for key, message_id, stamp in claims:
             conn.execute(
                 "INSERT INTO wake_consumption(delivery_key, batch_id, session_id,"

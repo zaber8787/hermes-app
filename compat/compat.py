@@ -31,7 +31,7 @@ EXTRA_MIMES = frozenset({
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 })
 UNITS = ("limits", "upload", "media", "history", "approval", "skills", "activity", "push",
-         "cron_bridge", "wake")
+         "approval_inbox", "cron_bridge", "wake", "selfwake")
 log = logging.getLogger("hermes-app-compat")
 _STATE = "_hermes_app_compat_state_v1"
 _MISSING = object()
@@ -49,6 +49,11 @@ _PUSH_STREAM = contextvars.ContextVar("hermes_app_push_stream", default=None)
 # Sync /api/sessions/{sid}/chat carries its request scope here (no run_id exists
 # on that path) so the wrapped _run_agent can open a synthetic observation.
 _SYNC_CHAT = contextvars.ContextVar("hermes_app_sync_chat", default=None)
+# SELFWAKE S1: a wake dispatch carries its per-request launch evidence here.
+# The reviewed TARGET copy stamps it (handoff / run_id / task launch) while the
+# wake wrapper decides the batch's fate from it. None outside a wake dispatch,
+# so every non-wake path pays nothing.
+_WAKE_LAUNCH = contextvars.ContextVar("hermes_app_wake_launch", default=None)
 ACTIVITY_OBJECT = "hermes.session.activity"
 ACTIVITY_SCHEMA = 1
 ACTIVITY_PREVIEW_CAP = 8192
@@ -108,6 +113,14 @@ CRON_TARGET_FINGERPRINTS = {
 WAKE_TARGET_FINGERPRINTS = {
     "_read_all": "38ac6ca079f7ea8ce91fd0f0330f28de8b4d7dbd5851cfd50b05e569bfacd2ae",
     "_session_turn_lease_key": "3b82026599a02042f6fb26b65594dd59d2e98a647895f4c47cf7d07ec7e64c45",
+}
+# SELFWAKE S1: the reviewed agent seam that keeps a wake's canonical input from
+# being absorbed (with the prior report's internal_notification display
+# metadata) into the persisted merge carrier. The API-copy merge in request
+# assembly still merges for the wire, so skipping the DURABLE merge here never
+# breaks strict alternation.
+MERGE_TARGET_FINGERPRINTS = {
+    "_merge_consecutive_users": "765e822ddf502fd4b8b5a95b300b2ccc2c950c3f68d167f2a126b55b110cbd87",
 }
 
 
@@ -314,6 +327,20 @@ def install(ctx):
 
                         def sync(native, adapter, _seq=seq):
                             _sync_routes(native, adapter)
+                            # SELFWAKE RE-ARM: connect() only runs once per
+                            # gateway boot, but this factory replays on EVERY
+                            # plugin-loaded rewire — including the rewire a
+                            # force reload fires after selfwake.reset stopped
+                            # the worker. Arm here (idempotent singleton) so a
+                            # reload never leaves the worker permanently off
+                            # (2026-10 audit: ticks went silent after reload).
+                            try:
+                                from . import self_wake
+                                from hermes_constants import get_hermes_home
+                                self_wake.arm_loop(
+                                    asyncio.get_running_loop(), get_hermes_home())
+                            except Exception:
+                                pass
 
                         # The wiring table dedupes by qualname, so a force
                         # reload (NEW function objects, same plugin) must
@@ -1427,7 +1454,8 @@ def _push_detach(registry, st, reason):
     rid = st["pending"]
     if rid is not None and rid not in st["pushed"]:
         st["pushed"].add(rid)
-        _push_publish(st, "approval", st["approval_text"].get(rid, PUSH_FALLBACK_APPROVAL))
+        if not _push_approval_exit_handed_off():
+            _push_publish(st, "approval", st["approval_text"].get(rid, PUSH_FALLBACK_APPROVAL))
     terminal = st["terminal"]
     if terminal is not None and not st["terminal_acked"] and not st["terminal_pushed"] \
             and terminal[0] != "cancelled":
@@ -1454,7 +1482,8 @@ def _push_status_transition(registry, st, status, fields):
         st["pending"] = rid
         if st["detached"] and rid not in st["pushed"]:
             st["pushed"].add(rid)
-            _push_publish(st, "approval", st["approval_text"][rid])
+            if not _push_approval_exit_handed_off():
+                _push_publish(st, "approval", st["approval_text"][rid])
         return
     if status == "running":
         if fields.get("last_event") != "approval.request":
@@ -1479,6 +1508,22 @@ def _push_status_transition(registry, st, status, fields):
 
 def _push_status_hook(registry, st, status, fields):
     _push_schedule(registry, st, lambda: _push_status_transition(registry, st, status, fields))
+
+
+def _push_approval_exit_handed_off() -> bool:
+    """True while the approval_inbox dispatcher owns the approval push exit
+    (capability live + dispatcher attached). Bookkeeping in the push unit
+    continues; only the approval PUBLISH moves to the new dispatcher, so an
+    inbox-covered run is never notified twice and reply/failed policies never
+    change. False keeps the legacy detached-only exit byte-for-byte."""
+    try:
+        from . import approval_inbox
+        state = getattr(api, _STATE, None) or {}
+        inbox = state.get("approval_inbox")
+        return bool(inbox) and inbox.get("dispatch") is not None \
+            and approval_inbox.capability_enabled(inbox)
+    except Exception:
+        return False
 
 
 def _install_push(tx):
@@ -2057,6 +2102,42 @@ def _install_wake(tx):
     # -- the ONLY dispatch door: chat/stream carrying a reserved wake_batch ----
     old_stream = cls._handle_session_chat_stream
 
+    async def _settle(self, home, batch_id, resolved, evidence, failure):
+        """SELFWAKE S1 double-run blocker: an exception (or a late HTTP error)
+        NEVER reverts the batch to reserved on assumption. Only evidence that
+        nothing launched — no handoff, no started task — proves the run never
+        began; anything else keeps the batch consumed (uncertain) or reports
+        the run this process demonstrably started."""
+        view = await asyncio.to_thread(auto_wake_store.receipt, home,
+                                       batch_id=batch_id, resolved=resolved)
+        if view.get("error") or view["receipt"]["state"] != "dispatching":
+            return  # someone else already advanced the state machine
+        launched = bool(evidence and (evidence.get("launched")
+                                      or evidence.get("handoff")
+                                      or evidence.get("run_id")))
+        if not launched:
+            # Pre-launch rejection (auth/drain/concurrency/body parse): the
+            # claim and the quota reservation go back.
+            await asyncio.to_thread(auto_wake_store.dispatch_failed, home, batch_id)
+            return
+        run_id = (evidence or {}).get("run_id")
+        status = self._run_statuses.get(run_id, {}).get("status") if run_id else None
+        if run_id and status is not None:
+            # This process knows the run: a terminal one closes the batch, a
+            # live/unknown-outcome one stays accepted and observed (never a
+            # second POST).
+            if status in {"completed", "failed", "cancelled"}:
+                await asyncio.to_thread(auto_wake_store.report, home, batch_id=batch_id,
+                                        resolved=resolved, state="terminal")
+            else:
+                await asyncio.to_thread(auto_wake_store.report, home, batch_id=batch_id,
+                                        resolved=resolved, state="accepted", run_id=run_id)
+            return
+        await asyncio.to_thread(auto_wake_store.report, home, batch_id=batch_id,
+                                resolved=resolved, state="uncertain")
+        log.warning("wake batch %s: %s after launch evidence; consumed without "
+                    "re-send (double-run blocker)", batch_id, failure)
+
     @wraps(old_stream)
     async def stream(self, request, *args, **kwargs):
         try:
@@ -2090,16 +2171,26 @@ def _install_wake(tx):
                 payload["wake_receipt"] = receipt
                 return api.web.json_response(payload, status=gate["status"])
             return response
+        launch = {"handoff": False, "run_id": None, "launched": False}
+        token = _WAKE_LAUNCH.set(launch)
         try:
-            result = await old_stream(self, request, *args, **kwargs)
-        except Exception:
-            await asyncio.to_thread(auto_wake_store.dispatch_failed, home, batch_id)
-            raise
-        if getattr(result, "status", 200) >= 400:
-            # Rejected BEFORE the stream: provably no run started — the claim
-            # and the quota reservation go back.
-            await asyncio.to_thread(auto_wake_store.dispatch_failed, home, batch_id)
-        return result
+            try:
+                result = await old_stream(self, request, *args, **kwargs)
+            except Exception as exc:
+                await _settle(self, home, batch_id, resolved, launch, type(exc).__name__)
+                raise
+            except asyncio.CancelledError:
+                # Shutdown cancel is NOT evidence the run never started.
+                with suppress(Exception):
+                    await asyncio.shield(asyncio.ensure_future(
+                        _settle(self, home, batch_id, resolved, launch, "cancelled")))
+                raise
+            if getattr(result, "status", 200) >= 400:
+                await _settle(self, home, batch_id, resolved, launch,
+                              f"HTTP {getattr(result, 'status', 0)}")
+            return result
+        finally:
+            _WAKE_LAUNCH.reset(token)
     tx.set(cls, "_handle_session_chat_stream", stream)
 
     # -- the synchronous chat lane never consumes a wake batch -----------------
@@ -2117,6 +2208,84 @@ def _install_wake(tx):
             pass
         return await old_chat(self, request, *args, **kwargs)
     tx.set(cls, "_handle_session_chat", chat)
+
+    # -- SELFWAKE S1: durable projection identity seam --------------------------
+    # The agent's sequence-repair pass 3 merges an adjacent plain-text user
+    # pair INTO THE EARLIER dict — a persisted cron report row would swallow
+    # the wake's canonical input and flush with the report's
+    # internal_notification display metadata. This reviewed pass swap skips
+    # EXACTLY that pair (bridge-proven report carrier + canonical wake text);
+    # every other merge behaves verbatim. Wire alternation is unaffected:
+    # request assembly merges the API copy regardless.
+    from agent import agent_runtime_helpers as arh
+    _merge_src = inspect.getsource(arh._merge_consecutive_users)
+    if (hashlib.sha256(_merge_src.encode()).hexdigest()
+            != MERGE_TARGET_FINGERPRINTS["_merge_consecutive_users"]):
+        raise RuntimeError("wake source changed: _merge_consecutive_users")
+
+    def _merge_consecutive_users_wake(pass3_messages):
+        from agent.context_compressor import _DB_PERSISTED_MARKER, split_user_originated_turn
+        repairs = 0
+        merged = []
+        for msg in pass3_messages:
+            prev = merged[-1] if merged and isinstance(merged[-1], dict) else None
+            if (
+                prev is not None and prev.get("role") == "user"
+                and isinstance(msg, dict) and msg.get("role") == "user"
+                and split_user_originated_turn(prev)[0] is None
+                and prev.get("display_kind") != arh.STEER_DISPLAY_KIND
+                and isinstance(prev.get("content", ""), str)
+                and isinstance(msg.get("content", ""), str)
+                # SELFWAKE S1 delta: a bridge-proven report followed by the
+                # canonical wake input keeps TWO durable rows.
+                and not (auto_wake.provenance_of(prev) is not None
+                         and msg.get("content") == auto_wake.CANONICAL_INPUT)
+            ):
+                prev_content, new_content = prev.get("content", ""), msg.get("content", "")
+                merged_content = (
+                    (prev_content + "\n\n" + new_content)
+                    if prev_content and new_content else (prev_content or new_content)
+                )
+                had_api_sidecar = "api_content" in prev
+                prev["content"] = merged_content
+                arh.drop_stale_api_content(prev)
+                if merged_content != prev_content or had_api_sidecar:
+                    prev.pop(_DB_PERSISTED_MARKER, None)
+                arh._remember_absorbed_row(prev, msg)
+                repairs += 1
+                continue
+            merged.append(msg)
+        return merged, repairs
+    merge_passes = list(arh._SEQUENCE_REPAIR_PASSES)
+    if merge_passes[3] is not arh._merge_consecutive_users:
+        raise RuntimeError("wake source changed: _SEQUENCE_REPAIR_PASSES")
+    merge_passes[3] = _merge_consecutive_users_wake
+    tx.set(arh, "_SEQUENCE_REPAIR_PASSES", tuple(merge_passes))
+    state["wake"]["merge_pass"] = _merge_consecutive_users_wake
+
+
+def _install_selfwake(tx):
+    """SELFWAKE: server-side wake support. The unit binds NOTHING in core:
+    every touchpoint is compat-internal (bridge-store hooks + the app
+    platform drainer + the wake ledger), so the unit is inert by default —
+    `wake.selfwake` in profile config decides, fail-closed, at use time.
+
+    Reviewed compat seams (manifest):
+      * cron_delivery_store deliver/drain: intent+receipt ONE transaction;
+        delivered vs deduped counted apart (drainer summary).
+      * app_platform._drain_loop: drainer-drained notification (accelerator;
+        the periodic sweep owns liveness).
+      * wake wrapper launch evidence + TARGET-copy stamps (S1, that unit).
+      * agent_runtime_helpers._SEQUENCE_REPAIR_PASSES swap (S1, wake unit).
+    """
+    from . import self_wake
+    state = getattr(api, _STATE, None)
+    if state is None:
+        raise RuntimeError("compat state missing")
+    tx.cleanups.append(self_wake.reset)
+    state["selfwake"] = {"module": self_wake, "backend": _BACKEND}
+    if "wake" in state:
+        state["wake"]["selfwake"] = self_wake
 
 
 class _Bridge:
@@ -2329,6 +2498,12 @@ def _install_approval_target(tx):
     # lifecycle entirely (worker finally unregisters), so removal here is pure
     # bookkeeping: stream finally, and the unload cleanup below.
     queues = {}
+    # APPROVALPUSH R2: the approval_inbox unit emits its additive approval.resolved
+    # onto the SAME session mirror; publishing the live mapping (same dict object)
+    # through the compat state is pure observability wiring, no behavior change.
+    _state = getattr(api, _STATE, None)
+    if _state is not None:
+        _state["approval_queues"] = queues
 
     def predicate():
         if approval_context._get_session_platform() == "api_server":
@@ -2406,9 +2581,12 @@ def _install_approval_target(tx):
 # Deltas from the upstream method (everything else is verbatim):
 #   1. queue-mirror register/pop keyed by (id(self), run_id) around the turn;
 #   2. activity registration hook (activity batch; no-op while _ACTIVITY is None);
-#   3. module references prefixed with `api.` because this lives outside upstream.
+#   3. module references prefixed with `api.` because this lives outside upstream;
+#   4. SELFWAKE S1 launch-evidence stamps for a wake dispatch in flight
+#      (_WAKE_LAUNCH; no-op while that contextvar is unset).
 async def _session_stream_target(self, request, *, _queues) -> "web.StreamResponse":
     """POST /api/sessions/{session_id}/chat/stream — SSE wrapper over _run_agent."""
+    launch = _WAKE_LAUNCH.get()
     limited = self._concurrency_limited_response()
     if limited is not None:
         return limited
@@ -2417,6 +2595,9 @@ async def _session_stream_target(self, request, *, _queues) -> "web.StreamRespon
         return err
     handed_off = await self._stream_through_live_bot_chat(request, ctx)
     if handed_off is not None:
+        if launch is not None:
+            # The live Bot Chat lane executed the turn; this lane never will.
+            launch["handoff"] = True
         return handed_off
     gateway_session_key, session_id = ctx["gateway_session_key"], ctx["session_id"]
     user_message, runtime_request = ctx["user_message"], ctx["runtime_request"]
@@ -2426,6 +2607,8 @@ async def _session_stream_target(self, request, *, _queues) -> "web.StreamRespon
         model_lock=("accepted" if ctx["lock_active"] else ""))
     message_id = f"msg_{api.uuid.uuid4().hex}"
     run_id = f"run_{api.uuid.uuid4().hex}"
+    if launch is not None:
+        launch["run_id"] = run_id
     events = api._SessionEventQueue(session_id, run_id)
     queue, _event_payload = events.queue, events.payload
     # Claim ownership inside the request's profile scope before any run-keyed state
@@ -2520,6 +2703,10 @@ async def _session_stream_target(self, request, *, _queues) -> "web.StreamRespon
     # NOT in _active_run_tasks: _run_agent already counts this turn for the shutdown drain.
     task = asyncio.create_task(_run_and_signal())
     self._track_background_task(task)
+    if launch is not None:
+        # Past this line the run exists as a scheduled task; nothing that
+        # happens to the SSE plumbing can "unstart" it.
+        launch["launched"] = True
     response = await self._prepare_sse_response(request, session_id, gateway_session_key)
     try:
         while True:
@@ -2818,3 +3005,274 @@ async def _session_agent(
         return await loop.run_in_executor(None, _run)
     finally:
         self._inflight_agent_runs -= 1
+
+
+# ---- approval_inbox unit (APPROVALPUSH R1-R3: registry + GET + exact POST) ----
+# Target backend only. The core queue stays the single settlement authority;
+# this unit captures BOTH api admission callbacks (session-stream and
+# /v1/runs), maintains an exact-id registry with display payloads, exposes
+# GET /v1/runs/{run_id}/approvals and hardens POST /v1/runs/{id}/approval to
+# exact request_id semantics. The release step (B4) ships it ENABLED;
+# set_capability(False) is the kill switch and makes every wrapper a pure
+# passthrough again, so a disabled server behaves exactly like HEAD.
+
+def _install_approval_inbox(tx):
+    import sys
+    from . import approval_inbox
+    from tools import approval
+    from gateway.platforms import api_server_runs as runs
+    cls = api.APIServerAdapter
+    if _BACKEND != "target":
+        raise RuntimeError("approval_inbox backend not implemented for this source")
+    state = getattr(api, _STATE, None)
+    if state is None:
+        raise RuntimeError("compat state missing")
+    # Needs the approval unit's native producer/mirror AND the activity epoch.
+    for unit in ("approval", "activity"):
+        if state["groups"].get(unit) is None or \
+                state["manifest"].get(unit, {}).get("status") != "applied":
+            raise RuntimeError(unit + " unit not applied")
+    if not state.get("activity_epoch"):
+        raise RuntimeError("activity epoch missing")
+    _require(cls, "_register_session_stream_approval", "_set_run_status", "_http_route_table",
+             "_handle_capabilities")
+    _require(runs, "_make_approval_notify", "_handle_run_approval", "_mark_run_event",
+             "_load_owned_run", "_run_event")
+    _require(approval, "list_gateway_approvals", "resolve_gateway_approval")
+    _require(api, "_approval_request_event", "_error_response", "_coerce_request_bool")
+    _signature(cls, "_register_session_stream_approval", "self", "run_id", "events", "message_id")
+    _signature(cls, "_set_run_status", "self", "run_id", "status")
+    _signature(runs, "_make_approval_notify", "self", "run", "_api_server")
+    _signature(runs, "_handle_run_approval", "self", "request", "_api_server")
+    _signature(runs, "_mark_run_event", "self", "run_id", "name")
+    _signature(runs, "_load_owned_run", "self", "request", "_api_server", "permission",
+               "active_fallback")
+
+    inbox = approval_inbox.ApprovalInbox.open(state)
+
+    # -- approval push dispatcher (B2): ONE approval exit while enabled -------
+    # Immediate initial notification + one near-timeout reminder replace the
+    # detached-only approval publish; reply/failed policies are untouched.
+    # push.approval_dispatcher=legacy restores the old exit as a unit (the
+    # push-side publish is then skipped ONLY when the dispatcher is live).
+    from . import approval_push
+    legacy_exit = str(_push_raw_settings().get("approval_dispatcher") or "immediate") \
+        .strip().lower() == "legacy"
+    if not legacy_exit:
+        approval_push.attach(inbox)  # sets inbox["dispatch"]
+    tx.cleanups.append(lambda: inbox.__setitem__("dispatch", None))
+
+    def close_all():
+        with inbox["lock"]:
+            inbox["closed"] = True
+            timers = [entry.get("timer") for bucket in inbox["by_run"].values()
+                      for entry in bucket["entries"].values()]
+        for timer in timers:
+            if timer is not None:
+                timer.cancel()
+        approval_inbox.set_capability(False)  # an unloaded unit never advertises
+    tx.cleanups.append(close_all)
+
+    enabled = approval_inbox.capability_enabled
+
+    # -- capture inside the SESSION-STREAM native callback (one producer) ------
+    old_register = cls._register_session_stream_approval
+
+    @wraps(old_register)
+    def register(self, run_id, events, message_id):
+        callback = old_register(self, run_id, events, message_id)
+        if not enabled(inbox):
+            return callback
+        loop = events.loop
+
+        def capturing(approval_data):
+            entry = None
+            try:
+                entry = approval_inbox.capture(
+                    inbox, adapter=self, run_id=run_id,
+                    session_id=events.session_id, loop=loop, data=approval_data)
+            except Exception as exc:
+                log.debug("inbox capture skipped: %s", type(exc).__name__)
+            result = callback(approval_data)  # native chain unchanged, called ONCE
+            if entry is not None:
+                try:  # additive enrichment belongs on the loop that serialises
+                    loop.call_soon_threadsafe(
+                        approval_inbox.enrich_event, inbox, self, run_id, entry["request_id"])
+                except RuntimeError:
+                    pass
+            return result
+        return capturing
+    tx.set(cls, "_register_session_stream_approval", register)
+
+    # -- capture inside the /v1/runs native notify factory --------------------
+    old_notify = runs._make_approval_notify
+
+    @wraps(old_notify)
+    def notify(self, run, **kwargs):
+        callback = old_notify(self, run, **kwargs)
+        if not enabled(inbox):
+            return callback
+        loop = asyncio.get_running_loop()
+
+        def capturing(approval_data):
+            entry = None
+            try:
+                entry = approval_inbox.capture(
+                    inbox, adapter=self, run_id=run.run_id,
+                    session_id=getattr(run, "session_id", None), loop=loop, data=approval_data)
+            except Exception as exc:
+                log.debug("inbox capture skipped: %s", type(exc).__name__)
+            result = callback(approval_data)
+            if entry is not None:
+                try:
+                    loop.call_soon_threadsafe(
+                        approval_inbox.enrich_event, inbox, self, run.run_id,
+                        entry["request_id"])
+                except RuntimeError:
+                    pass
+            return result
+        return capturing
+    tx.set(runs, "_make_approval_notify", notify)
+
+    # -- GET /v1/runs/{run_id}/approvals (read-only, owner/approve scoped) -----
+    endpoint = ("run_approvals", ("GET", "/v1/runs/{run_id}/approvals"))
+    for name, route in api._CAPABILITY_ENDPOINTS:
+        if (name == endpoint[0] or route == endpoint[1]) and (name, route) != endpoint:
+            raise RuntimeError("approval_inbox capability collision")
+    old_table = cls._http_route_table
+
+    @wraps(old_table)
+    def routes(self):
+        rows = list(old_table(self))
+        if not any((m, p) == endpoint[1] for m, p, _ in rows):
+            rows.append(endpoint[1] + (self._handle_run_approvals,))
+        return rows
+
+    async def approvals(self, request):
+        if not enabled(inbox):
+            return api._error_response("Cross-device approval inbox is disabled.", 404,
+                                       code="approval_inbox_disabled")
+        _run_id, status, _agent, _task, err = runs._load_owned_run(
+            self, request, _api_server=sys.modules["gateway.platforms.api_server"],
+            permission="approve", active_fallback=True)
+        if err is not None:
+            return err
+        run_id = request.match_info["run_id"]
+        session_key = self._run_approval_sessions.get(run_id) or run_id
+        try:
+            live = await asyncio.to_thread(approval.list_gateway_approvals, session_key)
+        except Exception:
+            return api._error_response("Approval queue unavailable.", 503,
+                                       code="approval_queue_unavailable")
+        pending, available, overflow, revision = approval_inbox.snapshot(
+            inbox, adapter=self, run_id=run_id, live=live)
+        bucket = inbox["by_run"].get((id(self), run_id))
+        return api.web.json_response({
+            "object": "hermes.run.approvals", "schema_version": 1,
+            "run_id": run_id, "session_id": (status or {}).get("session_id")
+            or (bucket or {}).get("session_id"),
+            "server_epoch": inbox["epoch"], "observed_at": time.time(),
+            "revision": revision, "pending": pending, "available": available,
+            "overflow": overflow}, headers={"Cache-Control": "no-store"})
+
+    # -- POST /v1/runs/{id}/approval: exact-submit contract -------------------
+    old_post = runs._handle_run_approval
+
+    async def post(self, request, **kwargs):
+        _api = kwargs.get("_api_server") or sys.modules["gateway.platforms.api_server"]
+        if not enabled(inbox):
+            return await old_post(self, request, _api_server=_api)
+        run_id = request.match_info["run_id"]
+        _r, _s, _a, _t, err = runs._load_owned_run(
+            self, request, _api_server=_api, permission="approve", active_fallback=False)
+        if err is not None:
+            return err
+        try:
+            body = json.loads(await request.text())
+            if not isinstance(body, dict):
+                raise ValueError("body is not an object")
+        except Exception:
+            return await old_post(self, request, _api_server=_api)  # original 400
+        verdict = approval_inbox.classify_answer(inbox, adapter=self, run_id=run_id,
+                                                 body=body, epoch=None)
+        if verdict["action"] == "error":
+            return api._error_response(verdict["message"], verdict["status"],
+                                       code=verdict["code"])
+        if verdict["action"] == "submit" and verdict.get("backfilled"):
+            patched = json.dumps({**body, "request_id": verdict["request_id"]}).encode()
+            try:  # legacy single-pending: EXACT id into the original request
+                request._read_bytes = patched
+                request._read_text = None
+            except Exception:
+                return api._error_response(  # never fall back to FIFO after the lock
+                    "Submit the exact request_id.", 409, code="approval_request_required")
+        return await old_post(self, request, _api_server=_api)
+
+    # -- approval.responded settles the exact entry; restore remaining waiting --
+    old_event = runs._mark_run_event
+
+    @wraps(old_event)
+    def event(self, run_id, name, **fields):
+        result = old_event(self, run_id, name, **fields)
+        try:
+            if enabled(inbox) and name == "approval.responded":
+                earliest = approval_inbox.after_responded(
+                    inbox, self, run_id, fields.get("request_id"), fields.get("choice"))
+                if earliest is not None:
+                    # Still pending: the single status.approval slot shows the
+                    # EARLIEST live request again (never a stale/other entry).
+                    restored = approval_inbox.rebuild_event(inbox, self, earliest)
+                    self._set_run_status(run_id, "waiting_for_approval",
+                                         last_event="approval.request", approval=restored)
+                    mirror = state.get("approval_queues", {}).get((id(self), run_id))
+                    if mirror is not None:
+                        mirror.enqueue("approval.request", dict(restored))
+                    queue = getattr(self, "_run_streams", {}).get(run_id)
+                    if queue is not None:
+                        with suppress(Exception):
+                            queue.put_nowait(restored)
+        except Exception as exc:
+            log.debug("inbox respond reconcile skipped: %s", type(exc).__name__)
+        return result
+
+    # -- run terminal settles every still-open card of that run ----------------
+    old_set = cls._set_run_status
+
+    @wraps(old_set)
+    def set_status(self, run_id, status, **fields):
+        result = old_set(self, run_id, status, **fields)
+        try:
+            if enabled(inbox) and status in ACTIVITY_TERMINAL:
+                approval_inbox.settle_run(inbox, self, run_id, "run-" + status)
+        except Exception:
+            pass
+        return result
+
+    tx.set(cls, "_handle_run_approvals", approvals)
+    tx.set(cls, "_http_route_table", routes)
+    tx.set(runs, "_handle_run_approval", post)
+    tx.set(runs, "_mark_run_event", event)
+    tx.set(cls, "_set_run_status", set_status)
+    tx.set(api, "_CAPABILITY_ENDPOINTS", (*api._CAPABILITY_ENDPOINTS, endpoint))
+
+    # -- capabilities advertisement: the App only offers cross-device approval
+    # when this contract is actually live (R1 capability gate) ---------------
+    old_caps = cls._handle_capabilities
+
+    @wraps(old_caps)
+    async def capabilities(self, request, **kwargs):
+        response = await old_caps(self, request, **kwargs)
+        try:
+            payload = json.loads(response.body)
+            payload["features"]["approval_inbox"] = {
+                "enabled": enabled(inbox), "contract_version": 1,
+                "pending_endpoint": "/v1/runs/{run_id}/approvals",
+                "precise_responses": True,
+                "server_epoch": inbox["epoch"],
+            }
+            return api.web.json_response(payload, status=response.status)
+        except Exception as exc:
+            log.warning("capabilities approval_inbox advertisement failed: %s",
+                        type(exc).__name__)
+            return response
+    tx.set(cls, "_handle_capabilities", capabilities)

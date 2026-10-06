@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../../l10n/app_locale.dart';
 import '../../platform/store_tx.dart';
 import '../attachments/attachment.dart';
+import '../chat/local_attempt.dart';
 import 'key_vault.dart';
 import 'server_url.dart';
 
@@ -56,12 +57,19 @@ class PendingTurn {
     this.historyAfterId,
     this.origin,
     this.wakeBatchId,
+    this.attemptId,
   });
   final String? runId;
   final String userText;
   final DateTime startedAt;
   final String? ownerTab, ownerTurn;
   final DateTime? leaseUntil;
+
+  /// OFFLINE-SEND R2 §4.1: the durable attempt identity this record belongs
+  /// to. Null on every record written before R2 (migrated exactly once,
+  /// inside the first lock-based op that touches it) and on autoWake
+  /// records (an auto-wake dispatch is never a human attempt).
+  final String? attemptId;
 
   /// APPWAKE: backward-compatible origin tag. Null = ordinary human send
   /// (byte-identical old semantics); 'autoWake' marks a coordinator turn
@@ -85,6 +93,15 @@ class PendingTurn {
   /// content attribution (B3).
   final int? historyAfterId;
 
+  /// OFFLINE-SEND R1: the ONLY flag decision code may read — a PARSEABLE
+  /// deadline exists, i.e. a bounded observation window is genuinely in
+  /// flight. Watermark/owner/wake metadata alone is NOT a budget (A1): a
+  /// watermark-only legacy record must still get its first 60s window.
+  bool get hasRecoveryBudget => recoveryDeadline != null;
+
+  /// Raw-field presence only (legacy reporting/diagnostics). NEVER use this
+  /// to decide begin/consume: it counts watermarks as "recovery metadata"
+  /// and turns watermark-only records into budget-less zombies (A1 fix).
   bool get hasRecoveryMetadata =>
       recoveryStartedAt != null ||
       recoveryDeadline != null ||
@@ -121,6 +138,10 @@ class PendingTurn {
     historyAfterId: (json['history_after_id'] as num?)?.toInt(),
     origin: json['origin'] as String?,
     wakeBatchId: json['wake_batch_id'] as String?,
+    attemptId: json['attempt_id'] is String &&
+            (json['attempt_id'] as String).isNotEmpty
+        ? json['attempt_id'] as String
+        : null,
   );
 }
 
@@ -218,11 +239,49 @@ class LocalStore {
       );
 
   // ---- P2: per-session input draft (survives navigation AND app kill) ----
+  // OFFLINE-SEND R2 §4.3: every composer write goes through the same draft
+  // CAS rule — a monotonically bumped revision int, never the text itself,
+  // is the write-ownership token. A late callback holding an old revision
+  // must not overwrite what a newer editor (or restore) stored.
   String draft(String server, String sid) =>
       prefs.getString(_scope(server, sid, 'draft')) ?? '';
-  Future<void> saveDraft(String server, String sid, String text) => text.isEmpty
-      ? prefs.remove(_scope(server, sid, 'draft'))
-      : prefs.setString(_scope(server, sid, 'draft'), text);
+
+  /// Persisted composer-write counter: 0 until the first write. NOT a
+  /// content hash — equal text at a new revision is still a new write.
+  int draftRevision(String server, String sid) =>
+      prefs.getInt(_scope(server, sid, 'draftRev')) ?? 0;
+
+  /// Write the draft and bump the revision. With `expectedRevision` set,
+  /// a stale counter refuses the write outright (false, nothing touched).
+  /// False = stale expectation OR the prefs write was refused.
+  Future<bool> saveDraftCas(
+    String server,
+    String sid,
+    String text, {
+    int? expectedRevision,
+  }) async {
+    if (expectedRevision != null &&
+        draftRevision(server, sid) != expectedRevision) {
+      return false;
+    }
+    final key = _scope(server, sid, 'draft');
+    // Empty means GONE, not "an empty string is stored": a refused remove
+    // that nonetheless left no value counts (same discipline as pending).
+    final ok = text.isEmpty
+        ? await prefs.remove(key) || prefs.getString(key) == null
+        : await prefs.setString(key, text);
+    if (!ok) return false;
+    // The counter bump is best effort after a durable text write; losing
+    // it only weakens the CAS to last-writer-wins, it never reorders text.
+    await prefs.setInt(_scope(server, sid, 'draftRev'), draftRevision(server, sid) + 1);
+    return true;
+  }
+
+  /// Pre-R2 writer kept as-is (`Future<void>`): writes through the same
+  /// CAS path so the revision bumps, but the write result is not surfaced.
+  Future<void> saveDraft(String server, String sid, String text) async {
+    await saveDraftCas(server, sid, text);
+  }
 
   List<AttachmentDraft> attachments(String server, String sid) {
     final raw = prefs.getString(_scope(server, sid, 'attachments'));
@@ -235,6 +294,18 @@ class LocalStore {
   }
 
   Future<void> saveAttachments(
+    String server,
+    String sid,
+    List<AttachmentDraft> values,
+  ) => prefs.setString(
+    _scope(server, sid, 'attachments'),
+    jsonEncode(values.map((a) => a.toJson()).toList()),
+  );
+
+  /// R2 §4.4: the checked variant — false means the snapshot did NOT
+  /// persist and the caller must not treat memory as saved. `saveAttachments`
+  /// keeps its old `Future<void>` shape for existing out-of-file callers.
+  Future<bool> saveAttachmentsChecked(
     String server,
     String sid,
     List<AttachmentDraft> values,
@@ -312,6 +383,14 @@ class LocalStore {
     return '${hex(8)}-${hex(8)}';
   }
 
+  /// OFFLINE-SEND R2 §4.1: a durable attempt identity — 128 random bits,
+  /// deliberately NOT derived from tabId/turnId: a lease takeover or a
+  /// reload must not (re)name the attempt.
+  static String newAttemptId() {
+    final r = Random.secure();
+    return List.generate(32, (_) => r.nextInt(16).toRadixString(16)).join();
+  }
+
   Map<String, dynamic>? _pendingRaw(String server, String sid) {
     final raw = prefs.getString(_scope(server, sid, 'pending'));
     if (raw == null) return null;
@@ -343,19 +422,24 @@ class LocalStore {
     return _pendingRaw(server, sid);
   }
 
-  /// WEBSYNC F9 degraded path, stated out loud once per tab: without Web
-  /// Locks the critical section is only this-isolate chained, so claims
-  /// are NOT cross-tab exclusive (last-writer-wins); compare-and-set ops
-  /// stay safe. The flag `storeTxIsCrossTab` carries the same statement
-  /// for any caller that needs it programmatically.
+  /// WEBSYNC F9 degraded path, stated out loud once per tab — and stated
+  /// HONESTLY per OFFLINE-SEND R2 §4.5/A10: without Web Locks the critical
+  /// section only SERIALIZES THIS TAB. Cross-tab claims are not exclusive
+  /// (last-writer-wins) AND the cross-tab compare operations (claim /
+  /// compare-update / compare-delete) are NOT atomic — another tab can
+  /// slip a write in between the reread and the remove. High-risk paths
+  /// (local settlement, shared clear) surface cleanupPending instead of
+  /// claiming a shared success; `storeTxCapability` reports whether locks
+  /// were actually probed, `storeTxIsCrossTab` carries the flag.
   static bool _noLocksWarned = false;
   static void _warnNoWebLocksOnce() {
     if (_noLocksWarned) return;
     _noLocksWarned = true;
     debugPrint(
-      'LocalStore: Web Locks unavailable in this browser — pending claims '
-      'are NOT cross-tab exclusive (last-writer-wins). Keep one tab per '
-      'server session; compare-and-set clear/amend/touch remain safe.',
+      'LocalStore: Web Locks unavailable in this browser — storage '
+      'transactions serialize THIS tab only; cross-tab claims and '
+      'compare-update/compare-delete are NOT atomic. Keep one tab per '
+      'server session (R2 §4.5).',
     );
   }
 
@@ -377,6 +461,7 @@ class LocalStore {
     DateTime? leaseUntil,
     Map<String, dynamic> recovery = const {},
     Map<String, dynamic> wake = const {},
+    Map<String, dynamic> attempt = const {},
   }) => prefs.setString(
     _scope(server, sid, 'pending'),
     jsonEncode({
@@ -390,8 +475,21 @@ class LocalStore {
       },
       ...wake,
       ...recovery,
+      ...attempt,
     }),
   );
+
+  /// OFFLINE-SEND R2 §4.1: the attempt identity carried over from an
+  /// existing record — touch / amend / legacy-save must never drop it
+  /// (rebuilding the record from scratch is exactly how a stable identity
+  /// would get lost).
+  static Map<String, dynamic> _attemptKeys(Map<String, dynamic>? rec) {
+    final id = rec?['attempt_id'] is String &&
+            (rec!['attempt_id'] as String).isNotEmpty
+        ? rec['attempt_id'] as String
+        : null;
+    return {'attempt_id': ?id};
+  }
 
   /// APPWAKE: the wake identity carried over from an existing record
   /// (touch/amend must never drop it; a NEW claim sets it explicitly).
@@ -435,11 +533,80 @@ class LocalStore {
     }
   }
 
-  /// B3: stamp the recovery budget onto a pending record EXACTLY ONCE,
-  /// inside the same per-session store transaction as claim/amend/clear.
-  /// The deadline is the FIRST entry into recovery + the initial window —
-  /// never derived from the run's startedAt, so a long healthy run does
-  /// not arrive with its recovery time already spent.
+  String _attemptKey(String server, String sid, String attemptId) =>
+      _scope(server, sid, 'attempt.$attemptId');
+
+  /// Persist ONE journal entry and confirm it. False = the write was
+  /// refused or the readback disagreed; the caller decides what that
+  /// means for its own operation. Journal + pending are separate prefs
+  /// keys — no ACID claim: ordering (journal first) is the guarantee.
+  Future<bool> _writeAttempt(
+    String server,
+    String sid,
+    String attemptId,
+    Map<String, dynamic> json,
+  ) async {
+    if (debugFailAttemptWrites) return false;
+    final key = _attemptKey(server, sid, attemptId);
+    final payload = jsonEncode(json);
+    final bool ok;
+    try {
+      ok = await prefs.setString(key, payload);
+    } on Object {
+      return false;
+    }
+    if (!ok) return false;
+    try {
+      return prefs.getString(key) == payload; // readback (§4.2 step 2)
+    } on Object {
+      return false;
+    }
+  }
+
+  /// R2 §4.1: the record's attempt identity, guaranteed to EXIST for
+  /// human records by the time the calling (locked) op writes the record.
+  /// A legacy human record (no attempt_id) mints exactly once here — its
+  /// journal entry (rawDraft null: the raw text is genuinely unknown)
+  /// lands BEFORE the pending stamp, so every later op sees the SAME id
+  /// and never mints a second one. autoWake records are never migrated:
+  /// a coordinator dispatch is not a human attempt. Storage refusal
+  /// throws before the pending write — nothing half-stamped survives.
+  Future<String?> _migrateAttemptLocked(
+    String server,
+    String sid,
+    Map<String, dynamic> rec,
+  ) async {
+    final existing = rec['attempt_id'];
+    if (existing is String && existing.isNotEmpty) return existing;
+    if (rec['origin'] == 'autoWake') return null;
+    final id = newAttemptId();
+    if (!await _writeAttempt(
+      server,
+      sid,
+      id,
+      LocalAttempt(
+        attemptId: id,
+        server: server,
+        sid: sid,
+        createdAt:
+            DateTime.tryParse(rec['started_at'] as String? ?? '') ??
+            DateTime.now(),
+        runId: rec['run_id'] is String ? rec['run_id'] as String : null,
+      ).toJson(),
+    )) {
+      throw const PendingPersistenceFailure();
+    }
+    return id;
+  }
+
+  /// B3 / OFFLINE-SEND R1 §3.2: stamp the recovery budget onto a pending
+  /// record EXACTLY ONCE, inside the same per-session store transaction as
+  /// claim/amend/clear, after RELOADING the authoritative prefs and matching
+  /// the captured token. Migration is shape-driven (never "metadata seen →
+  /// freeze"): a watermark-only record gets its first 60s window NOW; a
+  /// valid deadline survives verbatim; a spent retry allowance migrates to
+  /// an already-expired deadline (never a fresh 30s). The window starts at
+  /// the FIRST entry into unknown recovery, never at the send's startedAt.
   Future<PendingRecoveryResult> beginPendingRecovery(
     String server,
     String sid, {
@@ -459,14 +626,96 @@ class LocalStore {
       return const PendingRecoveryResult(PendingRecoveryOutcome.mismatch, null);
     }
     final turn = PendingTurn.fromJson(rec);
-    if (turn.hasRecoveryMetadata) {
-      return PendingRecoveryResult(PendingRecoveryOutcome.alreadyPresent, turn);
+    // R2 §4.1: this op is one of the sanctioned one-shot migration
+    // points — a legacy HUMAN record mints (and journals) its attemptId
+    // here, exactly once, before any branch writes the record.
+    final hadAttempt =
+        rec['attempt_id'] is String && (rec['attempt_id'] as String).isNotEmpty;
+    final migrated = hadAttempt
+        ? rec['attempt_id'] as String
+        : await _migrateAttemptLocked(server, sid, rec);
+    if (turn.recoveryDeadline != null) {
+      // Valid deadline present: keep it verbatim. A missing recovery
+      // started stamp MAY be back-computed (deadline − window) — that
+      // never extends anything, it only documents the window's origin.
+      if (turn.recoveryStartedAt == null) {
+        await _setPendingJson(
+          server,
+          sid,
+          jsonEncode({
+            ...rec,
+            'attempt_id': ?migrated,
+            'recovery_started_at':
+                turn.recoveryDeadline!.subtract(initialWindow).toIso8601String(),
+          }),
+        );
+        return PendingRecoveryResult(
+          PendingRecoveryOutcome.alreadyPresent,
+          PendingTurn.fromJson(_pendingRaw(server, sid)!),
+        );
+      }
+      if (!hadAttempt && migrated != null) {
+        // Migration-only stamp: the budget itself stays verbatim.
+        await _setPendingJson(
+          server,
+          sid,
+          jsonEncode({...rec, 'attempt_id': migrated}),
+        );
+        return PendingRecoveryResult(
+          PendingRecoveryOutcome.alreadyPresent,
+          PendingTurn.fromJson(_pendingRaw(server, sid)!),
+        );
+      }
+      return PendingRecoveryResult(
+        PendingRecoveryOutcome.alreadyPresent,
+        turn,
+      );
     }
+    // No parseable deadline. A record whose single retry allowance is
+    // ALREADY spent migrates to an expired deadline — observing it again
+    // would be a second 30s window in disguise.
+    if (turn.recoveryRetryUsed) {
+      await _setPendingJson(
+        server,
+        sid,
+        jsonEncode({
+          ...rec,
+          'attempt_id': ?migrated,
+          ..._recoveryJson(turn.recoveryStartedAt ?? at, at, true, turn.historyAfterId),
+        }),
+      );
+      return PendingRecoveryResult(
+        PendingRecoveryOutcome.begun,
+        PendingTurn.fromJson(_pendingRaw(server, sid)!),
+      );
+    }
+    // Recovery started earlier but the deadline write crashed midway:
+    // complete the ORIGINAL window (started + window) — expired means
+    // expired, never re-based to now+60.
+    if (turn.recoveryStartedAt != null) {
+      final deadline = turn.recoveryStartedAt!.add(initialWindow);
+      await _setPendingJson(
+        server,
+        sid,
+        jsonEncode({
+          ...rec,
+          'attempt_id': ?migrated,
+          ..._recoveryJson(turn.recoveryStartedAt!, deadline, false, turn.historyAfterId),
+        }),
+      );
+      return PendingRecoveryResult(
+        PendingRecoveryOutcome.begun,
+        PendingTurn.fromJson(_pendingRaw(server, sid)!),
+      );
+    }
+    // Nothing time-shaped (including watermark-only legacy records): this
+    // is the FIRST entry into unknown recovery — stamp now + window once.
     await _setPendingJson(
       server,
       sid,
       jsonEncode({
         ...rec,
+        'attempt_id': ?migrated,
         ..._recoveryJson(at, at.add(initialWindow), false, turn.historyAfterId),
       }),
     );
@@ -500,7 +749,11 @@ class LocalStore {
       return const RecoveryRetryResult(RecoveryRetryOutcome.mismatch, null);
     }
     final turn = PendingTurn.fromJson(rec);
-    if (!turn.hasRecoveryMetadata || turn.recoveryRetryUsed) {
+    // R1: the retry only extends a window that GENUINELY EXISTS. No
+    // parseable deadline (or the flag-only legacy shape) never buys a
+    // fresh 30s — the caller observes the persisted state or lands
+    // exhausted, it does not mint budget out of nothing.
+    if (!turn.hasRecoveryBudget || turn.recoveryRetryUsed) {
       return RecoveryRetryResult(RecoveryRetryOutcome.alreadyUsed, turn);
     }
     await _setPendingJson(
@@ -548,6 +801,7 @@ class LocalStore {
           now,
       recovery: _recoveryKeys(rec),
       wake: _wakeKeys(rec),
+      attempt: _attemptKeys(rec),
     );
   });
 
@@ -583,7 +837,28 @@ class LocalStore {
     if (rec != null && _leaseHeldByOther(rec, now)) return null;
     // A NEW claim belongs to a NEW turn: the old turn's recovery budget
     // must not leak into it (B3 — only metadata set after this claim
-    // counts, and begin stamps it at first recovery).
+    // counts, and begin stamps it at first recovery). Same for the
+    // attempt identity (R2): a human claim mints a FRESH id — never a
+    // carry-over of the stale record's — while an autoWake dispatch gets
+    // none (it never becomes a human attempt).
+    final attemptId = origin == 'autoWake' ? null : newAttemptId();
+    if (attemptId != null &&
+        !await _writeAttempt(
+          server,
+          sid,
+          attemptId,
+          LocalAttempt(
+            attemptId: attemptId,
+            server: server,
+            sid: sid,
+            createdAt: now,
+            origin: 'human',
+          ).toJson(),
+        )) {
+      // Journal refused: the claim is refused BEFORE anything is written,
+      // so the caller never POSTs onto an identity-less attempt.
+      throw const PendingPersistenceFailure();
+    }
     await _writePending(
       server,
       sid,
@@ -593,6 +868,7 @@ class LocalStore {
       leaseUntil: now.add(lease),
       recovery: {'history_after_id': ?historyAfterId},
       wake: {'origin': ?origin, 'wake_batch_id': ?wakeBatchId},
+      attempt: {'attempt_id': ?attemptId},
     );
     return '$tabId|$turnId';
   });
@@ -617,6 +893,7 @@ class LocalStore {
         rec['owner_tab'] == tabId &&
         '${rec['owner_tab']}|${rec['owner_turn']}' == token;
     if (!held) return false;
+    final attemptId = await _migrateAttemptLocked(server, sid, rec);
     await _writePending(
       server,
       sid,
@@ -630,6 +907,7 @@ class LocalStore {
       leaseUntil: now.add(lease),
       recovery: _recoveryKeys(rec),
       wake: _wakeKeys(rec),
+      attempt: {'attempt_id': ?attemptId}, // preserved, migrated once §4.1
     );
     return true;
   });
@@ -647,6 +925,7 @@ class LocalStore {
     if (rec == null) return false;
     // token embeds the tab layer; equality already implies this tab owns it.
     if ('${rec['owner_tab']}|${rec['owner_turn']}' != token) return false;
+    final attemptId = await _migrateAttemptLocked(server, sid, rec);
     await _writePending(
       server,
       sid,
@@ -657,6 +936,7 @@ class LocalStore {
       leaseUntil: now.add(lease),
       recovery: _recoveryKeys(rec),
       wake: _wakeKeys(rec),
+      attempt: {'attempt_id': ?attemptId}, // preserved, migrated once §4.1
     );
     return true;
   });
@@ -679,6 +959,156 @@ class LocalStore {
         // clean settle that will not survive reload.
         return removed || _pendingRaw(server, sid) == null;
       });
+
+  // ---- OFFLINE-SEND R2 §4.1/§4.2: the local attempt journal --------------
+  // ONE prefs key per attemptId under `_scope(server, sid, 'attempt.x')`
+  // (field = 'attempt.<attemptId>'),
+  // never one shared JSON list (a lock-less tab could then overwrite
+  // another tab's entries wholesale). Every write rides the SAME per-
+  // session `withStoreTx` chain as claim/amend/touch/clear, so a locked op
+  // must use the PRIVATE helpers — calling the public methods from inside
+  // a transaction would re-acquire the same lock. Journal + pending are
+  // separate keys: fixes here are multi-key writes ordered journal-first,
+  // NOT an atomic transaction across keys.
+
+  /// Test seam: makes every journal write behave exactly like a REFUSED
+  /// prefs write (false), so callers' storage-failure paths are reachable.
+  @visibleForTesting
+  static bool debugFailAttemptWrites = false;
+
+  /// Test seam: invoked inside `endLocalAttempt` with 'afterJournal' right
+  /// after the tombstone persisted but BEFORE the pending compare-delete
+  /// (throwing there simulates a crash between §4.2 steps 2 and 3), and
+  /// with 'afterDelete' once the delete landed. Null in production.
+  @visibleForTesting
+  static Future<void> Function(String phase)? debugEndAttemptHook;
+
+  /// Persist one journal entry (create or update by attemptId). False =
+  /// the write was refused or failed readback; nothing is thrown here —
+  /// the caller decides what a refusal means for its own operation.
+  Future<bool> saveAttempt(String server, String sid, LocalAttempt attempt) =>
+      withStoreTx('pending.$server.$sid', () =>
+          _writeAttempt(server, sid, attempt.attemptId, attempt.toJson()));
+
+  LocalAttempt? loadAttempt(String server, String sid, String attemptId) {
+    final raw = prefs.getString(_attemptKey(server, sid, attemptId));
+    if (raw == null) return null;
+    try {
+      return LocalAttempt.fromJson(
+        Map<String, dynamic>.from(jsonDecode(raw) as Map),
+      );
+    } on Object {
+      return null; // corrupt entry reads as none
+    }
+  }
+
+  /// Enumerate the session's attempts by STRICT scoped prefix (the prefix
+  /// ends in `attempt.` and the remainder must be a single dot-free id,
+  /// so a sibling sid like `sid-extra` or an adversarial dotted id cannot
+  /// bleed in even though encodeComponent(server) may itself carry dots).
+  /// The key scan IS the index; nothing is TTL-dropped — unknown
+  /// or unsent drafts (and abandoned tombstones) outlive every window
+  /// until something explicit removes them. Corrupt entries are skipped.
+  List<LocalAttempt> listAttempts(String server, String sid) {
+    final prefix = '${Uri.encodeComponent(server)}.$sid.attempt.';
+    final out = <LocalAttempt>[];
+    for (final key in prefs.getKeys()) {
+      if (!key.startsWith(prefix)) continue;
+      final id = key.substring(prefix.length);
+      if (id.isEmpty || id.contains('.')) continue;
+      final raw = prefs.getString(key);
+      if (raw == null) continue;
+      try {
+        final a = LocalAttempt.fromJson(
+          Map<String, dynamic>.from(jsonDecode(raw) as Map),
+        );
+        if (a != null) out.add(a);
+      } on Object {
+        // corrupt entry: skip it, never drop the ones that parse.
+      }
+    }
+    return out;
+  }
+
+  /// Remove one attempt entry (terminal + no draft/blob references is the
+  /// caller's policy, §4.1). Inside the SAME session lock; false when the
+  /// key was never there or the removal did not land.
+  Future<bool> removeAttempt(String server, String sid, String attemptId) =>
+      withStoreTx('pending.$server.$sid', () async {
+        final key = _attemptKey(server, sid, attemptId);
+        if (prefs.getString(key) == null) return false; // nothing to remove
+        final removed = await prefs.remove(key);
+        return removed || prefs.getString(key) == null;
+      });
+
+  /// The local settlement of §4.2, fixed order, entirely inside the same
+  /// per-session lock as every other pending op: compare FIRST (a moved
+  /// token or attempt writes NOTHING), persist the abandoned tombstone
+  /// SECOND (refusal stops everything, pending untouched), only then the
+  /// inlined compare-delete (a refused delete keeps tombstone AND pending
+  /// and reports cleanupPending). A crash between the last two leaves
+  /// tombstone + pending side by side — later readers see the matching
+  /// abandoned entry and must not re-arm a waiting budget for it. This is
+  /// explicitly NOT atomic across keys; it degrades LOUDLY (no
+  /// cross-tab-atomic claim without Web Locks — same caveat as §4.5).
+  Future<LocalAttemptEndResult> endLocalAttempt(
+    String server,
+    String sid, {
+    String? token,
+    required String attemptId,
+    required LocalAttempt tombstone,
+  }) => withStoreTx('pending.$server.$sid', () async {
+    // (a) authoritative compare before ANY side effect.
+    final rec = await _rereadPending(server, sid);
+    if (rec == null) {
+      return const LocalAttemptEndResult(LocalAttemptEndOutcome.missing, null);
+    }
+    final current = rec['owner_tab'] == null && rec['owner_turn'] == null
+        ? null
+        : '${rec['owner_tab']}|${rec['owner_turn']}';
+    if (current != token || rec['attempt_id'] != attemptId) {
+      return const LocalAttemptEndResult(
+        LocalAttemptEndOutcome.mismatch,
+        null,
+      );
+    }
+    // (b) tombstone before touch: the abandoned entry is the crash-proof
+    // anti-resurrection marker, NOT a server terminal statement.
+    if (!await _writeAttempt(server, sid, attemptId, tombstone.toJson())) {
+      return const LocalAttemptEndResult(
+        LocalAttemptEndOutcome.journalFailed,
+        null,
+      );
+    }
+    final hook = debugEndAttemptHook;
+    if (hook != null) await hook('afterJournal');
+    // (c) compare-delete, inlined (never a nested public clearPending —
+    // that would re-acquire this very lock) and re-compared: a token
+    // observed moved at this point still means cleanupPending, because
+    // the tombstone write above already happened.
+    final now = await _rereadPending(server, sid);
+    if (now != null) {
+      final nowToken =
+          now['owner_tab'] == null && now['owner_turn'] == null
+          ? null
+          : '${now['owner_tab']}|${now['owner_turn']}';
+      if (nowToken != token) {
+        return const LocalAttemptEndResult(
+          LocalAttemptEndOutcome.cleanupPending,
+          null,
+        );
+      }
+      final removed = await prefs.remove(_scope(server, sid, 'pending'));
+      if (!(removed || _pendingRaw(server, sid) == null)) {
+        return const LocalAttemptEndResult(
+          LocalAttemptEndOutcome.cleanupPending,
+          null,
+        );
+      }
+    }
+    if (hook != null) await hook('afterDelete');
+    return LocalAttemptEndResult(LocalAttemptEndOutcome.ended, attemptId);
+  });
 
   // ---- BULK-HIDE B2/B3: hidden namespace — one serializer per server ----
   // All hidden writers (single, batch, snapshot, migration, legacy) share
@@ -848,4 +1278,31 @@ class RecoveryRetryResult {
   const RecoveryRetryResult(this.outcome, this.record);
   final RecoveryRetryOutcome outcome;
   final PendingTurn? record;
+}
+
+/// OFFLINE-SEND R2 §4.2: how a local settlement ended. None of these is a
+/// server statement — `ended` means THIS client stopped waiting and left
+/// an abandoned tombstone, with the delivery outcome still unknown.
+enum LocalAttemptEndOutcome {
+  /// Tombstone persisted and the matching pending key is gone.
+  ended,
+
+  /// Tombstone persisted but the pending delete did not land (or the
+  /// record moved mid-flight): both survive; only local cleanup retries.
+  cleanupPending,
+
+  /// Token or attemptId moved — nothing was written at all.
+  mismatch,
+
+  /// No pending record.
+  missing,
+
+  /// The tombstone write was refused: pending untouched, no tombstone.
+  journalFailed,
+}
+
+class LocalAttemptEndResult {
+  const LocalAttemptEndResult(this.outcome, [this.attemptId]);
+  final LocalAttemptEndOutcome outcome;
+  final String? attemptId;
 }

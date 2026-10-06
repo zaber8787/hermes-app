@@ -115,19 +115,24 @@ class AppDeliveryAdapter:
     supports_async_delivery = True
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
-        from . import cron_delivery_store
+        from . import cron_delivery_store, self_wake
         from hermes_constants import get_hermes_home
         self._stopping = asyncio.Event()
         home = get_hermes_home()
         cron_delivery_store.drain_home(home)  # resume what a restart left queued
         self._drainer = asyncio.create_task(self._drain_loop(),
                                            name="hermes-app-cron-drainer")
+        # SELFWAKE: the gateway owns the worker; arming is mode-agnostic and
+        # cheap — wake.selfwake decides inside every tick (fail closed off).
+        self_wake.arm_loop(asyncio.get_running_loop(), home)
         log.info("app platform connected; cron drainer armed for %s", home)
         return True
 
     async def disconnect(self) -> None:
+        from . import self_wake
         if getattr(self, "_stopping", None) is not None:
             self._stopping.set()
+        self_wake.arm_stop()
         drainer = getattr(self, "_drainer", None)
         if drainer is not None:
             self._drainer = None
@@ -136,7 +141,7 @@ class AppDeliveryAdapter:
                 await drainer
 
     async def _drain_loop(self) -> None:
-        from . import cron_delivery_store
+        from . import cron_delivery_store, self_wake
         from hermes_constants import get_hermes_home
         while not self._stopping.is_set():
             try:
@@ -146,10 +151,13 @@ class AppDeliveryAdapter:
             except asyncio.TimeoutError:
                 pass
             try:
-                summary = await asyncio.to_thread(cron_delivery_store.drain_home,
-                                                  get_hermes_home())
+                home = get_hermes_home()
+                summary = await asyncio.to_thread(cron_delivery_store.drain_home, home)
                 if summary.get("delivered") or summary.get("failed"):
                     log.info("cron bridge drain: %s", summary)
+                # SELFWAKE drainer-drained hook: fresh-delivered batches only
+                # (dedup is counted separately and never wakes anything).
+                self_wake.drainer_drained(home, summary)
             except Exception as exc:
                 log.warning("cron bridge drain failed: %s", type(exc).__name__)
 

@@ -305,6 +305,8 @@ async def case_lifecycle(args):
           "approval incompatibility fail-closes activity (no partial capability)")
     check(state["manifest"]["push"]["status"] == "skipped_incompatible",
           "approval incompatibility fail-closes push (native callback is its only producer)")
+    check(state["manifest"]["approval_inbox"]["status"] == "skipped_incompatible",
+          "approval incompatibility fail-closes approval_inbox (its native callbacks are the capture points)")
     check(approval_context._is_unattended_platform_approval_context is original_predicate and
           approval._is_unattended_platform_approval_context is original_predicate, "approval transaction restores both policy bindings")
     check(all(state["manifest"][u]["status"] == "applied" for u in ("upload","limits","media","history","skills")), "other five groups survive approval incompatibility")
@@ -313,8 +315,8 @@ async def case_lifecycle(args):
     runs._handle_stop_run = original
     manager.unload()
     module.register(PluginContext(loaded.manifest,manager))
-    check(all(state["manifest"][u]["status"] == "applied" for u in ("approval","activity","push")),
-          "restored target re-applies approval, activity and push")
+    check(all(state["manifest"][u]["status"] == "applied" for u in ("approval","activity","push","approval_inbox")),
+          "restored target re-applies approval, activity, push and approval_inbox")
     check(state["manifest"]["cron_bridge"].get("registration") == "scoped",
           "re-registration renews the scoped app platform")
     # A second loader namespace must share ownership without stacking patches.
@@ -363,7 +365,7 @@ async def case_lifecycle(args):
     module.register(AbandoningCtx())
     check(all(state["manifest"][u]["status"] == "skipped_incompatible"
               for u in ("limits","upload","media","history","approval","skills","activity","push",
-                        "cron_bridge")),
+                        "approval_inbox","cron_bridge")),
           "loader timeout mid-commit leaves every unit red")
     check(not state["groups"], "abandoned registration owns no group")
     check((api.MAX_REQUEST_BYTES, api.APIServerAdapter._handle_artifact_upload,
@@ -388,7 +390,7 @@ async def run(args):
         # case's own assertions show what the installed subset actually does,
         # while the gate keeps a partially skipped install from ever reading PASS.
         manifest_ok = args.worker == "control" or (
-            len(manifest) == 10 and all(v["status"] == "applied" for v in manifest.values()))
+            len(manifest) == 12 and all(v["status"] == "applied" for v in manifest.values()))
         if args.worker == "approval":
             from .approval import case_approval
             outcome = await case_approval(args, server, check)
@@ -398,6 +400,12 @@ async def run(args):
         elif args.worker == "push":
             from .push import case_push
             outcome = await case_push(args, server, check)
+        elif args.worker == "approval_inbox":
+            from .approval_inbox import case_approval_inbox
+            outcome = await case_approval_inbox(args, server, check)
+        elif args.worker == "approval_push":
+            from .approval_push import case_approval_push
+            outcome = await case_approval_push(args, server, check)
         elif args.worker == "cron_bridge":
             from .cron_bridge import case_cron_bridge
             outcome = await case_cron_bridge(args, server, check)
@@ -407,12 +415,15 @@ async def run(args):
         elif args.worker == "wakecap":
             from .wakecap import case_wakecap
             outcome = await case_wakecap(args, server, check)
+        elif args.worker == "selfwake":
+            from .selfwake import case_selfwake
+            outcome = await case_selfwake(args, server, check)
         else:
             outcome = await globals()["case_"+args.worker](args)
         status, detail = outcome or ("PASS", f"{len(DETAILS)} assertions")
         if not manifest_ok:
             status = "FAIL"
-            detail = f"behavior: {detail} | gate: ten hook groups not applied: {manifest}"
+            detail = f"behavior: {detail} | gate: twelve hook groups not applied: {manifest}"
         return {"id":args.worker,"status":status,"detail":detail,"assertions":DETAILS,
                 "manifest":manifest,"peak_rss_kib":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}
     except Exception as exc:

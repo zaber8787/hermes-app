@@ -1,11 +1,15 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart' show CircularProgressIndicator;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:hermes_app/api/hermes_repository.dart' show ApiException;
 import 'package:hermes_app/features/chat/chat_page.dart';
 import 'package:hermes_app/features/chat/chat_controller.dart';
+import 'package:hermes_app/features/chat/live_turn.dart';
+import 'package:hermes_app/features/chat/message_timeline.dart';
 import 'package:hermes_app/features/chat/typing_dots.dart';
 import 'package:hermes_app/features/settings/local_store.dart';
 import 'package:hermes_app/l10n/app_locale.dart';
@@ -177,6 +181,75 @@ void main() {
     expect(find.textContaining('已由其他分頁接手'), findsOneWidget);
     c.error = null;
     c.notifyListeners();
+    await tester.pump();
+  });
+
+  // ---- OFFLINE-SEND R1 (A5): presentation-state gate ----------------------
+
+  testWidgets('LiveTurnView dots follow showTyping, never the bare turn',
+      (tester) async {
+    final turn = LiveTurn(); // incomplete: the old code always showed dots
+    await tester.pumpWidget(
+      localizedWrap(
+        locale: AppLocale.zhHant,
+        LiveTurnView(turn: turn, detailed: false, showTyping: false),
+      ),
+    );
+    expect(find.byType(TypingDots), findsNothing);
+    await tester.pumpWidget(
+      localizedWrap(
+        locale: AppLocale.zhHant,
+        LiveTurnView(turn: turn, detailed: false, showTyping: true),
+      ),
+    );
+    expect(find.byType(TypingDots), findsOneWidget);
+  });
+
+  testWidgets('recovering with NULL deadline says nothing (zh, live==null)',
+      (tester) async {
+    await store.savePending(
+      repo.baseUrl,
+      's',
+      userText: '問題一',
+      runId: 'r',
+    );
+    final hang = Completer<Map<String, dynamic>>();
+    repo.status = (_) => hang.future;
+    final container = await mount(tester, AppLocale.zhHant);
+    final c = container.read(chatProvider('s'));
+    expect(c.phase, ChatPhase.recovering);
+    // An unknown deadline with no active evidence must not fall back to
+    // "發言中" + dots: absence of evidence is never evidence of typing.
+    c.debugSetRecoveryBudget(null);
+    c.notifyListeners();
+    await tester.pump();
+    expect(find.text('發言中'), findsNothing);
+    expect(find.text('Typing'), findsNothing);
+    expect(find.byType(TypingDots), findsNothing);
+    c.dispose();
+  });
+
+  testWidgets('history throw on first read still shows the local exit (zh)',
+      (tester) async {
+    // A2 contract: a persisted pending turn publishes LOCAL state before
+    // any GET; a failing history read must never hide the waiting row
+    // behind a spinner.
+    await store.savePending(
+      repo.baseUrl,
+      's',
+      userText: '問題一',
+    );
+    repo.messagesOverride = () => throw const ApiException('blackout');
+    final container = await mount(tester, AppLocale.zhHant);
+    await tester.pump();
+    final c = container.read(chatProvider('s'));
+    expect(c.phase, ChatPhase.recovering);
+    expect(find.byType(CircularProgressIndicator), findsNothing);
+    expect(find.textContaining('正在核對上一回合'), findsOneWidget);
+    expect(find.text('問題一'), findsOneWidget); // pending bubble visible
+    expect(find.byType(TypingDots), findsNothing);
+    expect(repo.sends, 0);
+    c.dispose();
     await tester.pump();
   });
 }

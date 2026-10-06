@@ -7,6 +7,7 @@ import 'chat_controller.dart' show RemoteHint, RemoteMessageRow;
 import 'copy_actions.dart';
 import 'live_turn.dart';
 import 'message_content.dart';
+import 'tool_timeline_projection.dart';
 import 'turn_history_match.dart' show foldedTurnTextEquals;
 import 'typing_dots.dart';
 
@@ -17,6 +18,9 @@ class MessageTimeline extends StatelessWidget {
     required this.detailed,
     this.remoteRows = const [],
     this.wakeRowIds = const {},
+    this.toolOverrides = const {},
+    this.toolExclusions = const {},
+    this.slotScope = '',
   });
   final List<Message> messages;
   final bool detailed;
@@ -30,15 +34,49 @@ class MessageTimeline extends StatelessWidget {
   /// Raw Message + separate hint (§4.4): the note renders at the UI
   /// boundary, never inside durable content.
   final List<RemoteMessageRow> remoteRows;
+
+  /// TOOLCARD-DUP: one build's shared tool-overlap result. Callers that
+  /// render BOTH siblings of the same turn must pass the SAME object's
+  /// halves — a tool representation may only disappear when the other
+  /// side demonstrably represents the same call and covers its content.
+  /// Default-empty keeps every existing call site byte-identical.
+  final Map<String, ToolViewPayload> toolOverrides;
+  final Set<String> toolExclusions;
+  final String slotScope;
   @override
   Widget build(BuildContext context) {
     final hints = {for (final r in remoteRows) r.message.id: r.hint};
-    final entries = projectMessages(
+    var entries = projectMessages(
       [...messages, ...remoteRows.map((r) => r.message)],
       wakeRowIds: wakeRowIds,
     );
-    Widget view(DisplayEntry e) =>
-        EntryView(entry: e, hint: hints[e.message.id] ?? RemoteHint.none);
+    if (toolExclusions.isNotEmpty) {
+      entries = entries
+          .where(
+            (e) =>
+                e.kind != EntryKind.tool ||
+                !toolExclusions.contains(toolSlotKeyFor(e, slotScope)),
+          )
+          .toList();
+    }
+    final seenKeys = <String>{};
+    Widget view(DisplayEntry e) {
+      if (e.kind != EntryKind.tool) {
+        return EntryView(entry: e, hint: hints[e.message.id] ?? RemoteHint.none);
+      }
+      final key = toolSlotKeyFor(e, slotScope);
+      return EntryView(
+        // Stable slot key (plan §3.8): expanding step 3 must survive a new
+        // step arriving or the winning payload swapping sources. A
+        // duplicated key would break the widget tree — fall back to
+        // positional identity instead of crashing the page.
+        key: seenKeys.add(key) ? ValueKey(key) : null,
+        entry: e,
+        hint: hints[e.message.id] ?? RemoteHint.none,
+        toolOverride: toolOverrides[key],
+      );
+    }
+
     if (detailed) {
       return Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -124,11 +162,18 @@ class EntryView extends StatelessWidget {
     super.key,
     required this.entry,
     this.hint = RemoteHint.none,
+    this.toolOverride,
   });
   final DisplayEntry entry;
 
   /// Remote-projection note rendered separately from raw content (§4.4).
   final RemoteHint hint;
+
+  /// TOOLCARD-DUP: temporary view payload for a tool slot whose paired
+  /// other-side representation strictly covers the stored one. Durable
+  /// identity/key/timestamp stay — this only changes what the slot shows
+  /// while the paired live/transcript copy is excluded elsewhere.
+  final ToolViewPayload? toolOverride;
   @override
   Widget build(BuildContext context) {
     final strings = AppStrings.of(context);
@@ -137,34 +182,44 @@ class EntryView extends StatelessWidget {
     final m = e.message;
     switch (e.kind) {
       case EntryKind.tool:
+        final p =
+            toolOverride ??
+            ToolViewPayload(
+              name: e.call?.name ?? m.toolName ?? '',
+              arguments: e.call?.arguments,
+              result: e.result?.content,
+              timestamp: (e.result ?? m).timestamp,
+            );
         return Card(
           child: ExpansionTile(
             leading: const Icon(Icons.terminal, size: 18),
             title: Text(
-              e.call?.name ?? m.toolName ?? strings.resolve(MessageKey.timelineM005),
+              p.name.isNotEmpty
+                  ? p.name
+                  : strings.resolve(MessageKey.timelineM005),
             ),
             subtitle: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
                   strings.resolve(
-                    e.result == null
+                    p.result == null
                         ? MessageKey.timelineM006
                         : MessageKey.timelineM007,
                   ),
                 ),
-                MessageTime((e.result ?? m).timestamp),
+                MessageTime(p.timestamp),
               ],
             ),
             childrenPadding: const EdgeInsets.all(16),
             expandedCrossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              if (e.call != null)
+              if (p.arguments != null)
                 ExpansionTile(
                   title: Text(strings.resolve(MessageKey.timelineArguments)),
-                  children: [FoldedText(e.call!.arguments)],
+                  children: [FoldedText(p.arguments!)],
                 ),
-              if (e.result != null) FoldedText(e.result!.content),
+              if (p.result != null) FoldedText(p.result!),
             ],
           ),
         );
@@ -280,21 +335,48 @@ class LiveTurnView extends StatelessWidget {
     super.key,
     required this.turn,
     required this.detailed,
+    required this.showTyping,
     this.onResolve,
     this.transcriptUserAnchor,
     this.representedUserIds = const {},
+    this.identityOnlyExclusion = false,
+    this.toolProjection,
   });
   final LiveTurn turn;
   final bool detailed;
+
+  /// OFFLINE-SEND R1 (A5): the caller's derived presentation state. Dots
+  /// may only render for a genuinely-typing turn (sending, or recovery
+  /// with fresh active evidence) — an uncertain/un-evidenced wait must
+  /// never animate "typing" just because a LiveTurn object exists.
+  final bool showTyping;
   final Future<void> Function(String choice)? onResolve;
 
   /// GHOST-DUP B4: presentation-only transcript boundary. A completed
   /// run.completed transcript may re-carry the CURRENT turn's user row;
   /// when the pending bubble or a durable history row already renders it,
-  /// the transcript copy is dropped — assistant/tool rows always render
-  /// untouched, and no stored row is ever removed or reordered.
+  /// the transcript copy is dropped. Stored rows (user, assistant and
+  /// tool alike) are never removed or reordered; per TOOLCARD-DUP the
+  /// only transcript TOOL rows that stop rendering are ones a durable
+  /// slot in this same build provably represents — presentation
+  /// convergence, never a stored-row edit.
   final String? transcriptUserAnchor;
   final Set<String> representedUserIds;
+
+  /// OFFLINE-SEND R3 §5.4: for an ATTEMPT-BACKED turn a transcript user row
+  /// is dropped ONLY when its confirmed durable id is already rendered (or
+  /// it was supplied by the run event itself). The same-text
+  /// [transcriptUserAnchor] sweep is legacy-only: an identity-less preview
+  /// stays visible as an unconfirmed summary — it must never erase (or be
+  /// erased by) a row that may belong to a DIFFERENT attempt with the same
+  /// text.
+  final bool identityOnlyExclusion;
+
+  /// TOOLCARD-DUP: the SAME build's shared overlap result the durable
+  /// timeline received. Transcript tool rows and raw live tools that a
+  /// durable slot already represents (identity + coverage proven) drop out
+  /// HERE only — the stored rows and the live list are never touched.
+  final ToolOverlapProjection? toolProjection;
 
   @override
   Widget build(BuildContext context) {
@@ -305,13 +387,27 @@ class LiveTurnView extends StatelessWidget {
           .where((m) {
             if (!m.isUserTurn) return true;
             if (representedUserIds.contains(m.id)) return false;
+            if (identityOnlyExclusion) return true;
             return !(anchor != null &&
                 anchor.isNotEmpty &&
                 foldedTurnTextEquals(m.content, anchor));
           })
           .toList();
-      return MessageTimeline(messages: rows, detailed: detailed);
+      // The non-empty-transcript branch NEVER falls through to turn.tools,
+      // even when every transcript tool entry is excluded below (a
+      // re-materialized raw list would resurrect the second card).
+      return MessageTimeline(
+        messages: rows,
+        detailed: detailed,
+        toolExclusions: toolProjection?.transcriptExcluded ?? const {},
+        slotScope: toolProjection?.scope ?? '',
+      );
     }
+    final excludedLive = toolProjection?.liveToolsExcluded ?? const <int>{};
+    final shownTools = [
+      for (var i = 0; i < turn.tools.length; i++)
+        if (!excludedLive.contains(i)) i,
+    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -333,34 +429,38 @@ class LiveTurnView extends StatelessWidget {
               ),
             ),
           ),
-        if (turn.tools.isNotEmpty)
+        if (shownTools.isNotEmpty)
           ExpansionTile(
             initiallyExpanded: detailed,
             title: Text(
               strings.resolve(
                 MessageKey.timelineM010,
-                count: turn.tools.length,
+                count: shownTools.length,
               ),
             ),
-            children: turn.tools
+            children: shownTools
                 .map(
-                  (tool) => ExpansionTile(
+                  (i) => ExpansionTile(
+                    // Unmatched live steps key off the turn instance +
+                    // ORIGINAL index (plan §3.8): a filtered view must
+                    // never shift one step's expansion state onto another.
+                    key: ValueKey('live:${identityHashCode(turn)}#$i'),
                     leading: Icon(
-                      tool.completed
+                      turn.tools[i].completed
                           ? Icons.check_circle_outline
                           : Icons.hourglass_top,
                       size: 18,
                     ),
-                    title: Text(tool.name),
+                    title: Text(turn.tools[i].name),
                     children: [
                       ExpansionTile(
                         title: Text(strings.resolve(MessageKey.timelineArguments)),
-                        children: [FoldedText(tool.arguments)],
+                        children: [FoldedText(turn.tools[i].arguments)],
                       ),
-                      if (tool.result.isNotEmpty)
+                      if (turn.tools[i].result.isNotEmpty)
                         Padding(
                           padding: const EdgeInsets.all(12),
-                          child: FoldedText(tool.result),
+                          child: FoldedText(turn.tools[i].result),
                         ),
                     ],
                   ),
@@ -392,7 +492,7 @@ class LiveTurnView extends StatelessWidget {
             title: Text(strings.resolve(MessageKey.timelineReasoning)),
             children: [FoldedText(turn.reasoning)],
           ),
-        if (!turn.completed && turn.approval == null)
+        if (!turn.completed && turn.approval == null && showTyping)
           const Padding(
             padding: EdgeInsets.all(12),
             child: TypingDots(),

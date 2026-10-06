@@ -11,17 +11,22 @@ import '../../models/message.dart';
 import '../../models/session_activity.dart';
 import '../../models/session.dart';
 import '../../platform/chat_input_platform.dart';
+import '../../platform/store_tx.dart';
 import '../../providers.dart';
 import '../attachments/attachment_controller.dart';
 import '../attachments/file_drop.dart';
 import '../attachments/gallery_picker.dart';
 import '../settings/local_store.dart';
 import '../settings/management_page.dart';
+import 'approval_inbox_view.dart';
 import 'chat_controller.dart';
 import 'client_commands.dart';
+import 'local_attempt.dart';
+import 'remote_stop.dart';
 import 'viewers.dart';
 import 'typing_dots.dart';
 import 'message_timeline.dart';
+import 'tool_timeline_projection.dart';
 
 /// Attachment-button pick feedback (IOS-PICKER-PLAN B4 — presentation
 /// wiring only, never the chat state machine): await the pick, then show
@@ -69,6 +74,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   late final LocalStore _store;
   late final String _serverUrl;
   bool _wakeSessionOff = false; // APPWAKE D: per-session opt-out
+  // ---- OFFLINE-SEND R2 §4.3: draft discipline ------------------------------
+  // Every composer write (debounce, dispose flush, restore, first-frame
+  // clear) rides the SAME draft-revision CAS: the revision counter — never
+  // the text — decides write ownership. A stale callback loses the CAS and
+  // must not write, even when the texts happen to match.
+  int _draftRev = 0;
+  String? _restoreAttemptId; // journal attempt whose rawDraft awaits restore
+  bool _restoreConflict = false; // chatDraftRestoreConflict notice showing
+  final Set<String> _restoredOnce = {}; // restore executes ONCE per attempt
+  bool _pageGone = false;
   @override
   void initState() {
     super.initState();
@@ -82,33 +97,42 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     _store = store;
     final serverUrl = ref.read(settingsProvider).url;
     _serverUrl = serverUrl;
+    _draftRev = store.draftRevision(serverUrl, widget.session.id);
     final saved = store.draft(serverUrl, widget.session.id);
     _wakeSessionOff = store.autoWakeSessionOff(serverUrl, widget.session.id);
     // A draft identical to the last delivered user message is the ghost of an
     // already-sent turn (its clearing raced a disposed page); drop it here so
-    // re-entry opens with an empty box.
+    // re-entry opens with an empty box. R2: an attempt-backed draft is NEVER
+    // ghost-cleared on text equality alone (revision-gated CAS instead).
     input.text = _isGhostDraft(saved, chat) ? '' : saved;
+    // R2 §4.3: an UNSAVED-slot residue — an abandoned/unresolved attempt's
+    // rawDraft with the slot empty — surfaces as the restore action only,
+    // never silently into the editor.
+    _scanJournalRestore();
     input.addListener(() {
       setState(() {});
       // APPWAKE: typing (focus or text) pauses auto-dispatch; putting the
       // editor down resumes it (the controller owns the queue check).
       chat.noteInputActive(_focused || input.text.trim().isNotEmpty);
       if (suppressDraft) return;
+      // A real keystroke re-grounds the revision: the live editor is the
+      // freshest content, and the debounce write below claims whatever
+      // revision the store has reached SINCE the last successful write.
+      final rev = _store.draftRevision(_serverUrl, widget.session.id);
+      if (rev != _draftRev) _draftRev = rev;
       // Debounced draft save so leaving (or dying) mid-typing keeps the text.
       draftTimer?.cancel();
       draftTimer = Timer(const Duration(milliseconds: 400), () {
-        ref
-            .read(localStoreProvider)
-            .saveDraft(
-              ref.read(settingsProvider).url,
-              widget.session.id,
-              input.text,
-            );
+        unawaited(_persistDraft(input.text));
       });
     });
     scroll.addListener(() {
       follow = scroll.position.maxScrollExtent - scroll.offset < 120;
-      if (scroll.offset < 80 && firstLoaded) {
+      // Auto-load near the TOP only. A clamped jumpTo at the bottom of a
+      // momentarily short viewport reports offset < 80 with offset == max;
+      // that is not a reader scrolling into older rows (and the in-list
+      // load-older button covers pages too short to ever pass this gate).
+      if (scroll.offset < 80 && !follow && firstLoaded) {
         final controller = ref.read(chatProvider(widget.session.id));
         if (controller.hasOlder &&
             !controller.loadingOlder &&
@@ -129,7 +153,13 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         suppressDraft = true;
         input.clear();
         suppressDraft = false;
-        unawaited(store.saveDraft(serverUrl, widget.session.id, ''));
+        // R2 §4.3: even the first-frame clear rides the CAS — a draft that
+        // moved under us (new tab, restore) is never wiped by a stale clear.
+        unawaited(_persistDraft(''));
+      }
+      if (input.text.isEmpty) {
+        final found = _scanJournalRestore();
+        if (found) setState(() {});
       }
     });
     if (fileDropSupported) {
@@ -150,15 +180,31 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   @override
   void dispose() {
+    _pageGone = true;
     // APPWAKE: this editor is gone — a stale "typing" flag must not park
     // the queue forever for a controller that outlives the page.
     chat.noteInputActive(false);
     draftTimer?.cancel();
     // AUDIT-03: the debounce window must never swallow the last keystrokes —
     // commit the current snapshot through the captured store (fire-and-forget,
-    // no ref). After a send the box is already empty, so this can only ever
-    // persist UNSSENT text; the ghost-draft rule on re-entry stays intact.
-    unawaited(_store.saveDraft(_serverUrl, widget.session.id, input.text));
+    // no ref). R2 §4.3: the flush is CAS-gated. An EMPTY editor only proves
+    // THIS composer is empty — it must never overwrite a newer draft, an
+    // unrestored attempt snapshot's slot, or a reopened page's fresh write.
+    final text = input.text;
+    final rev = _draftRev;
+    unawaited(() async {
+      final ok = await _store.saveDraftCas(
+        _serverUrl,
+        widget.session.id,
+        text,
+        expectedRevision: rev,
+      );
+      if (!ok && _store.draft(_serverUrl, widget.session.id) == text) {
+        // The slot already holds exactly this text: nothing to flush.
+        _draftRev = _store.draftRevision(_serverUrl, widget.session.id);
+      }
+      // Otherwise this page lost the CAS: the newer writer stands.
+    }());
     if (_dropTarget case final t?) detachFileDrop(t);
     // Leaving the page: cut this session's SSE so the server counts the run as
     // unwatched — that arms ntfy push and, with the v0.12 patch, the run keeps
@@ -181,12 +227,405 @@ class _ChatPageState extends ConsumerState<ChatPage> {
 
   /// Ghost draft = unsent-looking text that equals the last delivered user
   /// turn; it can only be the echo of a message this client already sent.
+  /// R2 §4.3/§5.4: when a human attempt owns the draft (a live pending
+  /// record, or the latest unresolved attempt whose snapshot matches), text
+  /// equality alone must NEVER clear it — identity/revision decide, not the
+  /// bytes. Legacy (pre-R2, attemptId-less) records keep the old rule.
   bool _isGhostDraft(String text, ChatController controller) {
     if (text.isEmpty) return false;
+    final pending = _store.loadPending(_serverUrl, widget.session.id);
+    if (pending != null && pending.attemptId != null && !pending.isAutoWake) {
+      return false;
+    }
+    if (pending == null) {
+      final all = [
+        for (final a in _store.listAttempts(_serverUrl, widget.session.id))
+          if (a.origin == 'human' && a.rawDraft == text) a,
+      ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+      final latest = all.isEmpty ? null : all.last;
+      if (latest != null && latest.disposition != AttemptDisposition.settled) {
+        return false; // an unresolved attempt's draft — identity-gated, not text
+      }
+    }
     for (final m in controller.messages.reversed) {
       if (m.isUserTurn) return m.content == text;
     }
     return false;
+  }
+
+  /// R2 §4.3: the ONE composer-write rule. CAS on the tracked revision; a
+  /// loss against a MOVED revision retries only while the LIVE editor still
+  /// shows this exact text (then the editor is the freshest content). A dead
+  /// page never retries; a stale snapshot never overwrites anything.
+  Future<void> _persistDraft(String text) async {
+    final ok = await _store.saveDraftCas(
+      _serverUrl,
+      widget.session.id,
+      text,
+      expectedRevision: _draftRev,
+    );
+    if (ok) {
+      _draftRev = _store.draftRevision(_serverUrl, widget.session.id);
+      return;
+    }
+    if (_pageGone) {
+      if (_store.draft(_serverUrl, widget.session.id) == text) {
+        _draftRev = _store.draftRevision(_serverUrl, widget.session.id);
+      }
+      return;
+    }
+    final current = _store.draftRevision(_serverUrl, widget.session.id);
+    if (current != _draftRev && mounted && input.text == text) {
+      _draftRev = current;
+      final retried = await _store.saveDraftCas(
+        _serverUrl,
+        widget.session.id,
+        text,
+        expectedRevision: current,
+      );
+      if (retried) {
+        _draftRev = _store.draftRevision(_serverUrl, widget.session.id);
+      }
+      return;
+    }
+    if (_store.draft(_serverUrl, widget.session.id) == text) {
+      _draftRev = _store.draftRevision(_serverUrl, widget.session.id);
+    }
+    // else: stale callback — silently refuse (the newer writer stands).
+  }
+
+  /// R2 §4.3: surface an unrestored attempt snapshot as the restore action
+  /// ONLY when the draft slot is empty and the journal holds a human
+  /// attempt's raw draft that was never restored into this revision.
+  /// Returns true when a candidate was found (caller may repaint).
+  bool _scanJournalRestore() {
+    if (_restoreAttemptId != null) return false;
+    if (_store.draft(_serverUrl, widget.session.id).isNotEmpty) return false;
+    final pending = _store.loadPending(_serverUrl, widget.session.id);
+    final all = [
+      for (final a in _store.listAttempts(_serverUrl, widget.session.id))
+        if (a.origin == 'human' &&
+            a.rawDraft != null &&
+            a.rawDraft!.isNotEmpty &&
+            a.draftRestoredRevision == null &&
+            // First-frame-accepted evidence: a delivered attempt's snapshot
+            // is spent, never a restore offer (the ghost rule's journal
+            // twin, §4.3/M16).
+            a.terminalEvidence?['accepted_frame'] != true &&
+            (a.disposition == AttemptDisposition.abandoned ||
+                (a.disposition == AttemptDisposition.waiting &&
+                    (pending == null || pending.attemptId != a.attemptId))))
+          a,
+    ]..sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    if (all.isEmpty) return false;
+    _restoreAttemptId = all.last.attemptId;
+    return true;
+  }
+
+  /// Consume the restore snapshot ONCE. Current user text always wins (the
+  /// conflict notice keeps the button available); an empty editor receives
+  /// the VERBATIM draft through the draft CAS, and the attempt records the
+  /// revision it was restored at (reload never offers it twice).
+  Future<void> _performRestore() async {
+    final id = _restoreAttemptId;
+    if (id == null || _restoredOnce.contains(id)) return;
+    final a = _store.loadAttempt(_serverUrl, widget.session.id, id);
+    final raw = a?.rawDraft;
+    if (a == null || raw == null || raw.isEmpty) {
+      _restoreAttemptId = null;
+      return;
+    }
+    if (a.draftRestoredRevision != null) {
+      _restoredOnce.add(id);
+      if (mounted) setState(() => _restoreAttemptId = null);
+      return; // idempotent consume: the journal already says "restored"
+    }
+    if (!mounted) return;
+    if (input.text.isNotEmpty) {
+      setState(() => _restoreConflict = true);
+      return; // current text untouched; the button stays available
+    }
+    var ok = await _store.saveDraftCas(
+      _serverUrl,
+      widget.session.id,
+      raw,
+      expectedRevision: _draftRev,
+    );
+    if (ok) {
+      _draftRev = _store.draftRevision(_serverUrl, widget.session.id);
+    } else {
+      final current = _store.draftRevision(_serverUrl, widget.session.id);
+      if (_store.draft(_serverUrl, widget.session.id) == raw) {
+        _draftRev = current;
+        ok = true; // the slot already holds exactly the snapshot
+      } else if (current != _draftRev && mounted && input.text.isEmpty) {
+        _draftRev = current;
+        ok = await _store.saveDraftCas(
+          _serverUrl,
+          widget.session.id,
+          raw,
+          expectedRevision: current,
+        );
+        if (ok) _draftRev = _store.draftRevision(_serverUrl, widget.session.id);
+      }
+    }
+    if (!ok) {
+      if (mounted) setState(() => _restoreConflict = true);
+      return;
+    }
+    suppressDraft = true;
+    input.text = raw; // VERBATIM: leading/trailing spaces, newlines, unicode
+    suppressDraft = false;
+    if (mounted) {
+      await ref
+          .read(attachmentsProvider(widget.session.id))
+          .mergeForRestore(a.attachmentSnapshots);
+    }
+    await _store.saveAttempt(
+      _serverUrl,
+      widget.session.id,
+      LocalAttempt(
+        attemptId: a.attemptId,
+        server: a.server,
+        sid: a.sid,
+        createdAt: a.createdAt,
+        origin: a.origin,
+        rawDraft: a.rawDraft,
+        preparedInput: a.preparedInput,
+        attachmentSnapshots: a.attachmentSnapshots,
+        editorRevision: a.editorRevision,
+        disposition: a.disposition,
+        delivery: a.delivery,
+        runId: a.runId,
+        historyAfterId: a.historyAfterId,
+        serverEpoch: a.serverEpoch,
+        recoveryStartedAt: a.recoveryStartedAt,
+        recoveryDeadline: a.recoveryDeadline,
+        retryUsed: a.retryUsed,
+        draftRestoredRevision: _draftRev,
+        terminalEvidence: a.terminalEvidence,
+      ),
+    );
+    _restoredOnce.add(id);
+    if (mounted) {
+      setState(() {
+        _restoreAttemptId = null;
+        _restoreConflict = false;
+      });
+    }
+  }
+
+  /// The ONE stop entry (R2 §4.3): `/stop` command and the stop affordance
+  /// route here. The command string + revision are captured BEFORE the
+  /// await; the command text clears only if the editor still holds EXACTLY
+  /// that command at the SAME revision. A local end then seeds the restore
+  /// snapshot into an EMPTY editor — otherwise it is the conflict notice,
+  /// never an overwrite.
+  Future<void> _stopPath(ChatController c, {bool isCommand = false}) async {
+    final commandText = input.text;
+    final commandRevision = _draftRev;
+    var result = await c.stop();
+    if (!mounted) return;
+    if (result.kind == StopResultKind.remoteChoice) {
+      // CROSSDEV-STOP R2 §5.1: nothing was picked, nothing was POSTed. The
+      // chooser only names a target; cancelling it has zero side effects and
+      // leaves the typed /stop exactly where it is.
+      final target = await _showRemoteStopChooser(c);
+      if (!mounted) return;
+      if (target == null) {
+        setState(() {});
+        return;
+      }
+      final remote = await c.stopRemote(target);
+      if (!mounted) return;
+      result = StopResult(
+        StopResultKind.remoteResult,
+        remote: remote,
+        message: remote.message,
+      );
+    }
+    // §5.3: only an accepted-and-not-failed outcome consumes the COMMAND
+    // (never a draft). targetChanged / failed / unconfirmed keep the input,
+    // and no remote outcome ever reaches the restore path below.
+    if (isCommand &&
+        result.success &&
+        input.text == commandText &&
+        _draftRev == commandRevision) {
+      draftTimer?.cancel();
+      suppressDraft = true;
+      input.clear();
+      suppressDraft = false;
+    }
+    if (result.kind == StopResultKind.localWaitingEnded &&
+        result.attemptId != null) {
+      _restoreAttemptId = result.attemptId;
+      if ((result.restoreDraft ?? '').isEmpty) {
+        // Journal-side snapshot: fall back to the reload-style scan so a
+        // persisted (or crash-left) tombstone entry still surfaces.
+        _scanJournalRestore();
+      }
+      if (input.text.isEmpty && _restoreAttemptId != null) {
+        await _performRestore();
+      } else if (input.text.isNotEmpty && _restoreAttemptId != null) {
+        setState(() => _restoreConflict = true);
+      } else if (mounted) {
+        setState(() {});
+      }
+    } else if (mounted) {
+      setState(() {}); // publish whatever the stop attempt surfaced
+    }
+  }
+
+  /// CROSSDEV-STOP R2 §5.1/§5.3: the target chooser. Rows carry source,
+  /// status and the SHORT run id — NEVER a preview as identity; entries the
+  /// server cannot name appear DISABLED with a readable reason. Under
+  /// overflow the listed rows stay individually actionable and the note
+  /// states the list may not be everything.
+  Future<RemoteStopTarget?> _showRemoteStopChooser(ChatController c) {
+    final rows = c.remoteStopChooserRows;
+    final overflow = c.remoteCandidatesOverflowed;
+    return showModalBottomSheet<RemoteStopTarget>(
+      context: context,
+      builder: (context) {
+        final strings = AppStrings.of(context);
+        return SafeArea(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Text(
+                  strings.resolve(MessageKey.chatStopRemoteChoose),
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+              ),
+              if (overflow)
+                Padding(
+                  key: const ValueKey('chat.stopChooserOverflow'),
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: Text(
+                    strings.resolve(MessageKey.chatM016),
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                ),
+              Flexible(
+                child: ListView(
+                  shrinkWrap: true,
+                  children: [
+                    for (final row in rows)
+                      if (row.actionable)
+                        ListTile(
+                          key: ValueKey(
+                            'chat.stopChooser.${remoteStopShortId(
+                                  row.target!.runId,
+                                )}',
+                          ),
+                          title: Text(row.label),
+                          onTap: () => Navigator.pop(context, row.target),
+                        )
+                      else
+                        ListTile(
+                          key: ValueKey('chat.stopChooser.blocked'),
+                          enabled: false,
+                          title: Text(row.label),
+                          subtitle: Text(
+                            strings.resolve(row.blockReason!),
+                            key: const ValueKey('chat.stopChooser.reason'),
+                          ),
+                        ),
+                  ],
+                ),
+              ),
+              TextButton(
+                onPressed: () => Navigator.pop(context),
+                child: Text(strings.resolve(MessageKey.commonCancel)),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  /// A remote row's stop action: it aims at the NAMED row only and never
+  /// touches the composer, the local attempt machinery or the draft.
+  Future<void> _remoteStopRow(ChatController c, RemoteStopTarget target) async {
+    await c.stopRemote(target);
+    if (mounted) setState(() {});
+  }
+
+  Widget _remoteStopAction(
+    AppStrings strings,
+    ChatController c,
+    ActivityRun r,
+  ) {
+    final runId = r.runId;
+    if (runId == null || runId.trim().isEmpty) {
+      // A row the server never named: DISABLED affordance + the reason in
+      // readable text next to it (§5.3). Flexible so the pair can never
+      // overflow the row at narrow widths.
+      return Expanded(
+        child: Row(
+          key: const ValueKey('chat.remoteStopDisabled'),
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Semantics(
+              label: strings.resolve(MessageKey.chatStopRemoteNoRunId),
+              button: true,
+              child: IconButton(
+                onPressed: null,
+                tooltip: strings.resolve(MessageKey.chatStopRemoteHelp),
+                icon: const Icon(Icons.stop_circle_outlined),
+              ),
+            ),
+            Flexible(
+              child: Text(
+                strings.resolve(MessageKey.chatStopRemoteNoRunId),
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    final target = c.remoteTargetForRun(runId);
+    if (target != null) {
+      return IconButton(
+        key: ValueKey('chat.remoteStop.$runId'),
+        onPressed: c.remoteStopInFlight
+            ? null
+            : () => unawaited(_remoteStopRow(c, target)),
+        tooltip: strings.resolve(MessageKey.chatStopRemoteHelp),
+        icon: const Icon(Icons.stop_circle_outlined),
+      );
+    }
+    // Visible ≠ stoppable: a row this page may not control says so in
+    // readable text, never tooltip-only (§5.3/V16).
+    final reason =
+        c.remoteDisabledReason ?? MessageKey.chatStopRemoteRefreshRequired;
+    return Expanded(
+      child: Row(
+        key: const ValueKey('chat.remoteStopDisabled'),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Semantics(
+            label: strings.resolve(reason),
+            button: true,
+            child: IconButton(
+              onPressed: null,
+              tooltip: strings.resolve(MessageKey.chatStopRemoteHelp),
+              icon: const Icon(Icons.stop_circle_outlined),
+            ),
+          ),
+          Flexible(
+            child: Text(
+              strings.resolve(reason),
+              style: const TextStyle(fontSize: 12),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   Future<void> rename() async {
@@ -309,10 +748,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final controller = ref.read(chatProvider(widget.session.id));
     final value = input.text.trim();
     if (value == '/stop') {
-      // stop() 現在會回結果：失敗（無 runId／停止未確認）必須看得到原因，
-      // 不能無聲 no-op；成功才清輸入框。
-      final ok = await controller.stop();
-      if (ok) input.clear();
+      // stop() now reports WHAT it did. The command text clears only while
+      // the editor still holds exactly this command (§4.3); a failure keeps
+      // it (with the reason visible), a local end seeds the restore.
+      await _stopPath(controller, isCommand: true);
       return;
     }
     if (value.startsWith('/steer ')) {
@@ -352,20 +791,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     // AUDIT-09: bootstrap 尚未判定 pending 前也不得送新訊息（sendBlocked）。
     if (controller.sendBlocked || preparing || attachments.busy) return;
     setState(() => preparing = true);
+    final rawText = input.text; // R2 §4.3: the VERBATIM draft for the journal
     try {
       final rewritten = rewriteSkills(
         value,
         ref.read(skillsProvider).asData?.value ?? [],
       );
-      await ref
-          .read(localStoreProvider)
-          .saveDraft(ref.read(settingsProvider).url, widget.session.id, value);
+      await _persistDraft(value);
       final prompt = await attachments.prepare(rewritten);
       if (!mounted) return;
       setState(() {
         draftError = null;
         preparing = false;
       });
+      final consumed = List.of(attachments.drafts);
       draftTimer?.cancel();
       suppressDraft = true;
       input.clear();
@@ -376,14 +815,33 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // the sent text haunting the input box whenever detach/recover made it
       // resolve only at run end, and an attachments.clear() throw used to
       // skip the clearing entirely.
-      await controller.send(prompt, draft: value);
-      if (controller.error == null) await attachments.clear();
+      await controller.send(prompt, draft: value, rawDraft: rawText);
+      // R2 §4.3: decide from THIS attempt's outcome — never from the shared
+      // error slot. Attachments clear only for a confirmed-accepted send; a
+      // rejected/localSettled/lost attempt keeps draft AND attachments, and
+      // text the user typed in the meantime is never overwritten.
+      final outcome = controller.sendOutcome;
+      if (outcome == SendOutcome.accepted ||
+          (outcome == null &&
+              controller.error == null &&
+              controller.phase == ChatPhase.idle)) {
+        await attachments.clearForAttempt(consumed);
+      }
       if (!mounted) return;
       ref.invalidate(sessionsProvider);
       if (mounted &&
           controller.error != null &&
-          controller.phase == ChatPhase.idle) {
+          controller.phase == ChatPhase.idle &&
+          outcome != SendOutcome.accepted &&
+          // R2 §4.3: a local settlement owns the draft through the restore
+          // snapshot (§4.2) — re-inserting `value` here would race that
+          // seeding and win with the TRIMMED text.
+          outcome != SendOutcome.localSettled &&
+          input.text.isEmpty) {
         input.text = value;
+      }
+      if (mounted && outcome == SendOutcome.localSettled) {
+        if (_scanJournalRestore()) setState(() {});
       }
     } catch (e) {
       if (mounted) {
@@ -468,6 +926,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Widget build(BuildContext context) {
     final strings = AppStrings.of(context);
     final c = ref.watch(chatProvider(widget.session.id));
+    // TOOLCARD-DUP: ONE tool-overlap projection computed per build from
+    // this snapshot and passed to BOTH sibling views — the two sides must
+    // never compute removals independently and drop the same tool twice.
+    // Identity candidates come from the durable `c.messages` rows only
+    // (never remoteRows or the pending bubble).
+    final toolOverlap = projectToolOverlap(
+      sessionId: widget.session.id,
+      history: c.messages,
+      live: c.live,
+    );
     final attachments = ref.watch(attachmentsProvider(widget.session.id));
     final skills = ref.watch(skillsProvider).asData?.value ?? <Skill>[];
     final match = RegExp(r'(?:^|\s)/([^\s]*)$').firstMatch(input.text);
@@ -636,12 +1104,28 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     for (final r in c.remoteActiveRuns)
                       Row(
                         children: [
-                          Text(
-                            ChatController.formatRemoteRunLabel(strings, r),
-                            style: const TextStyle(fontSize: 12),
+                          Expanded(
+                            flex: 3,
+                            child: Text(
+                              ChatController.formatRemoteRunLabel(strings, r),
+                              style: const TextStyle(fontSize: 12),
+                            ),
                           ),
-                          const SizedBox(width: 8),
-                          if (!r.isTerminal) const TypingDots(),
+                          // CROSSDEV-STOP §3.3/§5.2: a `stopping` row shows
+                          // 「正在核對」 purely from the fresh activity — no
+                          // local state, no pending, no POST of any kind.
+                          if (c.remoteStoppingRunIds.contains(r.runId))
+                            Text(
+                              strings.resolve(
+                                MessageKey.chatStopRemoteChecking,
+                              ),
+                              style: const TextStyle(fontSize: 12),
+                            )
+                          else if (!r.isTerminal)
+                            const TypingDots(),
+                          // §5.1/§5.3: per-row stop action; disabled rows
+                          // carry a READABLE reason, never tooltip-only.
+                          _remoteStopAction(strings, c, r),
                         ],
                       ),
                     if (c.observedActivity?.overflow == true)
@@ -692,6 +1176,22 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   ),
                 ],
               ),
+            // CROSSDEV-STOP R2 §5.2/§5.3: remote wording rides the SECONDARY
+            // tone — requested/checking/unavailable/unconfirmed/ended are
+            // reconciliation states, never the red error slot, and never a
+            // local stop-banner.
+            if (c.remoteStopFeedback != null)
+              Padding(
+                key: const ValueKey('chat.remoteStopFeedback'),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text(
+                  strings.render(c.remoteStopFeedback!),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.tertiary,
+                  ),
+                ),
+              ),
             // SILENCE-DROP §3.3: "waiting for a reply" is its own
             // secondary-tone line — never red, never folded into the
             // error slot (the stream is alive; nothing failed).
@@ -705,7 +1205,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   ),
                 ),
               ),
-            if (c.error != null || c.recoveryNotice != null)
+            if (c.error != null ||
+                c.recoveryNotice != null ||
+                c.failedCard != null)
               Padding(
                 padding: const EdgeInsets.all(12),
                 child: Column(
@@ -739,6 +1241,25 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                           color: Theme.of(context).colorScheme.tertiary,
                         ),
                       ),
+                    // R3 §5.3: the notDispatched card survives into idle
+                    // reloads (journal-sourced), where no live `error` was
+                    // ever set for it.
+                    if (c.failedCard != null && c.error == null)
+                      Text(
+                        strings.render(c.failedCard!),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.error,
+                        ),
+                      ),
+                    // R3 §5.3/§6: the neutral delivery note for an
+                    // attempt-backed attempt still stuck at "unknown".
+                    if (c.deliveryNotice != null)
+                      Text(
+                        strings.render(c.deliveryNotice!),
+                        style: TextStyle(
+                          color: Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                      ),
                     Row(
                       children: [
                         // STUCK-BUSY B4: 「重新核對」 shows only while the
@@ -749,14 +1270,44 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             onPressed: c.retryReconcile,
                             child: Text(strings.resolve(MessageKey.chatM021)),
                           ),
+                        // R3 §5.3: the ONLY retry POST affordance — the
+                        // notDispatched card's. Without RESOLVED Web Locks
+                        // it renders DISABLED beside the degraded notice
+                        // (§4.5); unknown/rejected never offer retry.
+                        if (c.retryUnsentAttemptId != null)
+                          TextButton(
+                            key: const ValueKey('chat.retryUnsent'),
+                            onPressed: c.retryUnsentAvailable
+                                ? () => unawaited(
+                                    c.retryUnsent(c.retryUnsentAttemptId!),
+                                  )
+                                : null,
+                            child: Text(
+                              strings.resolve(MessageKey.chatRetryUnsent),
+                            ),
+                          ),
+                        // R2 §4.2: an abandoned tombstone's ONLY action is
+                        // the local cleanup retry — zero POSTs, no budget.
+                        if (c.localCleanupRetryAvailable)
+                          TextButton(
+                            onPressed: () => unawaited(c.retryLocalCleanup()),
+                            child: Text(
+                              strings.resolve(MessageKey.chatClearLocalWaiting),
+                            ),
+                          ),
                         if (c.phase == ChatPhase.uncertain &&
-                            c.hasLocalWaitingRecord)
+                            c.hasLocalWaitingRecord &&
+                            !c.localCleanupRetryAvailable)
                           TextButton(
                             onPressed: c.clearLocalWaitingRecord,
                             child: Text(
                               strings.resolve(MessageKey.chatClearLocalWaiting),
                             ),
                           ),
+                        // §4.3: the uncertain-row clear above routes through
+                        // the SAME journal-first local end (clearLocalWaiting
+                        // Record → endLocalAttempt) — one exit, no second
+                        // button duplicating it.
                         if (!c.busy)
                           TextButton(
                             onPressed: c.load,
@@ -808,6 +1359,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             remoteRows: c.remoteRows,
                             wakeRowIds: c.wakeRowIds,
                             detailed: c.detailed,
+                            toolOverrides: toolOverlap.durableOverrides,
+                            slotScope: toolOverlap.scope,
                           ),
                           // APPWAKE D: quiet status line while reports wait
                           // for their (rate-limited) auto-read.
@@ -859,16 +1412,18 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                               child: Row(
                                 mainAxisAlignment: MainAxisAlignment.end,
                                 children: [
-                                  // STUCK-BUSY B4: the generic "typing" row
-                                  // belongs to CONFIRMED-active work only.
-                                  // A recovery window shows its honest
-                                  // countdown (persisted deadline, repainted
-                                  // once a second); uncertain says nothing
-                                  // that could pass for a pending answer —
-                                  // no dots, ever.
-                                  if (c.phase == ChatPhase.recovering &&
-                                      c.recoverySecondsRemaining != null &&
-                                      !c.recoveryActiveConfirmed)
+                                  // STUCK-BUSY B4 / OFFLINE-SEND R1 (A5) /
+                                  // R3 §5.3: the controller derives ONE
+                                  // presentation state; this row only
+                                  // renders it. `dispatching` says「正在送出
+                                  // 訊息…」with NO dots (never 發言中);
+                                  // `activeConfirmed` keeps the existing
+                                  // 發言中 row; `countdown` shows the
+                                  // persisted recovery countdown; `silent`
+                                  // (uncertain / evidence-less) shows and
+                                  // animates nothing.
+                                  if (c.livePresentation ==
+                                      LivePresentation.countdown)
                                     Text(
                                       strings.render(
                                         UiMessage.local(
@@ -886,7 +1441,21 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                             .onSurfaceVariant,
                                       ),
                                     )
-                                  else if (c.phase != ChatPhase.uncertain) ...[
+                                  else if (c.livePresentation ==
+                                      LivePresentation.dispatching)
+                                    Text(
+                                      strings.resolve(
+                                        MessageKey.chatSendDispatching,
+                                      ),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Theme.of(context)
+                                            .colorScheme
+                                            .onSurfaceVariant,
+                                      ),
+                                    )
+                                  else if (c.livePresentation ==
+                                      LivePresentation.activeConfirmed) ...[
                                     Text(
                                       strings.resolve(MessageKey.chatM025),
                                       style: TextStyle(
@@ -902,17 +1471,58 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                 ],
                               ),
                             ),
+                          // APPROVALPUSH B3 (R6): exact-request cards for
+                          // every pending approval in this session (local OR
+                          // remote — never a fake turn row).
+                          if (c.approvalInboxSupported)
+                            PendingApprovalsPanel(
+                              requests: c.pendingApprovals(),
+                              unconfirmedRuns: c.approvalUnconfirmedRuns,
+                              onResolve: c.resolveApprovalExact,
+                              onReconfirm: c.reconfirmApprovals,
+                            ),
+                          if (c.approvalLegacyNotice)
+                            Padding(
+                              key: const ValueKey('approval-legacy-notice'),
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 16,
+                                vertical: 4,
+                              ),
+                              child: Text(
+                                strings.resolve(
+                                  MessageKey.approvalCrossDeviceUnavailable,
+                                ),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Theme.of(
+                                    context,
+                                  ).colorScheme.onSurfaceVariant,
+                                ),
+                              ),
+                            ),
                           if (c.live != null)
                             LiveTurnView(
                               turn: c.live!,
                               detailed: c.detailed,
                               onResolve: c.resolveApproval,
-                              // GHOST-DUP B4: hide the transcript's copy of
-                              // the user row this page already renders.
+                              // R1 (A5): the transcript owns its dots on the
+                              // SAME phase rule as before — uncertain never
+                              // "types". (R3 §5.3 changes the WORDING of an
+                              // unacknowledged send, not this animation.)
+                              showTyping: switch (c.phase) {
+                                ChatPhase.sending => true,
+                                ChatPhase.recovering => c.recoveryActiveConfirmed,
+                                _ => false,
+                              },
+                              // GHOST-DUP B4 (legacy) + R3 §5.4: attempt-
+                              // backed turns exclude transcript rows by
+                              // durable ID ONLY — never on text.
                               transcriptUserAnchor: c.pendingInput,
+                              identityOnlyExclusion: c.turnIsAttemptBacked,
                               representedUserIds: {
                                 for (final m in c.messages) m.id,
                               },
+                              toolProjection: toolOverlap,
                             ),
                         ],
                       ),
@@ -957,6 +1567,47 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   style: TextStyle(color: Theme.of(context).colorScheme.error),
                 ),
               ),
+            // R2 §4.5: a browser WITHOUT Web Locks cannot coordinate tabs —
+            // say it out loud instead of pretending cross-tab safety.
+            if (storeTxCapability == StoreTxCapability.unavailable)
+              Padding(
+                key: const ValueKey('chat.crossTabSafetyReduced'),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Text(
+                  strings.resolve(MessageKey.chatCrossTabSafetyReduced),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: Theme.of(context).colorScheme.error,
+                  ),
+                ),
+              ),
+            // R2 §4.3: the restore snapshot is consumed EXACTLY ONCE and
+            // never overwrites current text — with text present it is the
+            // conflict notice plus the (still available) restore action.
+            if (_restoreAttemptId != null || _restoreConflict)
+              Padding(
+                key: const ValueKey('chat.restoreDraft'),
+                padding: const EdgeInsets.symmetric(horizontal: 12),
+                child: Row(
+                  children: [
+                    if (_restoreConflict)
+                      Expanded(
+                        child: Text(
+                          strings.resolve(MessageKey.chatDraftRestoreConflict),
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Theme.of(context).colorScheme.onSurfaceVariant,
+                          ),
+                        ),
+                      ),
+                    if (_restoreAttemptId != null)
+                      TextButton(
+                        onPressed: () => unawaited(_performRestore()),
+                        child: Text(strings.resolve(MessageKey.chatRestoreDraft)),
+                      ),
+                  ],
+                ),
+              ),
             Padding(
               padding: const EdgeInsets.all(12),
               child: Column(
@@ -974,11 +1625,60 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             label: Text(strings.resolve(MessageKey.chatSteer)),
                           ),
                         TextButton.icon(
-                          onPressed: c.canStop
-                              ? () => unawaited(c.stop())
+                          // R2 §4.3: ONE stop entry — server control when a
+                          // run exists, the local end when only this page's
+                          // attempt waiting is (stop() branches internally).
+                          // CROSSDEV-STOP §5.3: a stoppable remote row also
+                          // enables it (stop() still routes LOCAL FIRST; the
+                          // remote branch only runs when local has no target,
+                          // and never while a remote flight is in flight).
+                          onPressed:
+                              (c.canStop ||
+                                      c.canEndLocalWaiting ||
+                                      c.canRequestRemoteStop) &&
+                                  !c.remoteStopInFlight
+                              ? () => unawaited(_stopPath(c))
                               : null,
                           icon: const Icon(Icons.stop_circle_outlined),
-                          label: Text(strings.resolve(MessageKey.chatM026)),
+                          label: Text(
+                            strings.resolve(
+                              c.canStop || c.canEndLocalWaiting
+                                  ? MessageKey.chatM026
+                                  : MessageKey.chatStopRemote,
+                            ),
+                          ),
+                        ),
+                      ],
+                    )
+                  else if (c.canRequestRemoteStop ||
+                      c.remoteDisabledReason != null ||
+                      c.remoteStopInFlight)
+                    // CROSSDEV-STOP §5.3: the remote affordance outside the
+                    // local busy row. Honest enablement matrix: enabled only
+                    // with a stoppable target and never mid-flight; a disabled
+                    // pair shows the reason as READABLE text (chatStopRemote
+                    // NoRunId / RefreshRequired), never tooltip-only.
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.end,
+                      key: const ValueKey('chat.remoteStopAffordance'),
+                      children: [
+                        if (c.remoteDisabledReason != null &&
+                            !c.canRequestRemoteStop)
+                          Flexible(
+                            child: Text(
+                              strings.resolve(c.remoteDisabledReason!),
+                              style: const TextStyle(fontSize: 12),
+                            ),
+                          ),
+                        TextButton.icon(
+                          onPressed:
+                              c.canRequestRemoteStop && !c.remoteStopInFlight
+                              ? () => unawaited(_stopPath(c))
+                              : null,
+                          icon: const Icon(Icons.stop_circle_outlined),
+                          label: Text(
+                            strings.resolve(MessageKey.chatStopRemote),
+                          ),
                         ),
                       ],
                     ),

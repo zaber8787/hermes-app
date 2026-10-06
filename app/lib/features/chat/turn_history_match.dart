@@ -22,6 +22,10 @@ String foldTurnText(String s) =>
 /// When either side folds to empty (attachment-tag-only or whitespace),
 /// ONLY the raw exact form may match — the fold must never pair two
 /// different "empty-looking" turns together.
+/// OFFLINE-SEND R3 §5.4: for an attempt-backed record this fold is a
+/// CANDIDATE/diagnostic filter only. Text equality alone never decides
+/// delivered/settle/row-claims and never hides another attempt — durable
+/// run/row identity (or an event-supplied row id) is the only proof.
 bool foldedTurnTextEquals(String a, String b) {
   if (a == b) return true;
   final fa = foldTurnText(a), fb = foldTurnText(b);
@@ -74,6 +78,16 @@ class PendingHistoryInspection {
 /// [excludeIds] is the live `_beforeSend` watermark; [historyAfterId] is
 /// the persisted max numeric history id at send time (B3) — both are
 /// row-identity watermarks, never content attribution proofs.
+/// OFFLINE-SEND R3 §5.4 hardening for ATTEMPT-BACKED records:
+/// [attemptBacked] marks a record with a real attempt identity — then a
+/// same-text row is a CANDIDATE only, an ambiguous anchor can never be
+/// upgraded, and the caller must treat every verdict as non-attributing.
+/// [requireServerTime] drops rows without a server timestamp (timestamp
+/// 0) from candidacy: no server time, no hard attribution. [epochMoved]
+/// says the server epoch changed since the record was written: the old
+/// numeric [historyAfterId] stops being a watermark (it can no longer
+/// separate turns) and repeated same-text therefore surfaces as
+/// ambiguous instead of silently picking a row.
 PendingHistoryInspection inspectPendingHistory({
   required List<Message> rows,
   String? pendingText,
@@ -81,6 +95,9 @@ PendingHistoryInspection inspectPendingHistory({
   double? timeFloor,
   Set<String> excludeIds = const {},
   int? historyAfterId,
+  bool attemptBacked = false,
+  bool requireServerTime = false,
+  bool epochMoved = false,
 }) {
   if (!knownText) {
     return const PendingHistoryInspection(
@@ -96,11 +113,14 @@ PendingHistoryInspection inspectPendingHistory({
   for (var i = 0; i < rows.length; i++) {
     final m = rows[i];
     if (!m.isUserTurn || excludeIds.contains(m.id)) continue;
-    if (historyAfterId != null) {
+    if (historyAfterId != null && !epochMoved) {
       final numeric = int.tryParse(m.id);
       if (numeric != null && numeric <= historyAfterId) continue;
     }
     if (!foldedTurnTextEquals(m.content, text)) continue;
+    // R3 §5.4: a row with no server timestamp carries no time evidence at
+    // all — for an attempt-backed record it can never be hard-attributed.
+    if (requireServerTime && m.timestamp <= 0) continue;
     if (timeFloor != null && m.timestamp > 0 && m.timestamp < timeFloor) {
       continue;
     }

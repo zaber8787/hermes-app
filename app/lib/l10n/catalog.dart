@@ -135,6 +135,23 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.chatRecoveryStorageFailed:
       'This device cannot save the waiting record, so recovery cannot be '
       'tracked here. Your message was not resent.',
+  // OFFLINE-SEND §6 (exact wording, paired zh-TW below).
+  MessageKey.chatDeliveryUnknown:
+      'Delivery is unconfirmed. Re-check or end local waiting.',
+  MessageKey.chatRestoreDraft: 'Restore draft',
+  MessageKey.chatLocalWaitingEnded:
+      'Local waiting ended. The server task may still be running.',
+  MessageKey.chatDraftRestoreConflict:
+      'The unsent draft is saved. Your current text will not be overwritten.',
+  MessageKey.chatCrossTabSafetyReduced:
+      'This browser cannot coordinate tabs. Keep one tab open for this '
+      'conversation; retry sending is disabled.',
+  MessageKey.chatSendNotDispatched:
+      'Message not sent. Your draft and attachments have been kept.',
+  MessageKey.chatSendOffline:
+      'You are offline. The message has not been sent. Retry when connected.',
+  MessageKey.chatSendDispatching: 'Sending message…',
+  MessageKey.chatRetryUnsent: 'Retry sending',
   MessageKey.chatStateRunLabel: '{who}: {what}',
   MessageKey.chatStateM004: 'Status unconfirmed ({status})',
   MessageKey.chatStateM005: 'Queued',
@@ -203,6 +220,23 @@ const Map<MessageKey, String> catalogEn = {
       '⋯ (long content; the full text appears after history sync)',
   MessageKey.chatActivityStaleSummary:
       'Live status fetch failed; showing the last confirmed snapshot{time}. More in-progress turns may exist.',
+
+  // ---- CROSSDEV-STOP R2 §5.3: scoped remote stop actions ------------------
+  MessageKey.chatStopRemote: 'Stop server run',
+  MessageKey.chatStopRemoteHelp:
+      'Stop this run started by another device or source',
+  MessageKey.chatStopRemoteRequested: 'Stop requested; checking status',
+  MessageKey.chatStopRemoteChecking: 'Checking stop status',
+  MessageKey.chatStopRemoteUnavailable: 'This run is unavailable; refreshing status',
+  MessageKey.chatStopRemoteNoRunId:
+      'The server provided no run ID; this run cannot be stopped here',
+  MessageKey.chatStopRemoteRefreshRequired: 'Refresh run status first',
+  MessageKey.chatStopRemoteChoose: 'Choose a run to stop',
+  MessageKey.chatStopRemoteTargetChanged:
+      'The run identity changed; refresh and select again',
+  MessageKey.chatStopRemoteUnconfirmed:
+      'Stop is not yet confirmed; refresh status',
+  MessageKey.chatStopRemoteEnded: 'This run has ended',
   MessageKey.chatM001:
       'Use steer on an in-progress conversation in detailed mode.',
   MessageKey.chatM002: 'Send failed; the draft was kept.',
@@ -342,6 +376,21 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.approvalSession: 'Allow for this conversation',
   MessageKey.approvalAlways: 'Always allow',
   MessageKey.approvalDeny: 'Deny',
+  MessageKey.approvalRequestTitle: 'Action needs approval',
+  MessageKey.approvalRunSummary: 'Run: {summary} ({run})',
+  MessageKey.approvalRemaining: 'About {seconds} seconds left',
+  MessageKey.approvalTimeoutPolicy:
+      'This action will not run without a response',
+  MessageKey.approvalChecking: 'Checking whether approval is still pending',
+  MessageKey.approvalUnavailable:
+      'Approval status is unconfirmed. Check again',
+  MessageKey.approvalExpired: 'Approval timed out; this action did not run',
+  MessageKey.approvalResolvedElsewhere:
+      'This request was handled on another device',
+  MessageKey.approvalSubmitting: 'Submitting your choice',
+  MessageKey.approvalPendingCount: 'Pending approvals: {count}',
+  MessageKey.approvalCrossDeviceUnavailable:
+      'Cross-device approval is unavailable on this server',
   MessageKey.sessionsM001: 'Failed to create the conversation: {error}',
   MessageKey.sessionsRename: 'Rename',
   MessageKey.sessionsName: 'Conversation name',
@@ -606,6 +655,15 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatClearLocalWaiting: '清除本機等待紀錄',
   MessageKey.chatTerminalHistoryUnknown: '該回合已結束，但未能確認完整結果。請重新載入歷史。',
   MessageKey.chatRecoveryStorageFailed: '本機無法保存等待紀錄，此裝置無法追蹤復原進度；你的訊息並未重送。',
+  MessageKey.chatDeliveryUnknown: '尚無法確認訊息是否送達。可重新核對，或結束本機等待。',
+  MessageKey.chatRestoreDraft: '還原草稿',
+  MessageKey.chatLocalWaitingEnded: '已結束本機等待；伺服器上的任務可能仍在執行。',
+  MessageKey.chatDraftRestoreConflict: '已保留未送出草稿；目前輸入的文字不會被覆蓋。',
+  MessageKey.chatCrossTabSafetyReduced: '此瀏覽器無法協調多個分頁。請只開啟一個此對話分頁；重試送出暫停使用。',
+  MessageKey.chatSendNotDispatched: '訊息未送出，草稿與附件已保留。',
+  MessageKey.chatSendOffline: '目前離線，訊息尚未送出。恢復連線後可重試。',
+  MessageKey.chatSendDispatching: '正在送出訊息…',
+  MessageKey.chatRetryUnsent: '重試送出',
   MessageKey.chatStateM022: '串流提早結束',
   MessageKey.chatStateM023: '訊息未送出：{error}',
   MessageKey.chatStateM024: '歷史載入失敗，下拉可重試。',
@@ -634,6 +692,19 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatRemoteTruncated: '⋯（內容較長，歷史同步後顯示全文）',
   MessageKey.chatActivityStaleSummary:
       '即時狀態擷取失敗，顯示最後一次成功核對的結果{time}；可能還有未顯示的進行中回合。',
+
+  // ---- CROSSDEV-STOP R2 §5.3: scoped remote stop actions ------------------
+  MessageKey.chatStopRemote: '停止伺服器運行',
+  MessageKey.chatStopRemoteHelp: '停止其他裝置或來源啟動的此項運行',
+  MessageKey.chatStopRemoteRequested: '已送出停止請求，正在核對狀態',
+  MessageKey.chatStopRemoteChecking: '正在核對停止狀態',
+  MessageKey.chatStopRemoteUnavailable: '此運行已不可用，正在更新狀態',
+  MessageKey.chatStopRemoteNoRunId: '伺服器未提供運行識別碼，無法從此處停止',
+  MessageKey.chatStopRemoteRefreshRequired: '請先重新整理運行狀態',
+  MessageKey.chatStopRemoteChoose: '選擇要停止的運行',
+  MessageKey.chatStopRemoteTargetChanged: '運行身份已變更，請重新整理後再選擇',
+  MessageKey.chatStopRemoteUnconfirmed: '尚未確認是否停止，請重新整理狀態',
+  MessageKey.chatStopRemoteEnded: '此運行已結束',
   MessageKey.chatM001: '請在詳細模式中對進行中的對話插話。',
   MessageKey.chatM002: '傳送失敗，草稿已保留。',
   MessageKey.chatM003: '補充指示或調整方向',
@@ -759,6 +830,17 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.approvalSession: '本次對話都允許',
   MessageKey.approvalAlways: '一律允許',
   MessageKey.approvalDeny: '拒絕',
+  MessageKey.approvalRequestTitle: '動作需要核准',
+  MessageKey.approvalRunSummary: '執行工作：{summary}（{run}）',
+  MessageKey.approvalRemaining: '約剩 {seconds} 秒',
+  MessageKey.approvalTimeoutPolicy: '未回覆將不執行此動作',
+  MessageKey.approvalChecking: '正在確認核准是否仍有效',
+  MessageKey.approvalUnavailable: '核准狀態尚未確認，請重新核對',
+  MessageKey.approvalExpired: '核准已逾時，此動作未執行',
+  MessageKey.approvalResolvedElsewhere: '此請求已在其他裝置處理',
+  MessageKey.approvalSubmitting: '正在送出選擇',
+  MessageKey.approvalPendingCount: '待核准：{count}',
+  MessageKey.approvalCrossDeviceUnavailable: '此伺服器尚不支援跨裝置核准',
   MessageKey.sessionsM001: '建立對話失敗：{error}',
   MessageKey.sessionsRename: '重新命名',
   MessageKey.sessionsName: '對話名稱',

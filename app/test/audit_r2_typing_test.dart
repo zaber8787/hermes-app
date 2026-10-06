@@ -8,6 +8,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
 import 'package:hermes_app/models/session_activity.dart';
 import 'package:hermes_app/api/sse.dart';
+import 'package:hermes_app/features/chat/chat_controller.dart';
 import 'package:hermes_app/features/chat/chat_page.dart';
 import 'package:hermes_app/features/chat/message_timeline.dart';
 import 'package:hermes_app/features/chat/typing_dots.dart';
@@ -146,6 +147,13 @@ void main() {
       await tester.pump();
       final c = container.read(chatProvider('s'));
       expect(c.busy, isTrue);
+      // OFFLINE-SEND R3 §5.3 (contract note, surgical): an attempt-backed
+      // send that is not yet acknowledged derives the `dispatching`
+      // presentation — the live==null status row would now say「正在送出
+      // 訊息…」, never 發言中. With the live turn attached the transcript
+      // narrates (its one dots source) exactly as before — no double
+      // narration, no extra 發言中 row.
+      expect(c.livePresentation, LivePresentation.dispatching);
       // The live branch narrates through LiveTurnView (its own dots) —
       // no extra "發言中" row, no doubled dots (that was the old
       // double-narration this task calls out).

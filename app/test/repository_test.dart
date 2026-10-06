@@ -2,6 +2,8 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
+import 'package:hermes_app/l10n/message_key.dart';
+import 'package:hermes_app/l10n/ui_message.dart';
 
 void main() {
   test(
@@ -116,6 +118,50 @@ void main() {
         expect((await repo.sessions()).first.id, 'old');
         expect((await repo.sessions()).first.id, 'old');
         expect(historyReads, 2); // Unchanged counts reuse activity cache.
+      } finally {
+        repo.close();
+        await server.close(force: true);
+      }
+    },
+  );
+  // CROSSDEV-STOP R2 §5.2: the LOCAL stop path carries no metadata deadline
+  // at all (port default headers only), while the REMOTE reconciliation path
+  // (stopWithDeadline) pays the SAME POST under metadataTimeout. A slow
+  // gateway must never turn the local path into a timeout, and the bounded
+  // path must time out WITHOUT a silent re-POST (one dispatch, proven).
+  test(
+    'stop ignores metadataTimeout while stopWithDeadline bounds the same POST',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final paths = <String>[];
+      server.listen((request) async {
+        paths.add('${request.method} ${request.uri.path}');
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        request.response.statusCode = 200;
+        request.response.headers.contentType = ContentType.json;
+        request.response.write('{}');
+        await request.response.close();
+      });
+      final repo = HermesRepository(
+        'http://127.0.0.1:${server.port}',
+        'fake',
+        metadataTimeout: const Duration(milliseconds: 100),
+      );
+      try {
+        await repo.stop('r-local'); // No deadline: 400ms gateway is fine.
+        expect(paths, ['POST /v1/runs/r-local/stop']);
+        await expectLater(
+          repo.stopWithDeadline('r-remote'),
+          throwsA(
+            isA<ApiException>().having(
+              (e) => (e.uiMessage as UiLocal).key,
+              'bounded headers budget',
+              MessageKey.apiM005,
+            ),
+          ),
+        );
+        // Timeout AFTER dispatch: exactly one POST for r-remote, ever.
+        expect(paths.where((p) => p.endsWith('/r-remote/stop')).length, 1);
       } finally {
         repo.close();
         await server.close(force: true);

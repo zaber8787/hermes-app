@@ -11,6 +11,8 @@ library;
 
 import 'dart:async';
 
+import 'store_tx.dart';
+
 final Map<String, bool> _running = {};
 final Map<String, List<void Function()>> _queues = {};
 
@@ -45,5 +47,10 @@ void _advance(String name) {
   queue.removeAt(0)();
 }
 
-/// io has no sibling contexts; in-process ordering is total.
+/// io has no sibling contexts; in-process ordering is total, so the chain
+/// IS the complete serialization guarantee here.
 bool get storeTxIsCrossTab => false;
+
+/// Resolved immediately: on a single-context device the chain is complete
+/// serialization (there is no other tab to be cross-tab against).
+StoreTxCapability get storeTxCapability => StoreTxCapability.resolvedAvailable;

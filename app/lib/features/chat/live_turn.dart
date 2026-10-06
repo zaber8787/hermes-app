@@ -18,6 +18,17 @@ class LiveTurn {
   String? finalText;
   String reasoning = '';
   bool completed = false;
+
+  /// CROSSDEV-STOP R3 §6: WHICH end this run reached — 'completed',
+  /// 'cancelled', 'failed' or 'interrupted' once a known terminal event
+  /// lands; null while the turn is still running. [completed] only says
+  /// "finished"; wording downstream reads THIS field, never a hardcoded
+  /// assumption that terminal == completed.
+  String? terminalStatus;
+
+  /// The terminal frame's own error detail (run.failed payloads), carried
+  /// so the settle surface can show it honestly (M018-style).
+  Object? terminalDetail;
   final tools = <LiveTool>[];
   List<Message>? transcript;
   final seenSequences = <String>{};
@@ -106,7 +117,43 @@ class LiveTurn {
         approval = data;
         approvalChoice = null;
         approvalError = null;
+      case 'approval.responded':
+      case 'approval.resolved':
+        // APPROVALPUSH R2: settle by EXACT request id — an answer for one
+        // request must never retire another request's card.
+        final replyId = textOf(data['request_id']);
+        final mine = textOf(approval?['request_id']);
+        if (approval != null && (replyId.isEmpty || replyId == mine)) {
+          final answered = textOf(data['choice']);
+          approval = null;
+          approvalChoice = answered.isEmpty ? null : answered;
+          approvalError = null;
+        }
       case 'run.completed':
+      case 'run.cancelled':
+      case 'run.failed':
+      case 'run.interrupted':
+        // R3 §6: the known terminal events share ONE transcript/terminal
+        // update. The actual status is CARRIED (terminalStatus), never
+        // flattened into "completed".
+        final status = switch (event.type) {
+          'run.cancelled' => 'cancelled',
+          'run.failed' => 'failed',
+          'run.interrupted' => 'interrupted',
+          _ => 'completed',
+        };
+        // Identity strictness: a terminal frame naming a DIFFERENT run than
+        // this turn's known run is not this turn's end — ignore it (the
+        // session check above already rejects contradicting sessions).
+        final eventRun = textOf(data['run_id']);
+        if (eventRun.isNotEmpty &&
+            (runId?.isNotEmpty ?? false) &&
+            eventRun != runId) {
+          return;
+        }
+        // Terminal ONCE: a re-delivered or repeated terminal frame (even
+        // under a fresh seq) never re-updates and can never double-settle.
+        if (terminalStatus != null) return;
         transcript = (data['messages'] as List? ?? [])
             .asMap()
             .entries
@@ -117,6 +164,8 @@ class LiveTurn {
               ),
             )
             .toList();
+        terminalDetail = data['error'];
+        terminalStatus = status;
         completed = true;
       case 'error':
         throw const AppFormatException(

@@ -97,6 +97,35 @@ class HermesRepository {
   /// viewer and arms its ntfy push path (runs survive the disconnect).
   final _streamCancels = <String, Completer<void>>{};
 
+  // ---- R3 §5.1: per-session staged dispatch observation -------------------
+  // chat() gains no named param: its signature is a frozen test seam (23
+  // suite fakes override `chat({String? wakeBatch})`, and Dart rejects an
+  // override that drops an inherited OPTIONAL named parameter). The
+  // controller stages the observation for its sid immediately before it
+  // invokes chat(); the generator's first pull pops it exactly once and
+  // threads it to the port. Staging cannot interleave with another send:
+  // the caller's stage→chat-construction→first-pull stretch contains no
+  // await, and the pop REMOVES, so the same observation is never consumed
+  // twice. A never-pulled generator's leftover is dropped by the next
+  // stage/clear for that sid.
+  final _chatObservations = <String, DispatchObservation>{};
+
+  /// Thread [observation] into the NEXT [chat] invocation for [sid] (null =
+  /// clear any staged one; auto-wake dispatches always clear — their ledger
+  /// verdict is a different evidence track). Ignored by fake/subclass
+  /// overrides of chat: staging is side-effect free.
+  void stageChatObservation(String sid, DispatchObservation? observation) {
+    if (observation == null) {
+      _chatObservations.remove(sid);
+    } else {
+      _chatObservations[sid] = observation;
+    }
+  }
+
+  DispatchObservation? _popChatObservation(String sid) =>
+      _chatObservations.remove(sid);
+
+
   /// Close sid's live SSE without killing the server-side run.
   void cancelStream(String sid) {
     _streamCancels.remove(sid)?.complete();
@@ -162,6 +191,9 @@ class HermesRepository {
     bool sse = false,
     Future<void>? abortTrigger,
     Duration? headersTimeout,
+    // R3 §5.1: optional pass-through — only chat threads one; every other
+    // caller (and every existing call site) stays byte-identical with null.
+    DispatchObservation? observation,
   }) async {
     final PortResponse response;
     try {
@@ -178,6 +210,7 @@ class HermesRepository {
         abortTrigger: abortTrigger,
         // SSE carries the contract's long budget; never shorten it here.
         headersTimeout: sse ? unboundedTimeout : headersTimeout,
+        observation: observation,
       );
     } on PortTimeout {
       throw const ApiException.local(MessageKey.apiM005);
@@ -186,6 +219,10 @@ class HermesRepository {
     } catch (e) {
       throw ApiException.fromUiMessage(_netHint(e));
     }
+    // R3 §5.2: HEADS are proven now — record on BOTH the 2xx and the error
+    // path, BEFORE the drain below, so a throwing/timeout drain can never
+    // erase a known status from the evidence.
+    observation?.headersReceived(response.statusCode);
     if (response.statusCode < 200 || response.statusCode >= 300) {
       final budget = headersTimeout != null && headersTimeout < readTimeout
           ? headersTimeout
@@ -427,6 +464,11 @@ class HermesRepository {
   /// ApiException status surface so the controller's read-only recovery,
   /// never a blind re-POST, decides what happens next.
   Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) async* {
+    // R3 §5.1: consume the staged observation exactly once (staging exists
+    // because chat's signature is a frozen override seam — see
+    // stageChatObservation). Wake dispatches stage nothing: their 409/410
+    // ledger verdict is a separate evidence track.
+    final observation = _popChatObservation(sid);
     final stream = ++_streamCounter;
     final lease = StreamKeepalive(stream);
     final cancel = Completer<void>();
@@ -440,6 +482,7 @@ class HermesRepository {
         body: {'input': input, 'wake_batch': ?wakeBatch},
         sse: true,
         abortTrigger: cancel.future,
+        observation: observation,
       );
       if (response.mimeType != 'text/event-stream') {
         await response.stream.drain<void>();
@@ -467,6 +510,11 @@ class HermesRepository {
           }
           if (advanced == 1) break; // EOF
           final event = iterator.current;
+          // R3 §5.2: the PARSER — never the transport — records SSE first-
+          // event evidence (heartbeat included: a heartbeat proves a live
+          // response stream, nothing more; the ack decision stays with the
+          // caller's structured-event handling).
+          observation?.firstEvent(event.type);
           // Event names are server-controlled; only known names enter diagnostics.
           const known = {
             'heartbeat',
@@ -643,11 +691,28 @@ class HermesRepository {
   }
 
   /// Contract §2: status can finish as completed even after explicit stop.
-  Future<void> stop(String runId) async {
+  /// CROSSDEV-STOP R2 §5.2: the local path stays byte-for-byte unchanged.
+  Future<void> stop(String runId) =>
+      _stop(runId, deadline: null);
+
+  /// CROSSDEV-STOP R2 §5.2: the remote reconciliation stop POST with the
+  /// bounded headers budget — the SAME POST / body / auth as [stop], but the
+  /// already-existing [metadataTimeout] (20s) applies, matching runStatus.
+  /// Deliberately a TINY wrapper over the shared [_stop], not a param on
+  /// [stop]: the 23 frozen test fakes override `stop(String)` positionally,
+  /// and an optional named param on `stop` would invalidate every one of
+  /// those overrides. A 200 here still only proves the stop REQUEST landed —
+  /// terminal-vs-stopping is decided by the following runStatus, never by
+  /// parsing this response.
+  Future<void> stopWithDeadline(String runId) =>
+      _stop(runId, deadline: metadataTimeout);
+
+  Future<void> _stop(String runId, {required Duration? deadline}) async {
     await _json(
       'POST',
       '/v1/runs/${Uri.encodeComponent(runId)}/stop',
       body: {},
+      deadline: deadline,
     );
   }
 
@@ -729,6 +794,52 @@ class HermesRepository {
       'POST',
       '/v1/runs/${Uri.encodeComponent(runId)}/approval',
       body: {'choice': choice},
+    );
+  }
+
+  // ---- APPROVALPUSH B3: exact-request inbox endpoints (spec R2/R6) -------
+
+  /// Settings/bootstrap view of the inbox capability: null on ANY failure —
+  /// an old or unreachable server must never be claimed as supporting
+  /// cross-device approval.
+  Future<Map<String, dynamic>?> approvalInboxFeature() async {
+    try {
+      final feats = (await _json(
+        'GET',
+        '/v1/capabilities',
+        deadline: metadataTimeout,
+      ))['features'];
+      final inbox = feats is Map ? feats['approval_inbox'] : null;
+      return inbox is Map ? Map<String, dynamic>.from(inbox) : null;
+    } on Object {
+      return null;
+    }
+  }
+
+  /// The server's pending-approval snapshot for one run (truth view; an
+  /// `available: false` result is UNKNOWN, never "empty").
+  Future<Json> runApprovals(String runId) => _json(
+    'GET',
+    '/v1/runs/${Uri.encodeComponent(runId)}/approvals',
+    deadline: metadataTimeout,
+  );
+
+  /// Exact answer: request_id names the ONE request; server_epoch (when
+  /// known) rejects cross-generation guesses.
+  Future<void> resolveApprovalExact(
+    String runId,
+    String choice,
+    String requestId,
+    int? serverEpoch,
+  ) async {
+    await _json(
+      'POST',
+      '/v1/runs/${Uri.encodeComponent(runId)}/approval',
+      body: {
+        'choice': choice,
+        'request_id': requestId,
+        'server_epoch': ?serverEpoch,
+      },
     );
   }
 
