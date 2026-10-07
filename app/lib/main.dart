@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'features/chat/deep_link.dart';
 import 'features/settings/local_store.dart';
 import 'features/settings/notification_locale.dart';
 import 'features/settings/settings_page.dart';
@@ -20,6 +21,13 @@ Future<void> main() async {
   await Diagnostics.initialize();
   StreamKeepalive.initialize();
   final store = LocalStore(await SharedPreferences.getInstance());
+  // 01412FIX F5: capture a #/chat deep link BEFORE anything else — a link
+  // that lands on the settings screen waits in the stash for the first
+  // ready session list (login handoff); a spent stash never re-navigates.
+  final launchLink = captureLaunchLink();
+  if (launchLink != null) {
+    await store.stashDeepLink(launchLink);
+  }
   // Language loads FIRST and outside the credential try/catch: a vault
   // failure must never discard an existing saved language (I18N-PLAN §4.2).
   final locale = store.loadLocale();

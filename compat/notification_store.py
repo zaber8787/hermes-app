@@ -19,10 +19,20 @@ import threading
 import time
 from pathlib import Path
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 3
 PAGE_LIMIT = 100
 LOCK = threading.RLock()
 _STORES: dict[str, sqlite3.Connection] = {}
+
+# ONE outcome enum for every transport report (01412 audit m1). States an
+# owner's delivery may END in differ per path; no producer may claim a later
+# state than its own callback actually proves — an enqueue is never a send.
+OUTCOME_STATES = frozenset({"pending", "queued", "claimed", "enqueued",
+                            "sent", "shown", "failed", "unknown"})
+CLIENT_OUTCOMES = frozenset({"shown", "failed", "unknown"})
+SERVER_OUTCOMES = frozenset({"enqueued", "sent", "failed", "unknown"})
+# What a note_delivery() report may legally END a delivery in.
+REPORT_OUTCOMES = CLIENT_OUTCOMES | SERVER_OUTCOMES
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta(version INTEGER);
@@ -34,11 +44,13 @@ CREATE TABLE IF NOT EXISTS events(
   kind TEXT NOT NULL,
   source_id TEXT NOT NULL,
   created_seq INTEGER NOT NULL,
+  change_seq INTEGER NOT NULL DEFAULT 0,
   payload TEXT NOT NULL,
   created_at REAL NOT NULL,
   read_at REAL
 );
 CREATE INDEX IF NOT EXISTS events_order ON events(owner_scope, created_seq);
+CREATE INDEX IF NOT EXISTS events_change ON events(owner_scope, change_seq);
 CREATE TABLE IF NOT EXISTS deliveries(
   delivery_id TEXT PRIMARY KEY,
   event_id TEXT NOT NULL,
@@ -47,6 +59,7 @@ CREATE TABLE IF NOT EXISTS deliveries(
   state TEXT NOT NULL,
   attempt INTEGER NOT NULL DEFAULT 0,
   claimed_by TEXT,
+  show_token TEXT,
   updated_at REAL NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS delivery_phases
@@ -79,6 +92,21 @@ def _conn_for(home_or_conn) -> sqlite3.Connection:
                 conn.execute("INSERT INTO meta(version) VALUES(?)", (SCHEMA_VERSION,))
             elif int(row["version"]) > SCHEMA_VERSION:
                 raise RuntimeError("notification events schema is newer than this plugin")
+            elif int(row["version"]) < SCHEMA_VERSION:
+                columns = {r["name"] for r in
+                           conn.execute("PRAGMA table_info(deliveries)")}
+                if "show_token" not in columns:  # v2: durable claim tokens
+                    conn.execute("ALTER TABLE deliveries ADD COLUMN show_token TEXT")
+                ecolumns = {r["name"] for r in
+                            conn.execute("PRAGMA table_info(events)")}
+                if "change_seq" not in ecolumns:  # v3: reads are observable
+                    conn.execute("ALTER TABLE events ADD COLUMN change_seq INTEGER"
+                                 " NOT NULL DEFAULT 0")
+                    conn.execute("UPDATE events SET change_seq=created_seq"
+                                 " WHERE change_seq=0")
+                    conn.execute("CREATE INDEX IF NOT EXISTS events_change"
+                                 " ON events(owner_scope, change_seq)")
+                conn.execute("UPDATE meta SET version=?", (SCHEMA_VERSION,))
             conn.commit()
             _STORES[path] = conn
         return conn
@@ -112,28 +140,45 @@ def record_event(home, *, owner_scope, run_id, sid, kind, source_id,
                            (event_id,)).fetchone()
         if row is not None:
             return event_id, False
-        seq_row = conn.execute("SELECT next_seq FROM seq WHERE meta_key='events'").fetchone()
-        seq = int(seq_row["next_seq"]) if seq_row else 1
-        conn.execute("INSERT INTO seq(meta_key, next_seq) VALUES('events', ?)"
-                     " ON CONFLICT(meta_key) DO UPDATE SET next_seq=?", (seq + 1, seq + 1))
+        seq = _next_seq(conn)
         conn.execute(
             "INSERT INTO events(event_id, owner_scope, run_id, sid, kind, source_id,"
-            " created_seq, payload, created_at) VALUES(?,?,?,?,?,?,?,?,?)",
-            (event_id, owner_scope, run_id, sid, kind, source_id, seq,
+            " created_seq, change_seq, payload, created_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
+            (event_id, owner_scope, run_id, sid, kind, source_id, seq, seq,
              json.dumps(payload, ensure_ascii=False, separators=(",", ":")), now))
     return event_id, True
 
 
+def _next_seq(conn) -> int:
+    row = conn.execute("SELECT next_seq FROM seq WHERE meta_key='events'").fetchone()
+    seq = int(row["next_seq"]) if row else 1
+    conn.execute("INSERT INTO seq(meta_key, next_seq) VALUES('events', ?)"
+                 " ON CONFLICT(meta_key) DO UPDATE SET next_seq=?", (seq + 1, seq + 1))
+    return seq
+
+
 def events_after(home, owner_scope: str, after_seq: int = 0,
                  limit: int = PAGE_LIMIT) -> tuple[list[dict], bool, int]:
+    """Incremental view by CHANGE seq (01412 M2/M3): a read that converged on
+    another device re-stamps the event's change_seq, so every device's cursor
+    OBSERVES it. The third value is the highest change_seq actually DELIVERED
+    on this page — the honest next cursor; an overflow page resumes from it
+    and never skips to the global head."""
     conn = _conn_for(home)
     with LOCK:
         rows = conn.execute(
-            "SELECT * FROM events WHERE owner_scope=? AND created_seq>?"
-            " ORDER BY created_seq LIMIT ?", (owner_scope, after_seq, limit + 1)).fetchall()
-        head = conn.execute("SELECT next_seq FROM seq WHERE meta_key='events'").fetchone()
+            "SELECT * FROM events WHERE owner_scope=? AND change_seq>?"
+            " ORDER BY change_seq LIMIT ?", (owner_scope, after_seq, limit + 1)).fetchall()
     items = [_row_to_event(conn, dict(r)) for r in rows[:limit]]
-    return items, len(rows) > limit, int(head["next_seq"]) - 1 if head else 0
+    next_cursor = max([int(r["change_seq"]) for r in rows[:limit]], default=after_seq)
+    return items, len(rows) > limit, next_cursor
+
+
+def head_seq(home) -> int:
+    conn = _conn_for(home)
+    with LOCK:
+        row = conn.execute("SELECT next_seq FROM seq WHERE meta_key='events'").fetchone()
+    return int(row["next_seq"]) - 1 if row else 0
 
 
 def _row_to_event(conn, item: dict) -> dict:
@@ -155,7 +200,9 @@ def get_event(home, owner_scope: str, event_id: str) -> dict | None:
 
 def mark_read(home, owner_scope: str, event_id: str, reader: str) -> dict | None:
     """Idempotent per-reader ack. read != approve; it only converges later
-    alerts and stops un-sent reminders."""
+    alerts and stops un-sent reminders. A NEW ack re-stamps the event's
+    change_seq (01412 M2) so every device's incremental cursor OBSERVES the
+    convergence instead of keeping a phantom unread forever."""
     conn = _conn_for(home)
     now = time.time()
     with LOCK, conn:
@@ -163,11 +210,12 @@ def mark_read(home, owner_scope: str, event_id: str, reader: str) -> dict | None
                            (owner_scope, event_id)).fetchone()
         if row is None:
             return None
-        conn.execute(
+        inserted = conn.execute(
             "INSERT INTO read_events(event_id, reader, ack_seq, acked_at) VALUES(?,?,?,?)"
-            " ON CONFLICT(event_id, reader) DO NOTHING", (event_id, reader, row["created_seq"], now))
-        conn.execute("UPDATE events SET read_at=COALESCE(read_at,?) WHERE event_id=?",
-                     (now, event_id))
+            " ON CONFLICT(event_id, reader) DO NOTHING", (event_id, reader, row["created_seq"], now)).rowcount
+        if inserted:
+            conn.execute("UPDATE events SET read_at=COALESCE(read_at,?), change_seq=?"
+                         " WHERE event_id=?", (now, _next_seq(conn), event_id))
     return {"event_id": event_id, "read": True}
 
 
@@ -178,9 +226,12 @@ def is_read(home, event_id: str) -> bool:
                             (event_id,)).fetchone() is not None
 
 
-def claim_delivery(home, *, event_id, phase, channel, delivery_id, device_id):
+def claim_delivery(home, *, event_id, phase, channel, delivery_id, device_id,
+                   show_token=None):
     """One transport attempt per (event, phase, channel): the FIRST claimer may
-    show; everyone else gets already_claimed. Claim BEFORE calling the output."""
+    show; everyone else gets already_claimed. Claim BEFORE calling the output.
+    A claim may carry a durable show_token: the SAME token a later delivery
+    report must present to prove it comes from the claim owner (01412 M1)."""
     conn = _conn_for(home)
     now = time.time()
     with LOCK, conn:
@@ -190,14 +241,24 @@ def claim_delivery(home, *, event_id, phase, channel, delivery_id, device_id):
         if row is None:
             conn.execute(
                 "INSERT INTO deliveries(delivery_id, event_id, phase, channel, state,"
-                " claimed_by, updated_at) VALUES(?,?,?,?,?,?,?)",
-                (delivery_id, event_id, phase, channel, "claimed", device_id, now))
+                " claimed_by, show_token, updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                (delivery_id, event_id, phase, channel, "claimed", device_id,
+                 show_token, now))
             return "claimed", delivery_id
         if row["state"] == "pending":  # ledger pre-claim races a browser claim
-            conn.execute("UPDATE deliveries SET claimed_by=?, updated_at=?"
-                         " WHERE delivery_id=?", (device_id, now, row["delivery_id"]))
+            conn.execute("UPDATE deliveries SET state='claimed', claimed_by=?,"
+                         " show_token=?, updated_at=? WHERE delivery_id=?",
+                         (device_id, show_token, now, row["delivery_id"]))
             return "claimed", row["delivery_id"]
         return "already_claimed", row["delivery_id"]
+
+
+def show_token_for(home, delivery_id: str) -> str | None:
+    conn = _conn_for(home)
+    with LOCK:
+        row = conn.execute("SELECT show_token FROM deliveries WHERE delivery_id=?",
+                           (delivery_id,)).fetchone()
+    return row["show_token"] if row else None
 
 
 def new_delivery(home, *, event_id, phase, channel, delivery_id, state="pending") -> None:
@@ -209,19 +270,62 @@ def new_delivery(home, *, event_id, phase, channel, delivery_id, state="pending"
             (delivery_id, event_id, phase, channel, state, time.time()))
 
 
-def note_delivery(home, *, delivery_id, outcome, channel) -> str | None:
-    """shown/failed/unknown outcomes from the claim owner only; a claim in the
-    ledger records the fact, it never re-routes to another channel."""
+def queue_delivery(home, *, event_id, phase, channel, delivery_id):
+    """Pre-claim INTENT for a device to claim (01412 M5): the server records
+    the pending delivery but NEVER owns the claim itself — a server-side
+    claim would make every later device claim answer already_claimed.
+    Returns (verdict, delivery_id); verdict 'queued' | 'already_<state>'."""
+    conn = _conn_for(home)
+    with LOCK, conn:
+        row = conn.execute(
+            "SELECT delivery_id, state FROM deliveries"
+            " WHERE event_id=? AND phase=? AND channel=?",
+            (event_id, phase, channel)).fetchone()
+        if row is not None:
+            return ("queued" if row["state"] == "pending"
+                    else "already_" + row["state"]), row["delivery_id"]
+        conn.execute(
+            "INSERT INTO deliveries(delivery_id, event_id, phase, channel,"
+            " state, updated_at) VALUES(?,?,?,?,?,?)",
+            (delivery_id, event_id, phase, channel, "pending", time.time()))
+        return "queued", delivery_id
+
+
+def note_delivery(home, *, delivery_id, outcome, channel=None, event_id=None,
+                  owner_scope=None, device_id=None, show_token=None) -> str | None:
+    """Record a transport outcome. The trusted in-process server path reports
+    (delivery_id, outcome, channel) only. A DEVICE report (01412 audit M1) is
+    a TRANSACTION: owner, event, claim owner and the durable show token must
+    ALL match the ledger row; any mismatch reads exactly like a delivery that
+    does not exist. Reports use the ONE outcome enum (m1) — an unknown word
+    never rewrites a state, and a browser row is never finalized without the
+    token its claim minted."""
+    if outcome not in REPORT_OUTCOMES:
+        return None
     conn = _conn_for(home)
     now = time.time()
     with LOCK, conn:
         row = conn.execute("SELECT * FROM deliveries WHERE delivery_id=?",
                            (delivery_id,)).fetchone()
-        if row is None or row["channel"] != channel:
+        if row is None or (channel is not None and row["channel"] != channel):
             return None
-        if outcome in {"shown", "failed", "unknown"}:
-            conn.execute("UPDATE deliveries SET state=?, attempt=attempt+1, updated_at=?"
-                         " WHERE delivery_id=?", (outcome, now, delivery_id))
+        if event_id is not None and row["event_id"] != event_id:
+            return None
+        if owner_scope is not None:
+            event = conn.execute("SELECT owner_scope FROM events WHERE event_id=?",
+                                 (row["event_id"],)).fetchone()
+            if event is None or event["owner_scope"] != owner_scope:
+                return None
+        if device_id is not None and row["claimed_by"] != device_id:
+            return None
+        if row["channel"] == "browser":
+            # the claim owner's durable token is the only accepted proof
+            if row["state"] == "pending" or not row["show_token"]:
+                return None
+            if not show_token or show_token != row["show_token"]:
+                return None
+        conn.execute("UPDATE deliveries SET state=?, attempt=attempt+1, updated_at=?"
+                     " WHERE delivery_id=?", (outcome, now, delivery_id))
         return row["state"]
 
 

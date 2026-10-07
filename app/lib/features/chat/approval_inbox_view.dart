@@ -18,6 +18,7 @@ class PendingApprovalsPanel extends StatefulWidget {
     required this.unconfirmedRuns,
     required this.onResolve,
     required this.onReconfirm,
+    this.focusRequestId,
   });
 
   final List<ApprovalRequest> requests;
@@ -25,6 +26,10 @@ class PendingApprovalsPanel extends StatefulWidget {
   final Future<void> Function(ApprovalRequest request, String choice)
   onResolve;
   final Future<void> Function(ApprovalRequest request) onReconfirm;
+
+  /// 01412FIX F5: the deep link named this exact request — its card is the
+  /// ONE highlighted card; an id that matches nothing highlights nothing.
+  final String? focusRequestId;
 
   @override
   State<PendingApprovalsPanel> createState() => _PendingApprovalsPanelState();
@@ -82,6 +87,7 @@ class _PendingApprovalsPanelState extends State<PendingApprovalsPanel> {
             unconfirmed: widget.unconfirmedRuns.contains(r.runId),
             onResolve: widget.onResolve,
             onReconfirm: widget.onReconfirm,
+            focused: r.requestId == widget.focusRequestId,
           ),
       ],
     );
@@ -98,6 +104,7 @@ class PendingApprovalCard extends StatefulWidget {
     required this.unconfirmed,
     required this.onResolve,
     required this.onReconfirm,
+    this.focused = false,
   });
 
   final ApprovalRequest request;
@@ -105,6 +112,9 @@ class PendingApprovalCard extends StatefulWidget {
   final Future<void> Function(ApprovalRequest request, String choice)
   onResolve;
   final Future<void> Function(ApprovalRequest request) onReconfirm;
+
+  /// Deep-link focus ring (F5): marks the EXACT named request, nothing else.
+  final bool focused;
 
   @override
   State<PendingApprovalCard> createState() => _PendingApprovalCardState();
@@ -132,6 +142,20 @@ class _PendingApprovalCardState extends State<PendingApprovalCard> {
 
   @override
   Widget build(BuildContext context) {
+    final card = _card(context);
+    if (!widget.focused) return card;
+    // F5: the ONE card a deep link named wears the focus ring.
+    return DecoratedBox(
+      key: const ValueKey('approval-focus-ring'),
+      decoration: BoxDecoration(
+        border: Border.all(color: Theme.of(context).colorScheme.primary),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: card,
+    );
+  }
+
+  Widget _card(BuildContext context) {
     final strings = AppStrings.of(context);
     final colors = Theme.of(context).colorScheme;
     final r = widget.request;

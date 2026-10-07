@@ -267,6 +267,9 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.notificationSettled: 'This request has already been handled',
   MessageKey.notificationUnavailable:
       "This notification's conversation is unavailable",
+  MessageKey.deepLinkNotFound:
+      'This conversation is not available on this account',
+  MessageKey.deepLinkHidden: 'This conversation is hidden',
   MessageKey.chatStopRemoteChecking: 'Checking stop status',
   MessageKey.chatStopRemoteUnavailable:
       'This run is unavailable; refreshing status',
@@ -771,6 +774,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.notificationSteerReady: '現在可以插話',
   MessageKey.notificationSettled: '這個請求已處理',
   MessageKey.notificationUnavailable: '此通知的對話無法開啟',
+  MessageKey.deepLinkNotFound: '此帳戶無法開啟這個對話',
+  MessageKey.deepLinkHidden: '這個對話已被隱藏',
   MessageKey.chatStopRemoteChecking: '正在核對停止狀態',
   MessageKey.chatStopRemoteUnavailable: '此運行已不可用，正在更新狀態',
   MessageKey.chatStopRemoteNoRunId: '伺服器未提供運行識別碼，無法從此處停止',

@@ -206,16 +206,23 @@ async def case_steer_inbox(args, server, check):
                                        headers={**AUTH, "Content-Type": "application/json"}) as r:
                     check(r.status == 413, "oversized body is 413 before parsing")
 
-                # ---- kill switch: legacy native ONLY with cap OFF ----------------
+                # ---- kill switch: refuse admission; keep receipts readable ----
+                # 01412 M10 (PLAN:49): a HOT kill switch must NOT reopen the
+                # native memory-only buffer — that would silently break the
+                # durable ordering/identity of the run. Only a FULL uninstall
+                # takes the native POST back; runtime-off refuses admission.
                 steer_inbox.set_capability(False)
                 async with client.get("/v1/capabilities", headers=AUTH) as r:
                     caps = (await r.json())["features"]["steer_inbox"]
                 check(caps["enabled"] is False, "capability follows the kill switch at once")
-                status, _ = await steer_post(run_id, body={"input": "native only when off"})
-                check(status == 200 and "native only when off" in agent.steer_notes,
-                      "cap-off legacy steer rides the native buffer (no receipt minted)")
+                status, err = await steer_post(run_id, body={"input": "disabled post",
+                                                             "client_request_id": "m10-off"})
+                check(status == 503 and err["error"]["code"] == "steer_disabled"
+                      and not agent.steer_notes,
+                      "runtime-disabled steer is refused, never native-bypassed")
                 _s, lst = await steers_get(run_id)
-                check(len(lst["steers"]) == 32, "cap-off steer created no inbox receipt")
+                check(len(lst["steers"]) == 32,
+                      "cap-off keeps every existing receipt readable")
                 steer_inbox.set_capability(True)
 
                 # ---- legacy input-only stays on the SAME inbox when enabled ------
@@ -449,6 +456,32 @@ async def case_steer_inbox(args, server, check):
                       "unconfirmed staged batches become outcome_unknown, never replayed")
                 check(repaired["delivered"] >= 1 and repaired["outcome_unknown"] >= 1,
                       "recovery reports both reconcile arms")
+                check("retired" in repaired,
+                      "recovery reports the stale-epoch retirement arm (01412 M8)")
+
+                # ---- 01412 M7: native run entirely gone -> sidecar owner answers ----
+                # A run with durable rows under the CALLER's own scope but no
+                # native binding/status/owner anywhere: the 404 must fall back
+                # to the durable owner check, not erase the ledger. (A stopped
+                # run correctly says "closed", not "run_expired".)
+                m7_scope = adapter._run_owners.get(run_id)
+                check(bool(m7_scope), "live owner scope resolvable for the M7 case")
+                v_m7, r_m7 = steer_store.admit(store, m7_scope, "m7-ttl-expired",
+                                               key="m7", input_text="durable after ttl")
+                check(v_m7 == "admitted", f"durable M7 row admitted ({v_m7})")
+                code, rc = await receipt_get("m7-ttl-expired", r_m7["steer_id"])
+                check(code == 200 and rc["steer_id"] == r_m7["steer_id"],
+                      f"a run fully gone from native still answers the durable "
+                      f"receipt, owner-checked ({code})")
+                code, lst = await steers_get("m7-ttl-expired")
+                check(code == 200 and lst["accepting"] is False
+                      and lst["accepting_reason"] == "run_expired",
+                      f"the listing stays readable and says run_expired "
+                      f"(code={code} accepting={lst.get('accepting')} "
+                      f"reason={lst.get('accepting_reason')})")
+                code, _ = await receipt_get("probe-run", "0" * 32)
+                check(code == 404,
+                      "durable rows of ANOTHER owner scope stay invisible (404)")
 
                 # ---- R6 projection: whitelisted typed field only ---------------------
                 proj = api.APIServerAdapter._message_response(

@@ -171,7 +171,10 @@ def attach(inbox, *, ntfy=None, clock=time.monotonic, timers=None, settings=None
         title, body = compose(entry, locale=locale, phase=phase, clock=clock)
         click = None
         try:  # R7 deep link: exact run + this request, never key/topic
-            from .notification_events import run_link
+            try:
+                from .notification_events import run_link
+            except ImportError:  # flat import context (unit tests)
+                from notification_events import run_link
             click = run_link(sid=entry.get("session_id"), run_id=entry.get("run_id"),
                              request_id=entry.get("request_id"))
         except Exception:

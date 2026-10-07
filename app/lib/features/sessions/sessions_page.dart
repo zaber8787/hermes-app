@@ -9,6 +9,9 @@ import '../../l10n/ui_message.dart';
 import '../../models/session.dart';
 import '../../providers.dart';
 import '../chat/chat_page.dart';
+import '../chat/deep_link.dart';
+import '../chat/deep_link_source.dart';
+import '../chat/run_link.dart';
 import '../chat/viewers.dart';
 import '../settings/local_store.dart';
 import '../settings/management_page.dart';
@@ -47,6 +50,12 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
   /// 最愛篩選：true 時列表只顯示釘選中的 session。
   bool onlyPinned = false;
   bool _creating = false;
+
+  // ---- 01412FIX F5 (M6): deep-link navigation consumer --------------------
+  // The launch URL (or a later popstate) resolves through EXACT identity in
+  // deep_link.dart; a pre-login link waits in the stash and is spent once.
+  StreamSubscription<String>? _deepSub;
+  bool _deepLinkBusy = false;
 
   // ---- BULK-HIDE B4: selection mode ----------------------------------------
   // id-keyed only; filters never clear it, only a COMPLETE list drop does.
@@ -261,11 +270,64 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
       }
       if (mounted) setState(() => _legacy = store.legacyPending(server));
     }());
+    // 01412FIX F5: consume the stashed launch link once the list is ready,
+    // and follow in-page address changes for the rest of the session.
+    unawaited(_consumeStashedDeepLink());
+    _deepSub = locationChanges().listen((href) {
+      final link = RunLink.tryParse(href);
+      if (link != null) unawaited(_routeDeepLink(link));
+    });
+  }
+
+  Future<void> _consumeStashedDeepLink() async {
+    final store = ref.read(localStoreProvider);
+    final raw = store.peekDeepLink();
+    if (raw == null) return;
+    await store.clearDeepLink(); // spent ONCE — never a second surprise jump
+    final link = RunLink.tryParse(raw); // exact parse or honest nothing
+    if (link == null || !mounted) return;
+    await _routeDeepLink(link);
+  }
+
+  Future<void> _routeDeepLink(RunLink link) async {
+    if (_deepLinkBusy || !mounted) return;
+    _deepLinkBusy = true;
+    try {
+      final List<Session> list;
+      try {
+        list = await ref.read(sessionsProvider.future);
+      } on Object {
+        return; // an unreachable list changes NOTHING (no fake miss)
+      }
+      if (!mounted) return;
+      final store = ref.read(localStoreProvider);
+      final server = ref.read(settingsProvider).url;
+      final route = resolveDeepLink(
+        link,
+        list,
+        hiddenOf: (s) => _effHidden(s, server, store),
+      );
+      switch (route.status) {
+        case DeepLinkStatus.opened:
+          // always navigate from the ROOT: a chat pushed over a stale chat
+          // would strand the wrong session behind it.
+          Navigator.of(context).popUntil((r) => r.isFirst);
+          await open(route.session!, deepLink: link);
+        case DeepLinkStatus.sessionHidden:
+          _snack(const UiMessage.local(MessageKey.deepLinkHidden));
+        case DeepLinkStatus.sessionNotFound:
+          // deleted OR another profile — never distinguished, never guessed
+          _snack(const UiMessage.local(MessageKey.deepLinkNotFound));
+      }
+    } finally {
+      _deepLinkBusy = false;
+    }
   }
 
   @override
   void dispose() {
     timer?.cancel();
+    unawaited(_deepSub?.cancel() ?? Future.value());
     search.dispose();
     super.dispose();
   }
@@ -337,7 +399,7 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
 
   static String _chatRoute(String sid) => 'chat:$sid';
 
-  Future<void> open(Session s) async {
+  Future<void> open(Session s, {RunLink? deepLink}) async {
     // AUDIT-21(D1): SYNCHRONOUS navigation dedupe, before any await and
     // before markRead in particular — markRead's await was the window
     // where a fast second tap sailed past every guard and stacked a
@@ -345,6 +407,10 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     // fought over detach()). If a route for this sid already exists,
     // focus it instead of pushing a second one.
     if (ChatViewers.count(s.id) > 0) {
+      if (deepLink != null) {
+        // F5: an ALREADY-open page still receives the link's focus.
+        ref.read(chatProvider(s.id)).applyDeepLink(deepLink);
+      }
       Navigator.of(
         context,
       ).popUntil((r) => r.settings.name == _chatRoute(s.id) || r.isFirst);
@@ -361,7 +427,7 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
         context,
         MaterialPageRoute<void>(
           settings: RouteSettings(name: _chatRoute(s.id)),
-          builder: (_) => ChatPage(session: s),
+          builder: (_) => ChatPage(session: s, deepLink: deepLink),
         ),
       );
     } finally {

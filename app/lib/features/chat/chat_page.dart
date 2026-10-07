@@ -21,6 +21,7 @@ import '../settings/management_page.dart';
 import 'approval_inbox_view.dart';
 import 'notification_inbox.dart';
 import 'remote_steer.dart';
+import 'run_link.dart';
 import 'chat_controller.dart';
 import 'client_commands.dart';
 import 'local_attempt.dart';
@@ -50,8 +51,13 @@ Future<void> pickWithFeedback(
 }
 
 class ChatPage extends ConsumerStatefulWidget {
-  const ChatPage({super.key, required this.session});
+  const ChatPage({super.key, required this.session, this.deepLink});
   final Session session;
+
+  /// 01412FIX F5: the exact deep link this page was opened FROM (if any);
+  /// it focuses the approval/request the link named — navigation, not a
+  /// guess.
+  final RunLink? deepLink;
   @override
   ConsumerState<ChatPage> createState() => _ChatPageState();
 }
@@ -95,6 +101,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     ChatViewers.acquire(widget.session.id);
     title = widget.session.title;
     chat = ref.read(chatProvider(widget.session.id));
+    final deepLink = widget.deepLink;
+    if (deepLink != null) chat.applyDeepLink(deepLink);
     final store = ref.read(localStoreProvider);
     _store = store;
     final serverUrl = ref.read(settingsProvider).url;
@@ -178,6 +186,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       );
       attachFileDrop(_dropTarget!);
     }
+  }
+
+  /// 01412FIX F5: the notification card locates its EXACT event. Same
+  /// session → focus in place (event read + approval/run focus); another
+  /// session → hand the exact link to the ROOT router (which re-resolves
+  /// hidden/deleted identity itself) and pop there — never a local guess.
+  void _openNotification(RunLink link) {
+    if (link.sessionId == widget.session.id) {
+      chat.applyDeepLink(link);
+      return;
+    }
+    unawaited(_store.stashDeepLink(link.toUrl()));
+    Navigator.of(context).popUntil((r) => r.isFirst);
   }
 
   @override
@@ -1621,6 +1642,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                   unconfirmedRuns: c.approvalUnconfirmedRuns,
                                   onResolve: c.resolveApprovalExact,
                                   onReconfirm: c.reconfirmApprovals,
+                                  focusRequestId: c.approvalFocus,
                                 ),
                               if (c.approvalLegacyNotice)
                                 Padding(
@@ -1724,28 +1746,37 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                           ),
                                           children: [
                                             Expanded(
-                                              child: Text(
-                                                strings.resolve(switch (e
-                                                    .kind) {
-                                                  NotificationKind
-                                                      .approvalRequest =>
-                                                    MessageKey
-                                                        .notificationApproval,
-                                                  NotificationKind.completed =>
-                                                    MessageKey
-                                                        .notificationCompleted,
-                                                  NotificationKind.failed =>
-                                                    MessageKey
-                                                        .notificationFailed,
-                                                  NotificationKind.steerReady =>
-                                                    MessageKey
-                                                        .notificationSteerReady,
-                                                  _ =>
-                                                    MessageKey
-                                                        .notificationSettled,
-                                                }),
-                                                style: const TextStyle(
-                                                  fontSize: 12,
+                                              child: InkWell(
+                                                key: ValueKey(
+                                                  'notification-open-${e.eventId}',
+                                                ),
+                                                onTap: () =>
+                                                    _openNotification(e.link),
+                                                child: Text(
+                                                  strings.resolve(switch (e
+                                                      .kind) {
+                                                    NotificationKind
+                                                        .approvalRequest =>
+                                                      MessageKey
+                                                          .notificationApproval,
+                                                    NotificationKind
+                                                        .completed =>
+                                                      MessageKey
+                                                          .notificationCompleted,
+                                                    NotificationKind.failed =>
+                                                      MessageKey
+                                                          .notificationFailed,
+                                                    NotificationKind
+                                                        .steerReady =>
+                                                      MessageKey
+                                                          .notificationSteerReady,
+                                                    _ =>
+                                                      MessageKey
+                                                          .notificationSettled,
+                                                  }),
+                                                  style: const TextStyle(
+                                                    fontSize: 12,
+                                                  ),
                                                 ),
                                               ),
                                             ),

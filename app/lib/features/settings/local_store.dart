@@ -187,6 +187,14 @@ class LocalStore {
   // corrupt/missing value normalizes to English and must never block
   // settings loading, and a saved language must survive a vault failure.
   AppLocale loadLocale() => AppLocale.normalize(prefs.getString('ui.locale'));
+
+  // ---- 01412FIX F5: the login-handoff deep link (global, never _scope-d) --
+  // A link that arrives before the account is configured is stashed ONCE
+  // and spent ONCE by the first ready session list. A spent slot means a
+  // consumed navigation — never a second surprise jump.
+  Future<void> stashDeepLink(String href) => prefs.setString('deep.link', href);
+  String? peekDeepLink() => prefs.getString('deep.link');
+  Future<void> clearDeepLink() => prefs.remove('deep.link');
   Future<bool> saveLocale(AppLocale value) async {
     try {
       // false (write refused) or a throw is a failure; the caller keeps

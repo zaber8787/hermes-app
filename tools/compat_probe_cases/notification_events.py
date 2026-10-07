@@ -127,6 +127,19 @@ async def case_notification_events(args, server, check):
                                           params={"after": after}, headers=AUTH) as r:
                         return r.status, await r.json()
 
+                async def events_walk(after=0):
+                    """Full pass following next_cursor; returns (events, cursor)."""
+                    seen, cursor, pages = [], after, 0
+                    while True:
+                        status, listed = await events_get(cursor)
+                        check(status == 200, "events page answers")
+                        seen.extend(listed["data"])
+                        cursor = int(listed.get("next_cursor", listed["head_seq"]))
+                        pages += 1
+                        if not listed["overflow"]:
+                            return seen, cursor
+                        check(pages <= 10, "overflow pages terminate")
+
                 # R7 click spy on the single worker's send seam (real publish path)
                 ntfy_mod = None
                 for name, mod in list(sys.modules.items()):
@@ -219,12 +232,37 @@ async def case_notification_events(args, server, check):
                                               request_id=aevent["source_id"],
                                               pending=True) is True,
                       "a reminder is allowed while unread and unclaimed")
+                # 01412 M4: allowed must mean DELIVERED. The reminder is a new
+                # phase on the SAME channel — it really publishes.
+                rem = []
+                handled, rem_ok = events.approval_initial_hook(reg)(
+                    "reminder", {"entry": {"owner_scope": scope, "run_id": run3,
+                                           "session_id": sid,
+                                           "request_id": aevent["source_id"]},
+                                 "pending": True,
+                                 "publish": lambda: rem.append(1) or True})
+                check(handled and rem_ok and rem == [1],
+                      f"initial -> reminder publishes TWICE on the same channel "
+                      f"(handled={handled} ok={rem_ok} calls={rem})")
+                phases = {p for p, _c, _s in store.sent_phases(
+                    events.home_of(reg), aevent["event_id"])}
+                check({"initial", "reminder"} <= phases,
+                      "the ledger shows BOTH delivery phases of the event")
+                # 01412 M2: a device B that pulled everything up to THIS cursor
+                # must SEE device A's later read on the very next delta.
+                _, cursorB = await events_walk()
                 async with client.post(f"/api/notification-events/{aevent['event_id']}/read",
                                        headers=AUTH) as r:
                     check(r.status == 200, "read ack accepted")
                 async with client.post(f"/api/notification-events/{aevent['event_id']}/read",
                                        headers=AUTH) as r:
                     check(r.status == 200, "read is idempotent")
+                status, delta = await events_get(cursorB)
+                check(status == 200 and any(
+                    e["event_id"] == aevent["event_id"] and e.get("read_at")
+                    for e in delta["data"]),
+                    "a converged read is OBSERVABLE on the incremental cursor "
+                    "from the already-caught-up position (no phantom unread)")
                 check(events.reminder_allowed(reg, owner_scope=scope, run_id=run3,
                                               request_id=aevent["source_id"],
                                               pending=True) is False,
@@ -244,6 +282,25 @@ async def case_notification_events(args, server, check):
                                        json={"choice": "once", "request_id": rid},
                                        headers=AUTH) as r:
                     check(r.status == 200, "exact approval answer still works")
+                # ---- 01412 M3: a >100-event backlog pages WITHOUT skipping -----
+                _, base = await events_walk()
+                for i in range(101):
+                    store.record_event(events.home_of(reg), owner_scope=scope,
+                                       run_id=f"paged-{i}", sid=sid,
+                                       kind="completed", source_id="terminal",
+                                       payload={"summary": f"page-{i}"})
+                status, first = await events_get(base)
+                check(status == 200 and first["overflow"] is True
+                      and len(first["data"]) == 100,
+                      "a 101-event backlog answers a full page and says overflow")
+                check(int(first["next_cursor"]) == int(first["data"][-1]["created_seq"])
+                      and int(first["next_cursor"]) < int(first["head_seq"]),
+                      "next cursor is the LAST DELIVERED seq, never the head")
+                collected, endCursor = await events_walk(base)
+                ids = [e["event_id"] for e in collected]
+                check(len(ids) == len(set(ids)) and len(ids) >= 101,
+                      f"continuation pages deliver every event exactly once "
+                      f"(got {len(ids)})")
                 agent3._released.set()
                 resp3.close()
 
@@ -258,19 +315,21 @@ async def case_notification_events(args, server, check):
                 agent4._released.set()
                 resp4.close()
                 # register a watch, then a fresh run's queued->running transition fires it
+                # (M3 made the backlog multi-page: full-list views must FOLLOW
+                # next_cursor, never assume page 1 is everything)
                 watch_target = "run_watch_probe"
                 async with client.post("/api/notification-events/steer-ready-watch",
                                        json={"run_id": watch_target, "watch": True},
                                        headers=AUTH) as r:
                     check(r.status == 200, "watch registered")
                 events.steer_ready(reg, owner_scope=scope, run_id=watch_target, sid=sid)
-                status, listed = await events_get()
-                check(any(e["kind"] == "steer_ready" for e in listed["data"]),
+                listed, _ = await events_walk()
+                check(any(e["kind"] == "steer_ready" for e in listed),
                       "an opted-in run's accepting transition records steer.ready")
                 events.steer_ready(reg, owner_scope=scope, run_id="run-never-watched",
                                    sid=sid)
-                status, listed = await events_get()
-                check(len([e for e in listed["data"] if e["kind"] == "steer_ready"]) == 1,
+                listed, _ = await events_walk()
+                check(len([e for e in listed if e["kind"] == "steer_ready"]) == 1,
                       "non-watched runs never generate steer.ready events")
 
                 # ---- browser channel: claim once, never re-routed ------------------
@@ -302,6 +361,55 @@ async def case_notification_events(args, server, check):
                                              "show_token": first["show_token"],
                                              "outcome": "shown"}, headers=AUTH) as r:
                     check(r.status == 200, "claim owner reports shown")
+                # 01412 M1: the report transaction refuses anything but the
+                # claim owner's exact token/device — the row is not a free-for-all.
+                async with client.post(f"/api/notification-events/{event_id}/delivery",
+                                       json={"delivery_id": first["delivery_id"],
+                                             "show_token": "not-the-token",
+                                             "outcome": "failed"}, headers=AUTH) as r:
+                    check(r.status == 404,
+                          "a wrong show_token cannot rewrite a delivery")
+                async with client.post(f"/api/notification-events/{event_id}/delivery",
+                                       json={"delivery_id": first["delivery_id"],
+                                             "show_token": first["show_token"],
+                                             "device_id": "not-the-claimer",
+                                             "outcome": "failed"}, headers=AUTH) as r:
+                    check(r.status == 404,
+                          "a foreign device_id cannot rewrite the claim owner's row")
+                listed, _ = await events_walk()
+                shown_now = next((e for e in listed if e["event_id"] == event_id), None)
+                check(shown_now is not None, "the browser event is still listed")
+                check(store.delivery_state(events.home_of(reg), event_id,
+                                           "initial", "browser") == "shown",
+                      "refused reports leave the delivery state exactly 'shown'")
+                # 01412 M5: the REAL deliver() path must leave a pending
+                # INTENT a device can actually win (server pre-claim was the
+                # bug that made the whole browser channel dead).
+                eidB, verdictB = events.deliver(events.registry(), owner_scope=scope,
+                                                run_id="run-browser-2", sid=sid,
+                                                kind="failed", source_id="terminal",
+                                                payload={})
+                check(verdictB == "queued",
+                      f"deliver queues a pending INTENT, not a server claim "
+                      f"({verdictB})")
+                async with client.post(f"/api/notification-events/{eidB}/claim",
+                                       json={"device_id": "dev-C"}, headers=AUTH) as r:
+                    claimC = await r.json()
+                    check(r.status == 200 and claimC["verdict"] == "claimed"
+                          and claimC["show_token"],
+                          "the device wins the pending intent with a show grant")
+                async with client.post(f"/api/notification-events/{eidB}/delivery",
+                                       json={"delivery_id": claimC["delivery_id"],
+                                             "show_token": claimC["show_token"],
+                                             "outcome": "shown"}, headers=AUTH) as r:
+                    check(r.status == 200, "the claiming device reports shown")
+                replayV = events.deliver(events.registry(), owner_scope=scope,
+                                         run_id="run-browser-2", sid=sid,
+                                         kind="failed", source_id="terminal",
+                                         payload={})
+                check(replayV[1].startswith("already"),
+                      f"a settled delivery replays as already_* ({replayV[1]})")
+
                 configure(push="hub")  # config change must NOT re-route the claim
                 outcome = events.deliver(events.registry(), owner_scope=scope,
                                          run_id="run-browser", sid=sid, kind="failed",

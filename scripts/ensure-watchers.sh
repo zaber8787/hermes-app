@@ -10,8 +10,12 @@ S="${1:?tmux session}"
 DONE="${2:?done marker path}"
 root="$HOME/hermes-app"
 pgrep -f "bash .*approve-worker.sh $S( |\$)" >/dev/null \
+  || systemd-run --user --quiet --unit="hermes-approve-$S" \
+       bash "$root/scripts/approve-worker.sh" "$S" >/dev/null 2>&1 < /dev/null \
   || setsid bash "$root/scripts/approve-worker.sh" "$S" >/dev/null 2>&1 < /dev/null &
 pgrep -f "bash .*watch-nudge.sh $S " >/dev/null \
+  || systemd-run --user --quiet --unit="hermes-nudge-$S" \
+       bash "$root/scripts/watch-nudge.sh" "$S" "$DONE" >/dev/null 2>&1 < /dev/null \
   || setsid bash "$root/scripts/watch-nudge.sh" "$S" "$DONE" >/dev/null 2>&1 < /dev/null &
 sleep 1
 pgrep -af "approve-worker.sh $S|watch-nudge.sh $S" | sed 's/^[0-9]* //' | sort -u

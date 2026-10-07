@@ -10,6 +10,7 @@ import '../../l10n/ui_message.dart';
 import '../../models/message.dart';
 import '../../models/session_activity.dart';
 import '../../platform/connectivity_hint.dart';
+import '../../platform/notification_surface.dart';
 import '../../platform/store_tx.dart';
 import '../settings/local_store.dart';
 import 'dart:math' as math;
@@ -20,6 +21,7 @@ import 'local_attempt.dart';
 import 'remote_stop.dart';
 import 'notification_inbox.dart';
 import 'remote_steer.dart';
+import 'run_link.dart';
 import 'steer_inbox.dart';
 import 'turn_history_match.dart';
 import 'viewers.dart';
@@ -5746,6 +5748,29 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   bool _notifyCapAsked = false;
   final NotificationLedger _notifications = NotificationLedger();
   NotificationLedger get notifications => _notifications;
+
+  // ---- 01412FIX F5 (M6): deep-link focus on THIS session -----------------
+  // Navigation is decided OUTSIDE (exact identity in deep_link.dart); the
+  // controller only applies what the link named: its event converges as
+  // READ, its request focuses the approval card, its run is exposed for
+  // any run-scoped surfacing. Unknown ids simply match nothing.
+  RunLink? _deepLinkFocus;
+  RunLink? get deepLinkFocus => _deepLinkFocus;
+  String? get approvalFocus => _deepLinkFocus?.requestId;
+  String? get focusedRunId => _deepLinkFocus?.runId;
+  final Set<String> _deepLinkReadSent = {};
+
+  void applyDeepLink(RunLink link) {
+    _deepLinkFocus = link;
+    final eventId = link.eventId;
+    if (eventId != null && eventId.isNotEmpty &&
+        !_deepLinkReadSent.contains(eventId)) {
+      _deepLinkReadSent.add(eventId);
+      unawaited(markNotificationRead(eventId)); // idempotent; read != approve
+    }
+    if (!_disposed) notifyListeners();
+  }
+
   bool get notificationEventsEnabled =>
       _notifyCap != null && _notifyCap!['enabled'] == true;
   String get notificationServerChannel =>
@@ -5765,24 +5790,117 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Ledger-cursor poll piggybacked on the activity tick (no second timer).
+  /// Overflow is CONTINUED from the actual last delivered seq (01412 M3);
+  /// the cursor never jumps to the global head and drops the tail.
   Future<void> _notificationPoll() async {
     if (_notifyPolling || _disposed) return;
     if (!notificationEventsEnabled) return;
     _notifyPolling = true;
     try {
-      final page = NotificationPage.fromJson(
-        await repo.notificationEvents(after: _notifications.cursor),
-      );
-      if (_disposed) return;
-      final before = _notifications.unread.length;
-      _notifications.merge(page);
-      if (_notifications.unread.length != before) notifyListeners();
+      var changed = false;
+      for (var page = 0; page < 10; page++) {
+        final cursorBefore = _notifications.cursor;
+        final pageResult = NotificationPage.fromJson(
+          await repo.notificationEvents(after: cursorBefore),
+        );
+        if (_disposed) return;
+        final before = _notifications.unread.length;
+        _notifications.merge(pageResult);
+        if (_notifications.unread.length != before) changed = true;
+        if (!pageResult.overflow) break;
+        if (_notifications.cursor <= cursorBefore) break; // never spin
+      }
+      if (changed) notifyListeners();
+      await _convergeBrowserAlerts();
     } on Object {
       // A failed poll changes NOTHING (never reads as "all read").
     } finally {
       _notifyPolling = false;
     }
   }
+
+  // ---- 01412FIX F4 (M5): the browser delivery channel's claim->show->
+  // report convergence. The SERVER ledger decides who may alert (exactly
+  // one claim per event); this client only claims its turn, shows through
+  // the OS surface when granted, and reports the honest outcome. show is
+  // NOT read — reminders stay alive until the user actually reads (R6).
+
+  NotificationSurface _notifySurface = createNotificationSurface();
+
+  /// Test seam: a fake surface records permission/claim/show in one binary.
+  set notifySurfaceForTest(NotificationSurface surface) =>
+      _notifySurface = surface;
+
+  bool _notifyPermissionAsked = false;
+  bool _notifyPermissionGranted = false;
+  final Set<String> _notifyClaimAsked = {};
+  late final String _notifyDeviceId =
+      '${DateTime.now().microsecondsSinceEpoch.toRadixString(36)}'
+      '-${math.Random().nextInt(1 << 30).toRadixString(36)}';
+
+  /// True once the browser granted OS alerts (false = panel-only, honest).
+  bool get browserAlertsGranted => _notifyPermissionGranted;
+
+  Future<void> _convergeBrowserAlerts() async {
+    if (!notificationEventsEnabled ||
+        notificationServerChannel != 'browser' ||
+        _disposed) {
+      return;
+    }
+    if (!_notifyPermissionAsked) {
+      _notifyPermissionAsked = true;
+      _notifyPermissionGranted = await _notifySurface.ensurePermission();
+      if (_disposed) return;
+    }
+    if (!_notifyPermissionGranted) return; // panel-only fallback
+    for (final e in _notifications.unread) {
+      if (_disposed) return;
+      if (!_notifyClaimAsked.add(e.eventId)) continue;
+      Map<String, dynamic> verdict;
+      try {
+        verdict = await repo.notificationClaim(
+          e.eventId,
+          deviceId: _notifyDeviceId,
+        );
+      } on Object {
+        _notifyClaimAsked.remove(e.eventId); // retry the claim next poll
+        return;
+      }
+      if (_disposed) return;
+      if (verdict['verdict'] != 'claimed') {
+        // Another device/tab won and alerted: converge this one locally.
+        _notifications.markRead(e.eventId);
+        notifyListeners();
+        continue;
+      }
+      final shown = _notifySurface.show(
+        title: 'Hermes',
+        body: AppStrings.forLocale(
+          store.loadLocale(),
+        ).resolve(_notificationKey(e.kind)),
+      );
+      try {
+        await repo.notificationDelivery(
+          e.eventId,
+          deliveryId: '${verdict['delivery_id'] ?? ''}',
+          showToken: '${verdict['show_token'] ?? ''}',
+          outcome: shown ? 'shown' : 'failed',
+        );
+      } on Object {
+        // An unreported claim is not a lie: the row simply stays claimed.
+      }
+      notifyListeners();
+    }
+  }
+
+  static MessageKey _notificationKey(NotificationKind kind) =>
+      switch (kind) {
+        NotificationKind.approvalRequest => MessageKey.notificationApproval,
+        NotificationKind.completed => MessageKey.notificationCompleted,
+        NotificationKind.failed => MessageKey.notificationFailed,
+        NotificationKind.steerReady => MessageKey.notificationSteerReady,
+        _ => MessageKey.notificationSettled,
+      };
 
   Future<void> markNotificationRead(String eventId) async {
     try {

@@ -16,7 +16,10 @@ from __future__ import annotations
 import hashlib
 import uuid
 
-from . import notification_store
+try:
+    from . import notification_store
+except ImportError:  # flat import context (unit tests)
+    import notification_store
 
 def _click_base() -> str:
     # Config-owned public entry (app_compat.notification_events.click_base):
@@ -120,33 +123,42 @@ def deliver(reg, *, owner_scope, run_id, sid, kind, source_id, payload,
         publish = _ntfy_publish(reg, kind,
                                 click=run_link(sid=sid, run_id=run_id, event_id=event_id))
     existing = notification_store.delivery_state(store, event_id, phase, channel)
-    if existing is not None:
+    if existing is not None and existing != "pending":
         return event_id, "already_" + existing
-    if any(channel_seen != "none" for _phase, channel_seen, _s
+    if any(channel_seen not in ("none", channel)
+           for _phase, channel_seen, _s
            in notification_store.sent_phases(store, event_id)):
         # a config change must never re-route an already-claimed delivery to
-        # a different channel (R6: claims survive reconfiguration).
+        # a different channel (R6: claims survive reconfiguration). A DIFFERENT
+        # phase on the SAME channel is a legitimate later stage (initial ->
+        # reminder), not a re-route (01412 audit M4).
         return event_id, "already_claimed_other_channel"
     delivery_id = _delivery_id(event_id, phase, channel)
+    if channel == "browser" and publish is None:
+        # 01412 M5: the server records a PENDING INTENT only. The one device/
+        # tab that claims it shows the alert; a server-side claim would make
+        # every device claim answer already_claimed and the whole browser
+        # path unusable. The ledger still keeps the claim race honest.
+        verdict, _assigned = notification_store.queue_delivery(
+            store, event_id=event_id, phase=phase, channel=channel,
+            delivery_id=delivery_id)
+        return event_id, verdict
     verdict, assigned = notification_store.claim_delivery(
         store, event_id=event_id, phase=phase, channel=channel,
         delivery_id=delivery_id, device_id="server")
     if verdict != "claimed":
         return event_id, "already_claimed"
-    if channel == "browser" and publish is None:
-        # queued for a single desktop tab/device to claim; the ledger keeps the
-        # claim state, no server-side publish attempt is recorded.
-        return event_id, "queued"
     outcome = "unknown"
     if publish is not None:
         try:
-            outcome = "sent" if publish() else "failed"
+            # publish() proves a LOCAL ACCEPT (enqueue into the transport's
+            # own queue), NEVER a device delivery — an enqueue is honestly
+            # recorded as "enqueued", not "sent" (01412 audit m1).
+            outcome = "enqueued" if publish() else "failed"
         except Exception:
             outcome = "unknown"
     notification_store.note_delivery(store, delivery_id=assigned,
-                                     outcome="sent" if outcome == "sent" else
-                                     ("failed" if outcome == "failed" else "unknown"),
-                                     channel=channel)
+                                     outcome=outcome, channel=channel)
     return event_id, outcome
 
 
@@ -165,6 +177,12 @@ def reminder_allowed(reg, *, owner_scope, run_id, request_id, pending: bool) -> 
                                          system_channel(reg)) is not None:
         return False
     return True
+
+
+# A locally-accepted transport answer counts as dispatched for the gate; an
+# enqueue is honest ("enqueued"), never dressed up as "sent" (01412 m1).
+PUBLISH_OK = frozenset({"sent", "already_sent", "enqueued", "already_enqueued",
+                        "queued"})
 
 
 def _owner_of(meta):
@@ -197,12 +215,40 @@ def approval_initial_hook(reg):
             event_id, outcome = deliver(reg, kind="approval_request",
                                         payload={"summary": "reminder"},
                                         phase="reminder", publish=meta["publish"], **common)
-            return True, outcome in ("sent", "already_sent", "queued")
+            return True, outcome in PUBLISH_OK
         event_id, outcome = deliver(reg, kind="approval_request",
                                     payload={"summary": "approval"},
                                     phase="initial", publish=meta["publish"], **common)
-        return True, outcome in ("sent", "already_sent", "queued")
+        return True, outcome in PUBLISH_OK
     return gate
+
+
+SUMMARY_BYTE_CAP = 240
+
+
+def _redact_summary(text) -> str:
+    """01412 m2: a stored summary crosses the SAME approval redaction seam
+    (core error redactor, then the credential whitelist) and a UTF-8 byte cap
+    that never splits a code point. Raw run output must never hit the ledger."""
+    raw = str(text or "")
+    try:
+        try:
+            from . import approval_inbox
+        except ImportError:  # flat import context (unit tests)
+            import approval_inbox
+        raw = approval_inbox._redact_text(raw, cap=SUMMARY_BYTE_CAP)
+        raw = approval_inbox._REDACTION_RE.sub(approval_inbox._REDACTION, raw)
+    except Exception:
+        pass
+    try:
+        try:
+            from .ntfy_notify import utf8_cut
+        except ImportError:
+            from ntfy_notify import utf8_cut
+        return utf8_cut(raw, SUMMARY_BYTE_CAP)
+    except Exception:
+        return raw.encode("utf-8", "replace")[:SUMMARY_BYTE_CAP].decode(
+            "utf-8", "ignore")
 
 
 def terminal_event(reg, *, owner_scope, run_id, sid, status, summary=""):
@@ -210,7 +256,7 @@ def terminal_event(reg, *, owner_scope, run_id, sid, status, summary=""):
             "cancelled": "cancelled", "interrupted": "interrupted"}[status]
     return deliver(reg, owner_scope=owner_scope, run_id=run_id, sid=sid,
                    kind=kind, source_id="terminal",
-                   payload={"summary": str(summary)[:240]})
+                   payload={"summary": _redact_summary(summary)})
 
 
 def _ntfy_publish(reg, kind, click=None):

@@ -809,6 +809,32 @@ class HermesRepository {
     body: const {},
   );
 
+  /// Browser-channel claim (01412 M5): ONE device/tab wins the pending
+  /// intent and receives the durable show grant; losers converge as read.
+  Future<Json> notificationClaim(String eventId, {required String deviceId}) =>
+      _json(
+        'POST',
+        '/api/notification-events/${Uri.encodeComponent(eventId)}/claim',
+        body: {'device_id': deviceId},
+      );
+
+  /// The claim owner's outcome report (F1 transaction: token/device/event/
+  /// owner are verified server-side; a wrong answer reads as not-found).
+  Future<Json> notificationDelivery(
+    String eventId, {
+    required String deliveryId,
+    required String showToken,
+    required String outcome,
+  }) => _json(
+    'POST',
+    '/api/notification-events/${Uri.encodeComponent(eventId)}/delivery',
+    body: {
+      'delivery_id': deliveryId,
+      'show_token': showToken,
+      'outcome': outcome,
+    },
+  );
+
   /// steer.ready opt-in for a run the user explicitly picked (R7: no
   /// per-message notifications).
   Future<Json> notificationWatch(String runId, {required bool on}) => _json(

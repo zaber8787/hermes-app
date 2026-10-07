@@ -468,4 +468,6 @@ enum MessageKey {
   notificationSteerReady,
   notificationSettled,
   notificationUnavailable,
+  deepLinkNotFound,
+  deepLinkHidden,
 }

@@ -28,12 +28,13 @@ class FakeNtfy:
         self.results = results  # optional list to pop per publish
 
     def publish_json(self, server, topic, title, message, *, priority="high",
-                     tags=None, on_result=None):
+                     tags=None, on_result=None, click=None):
         if not self.accept:
             return False
         safe_tags = ["hermes-agent"] + [t for t in (tags or []) if t != "hermes-agent"]
         self.posts.append({"server": server, "topic": topic, "title": title,
-                           "message": message, "priority": priority, "tags": safe_tags})
+                           "message": message, "priority": priority, "tags": safe_tags,
+                           "click": click})
         if on_result is not None:
             ok = self.results.pop(0) if self.results else True
             on_result(ok, "URLError" if not ok else None)
@@ -120,6 +121,19 @@ class ImmediateCase(unittest.TestCase):
         post = ntfy.posts[0]
         self.assertEqual(post["priority"], "high")
         self.assertIn("hermes-agent", post["tags"])
+
+    def test_click_is_canonical_deeplink_without_secrets(self):
+        import unittest.mock as mock
+        import notification_events
+        inbox, ntfy, hub, clock, q, disp = make_env()
+        with mock.patch.object(notification_events, "_click_base",
+                               lambda: "https://entry.example"):
+            disp(entry_for(inbox, rid="req-77"))
+        click = ntfy.posts[0]["click"]
+        self.assertEqual(click, "https://entry.example/#/chat?session=s1"
+                                "&run=run_abc123456789&request=req-77")
+        for secret in ("http://hub", "key=", "token=", "topic=", "Bearer"):
+            self.assertNotIn(secret, click)
 
     def test_unicode_title_survives(self):
         inbox, ntfy, hub, clock, q, disp = make_env()

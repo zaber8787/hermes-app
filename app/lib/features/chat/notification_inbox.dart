@@ -88,7 +88,12 @@ class NotificationPage {
                 Map<String, dynamic>.from(e as Map)))
             .toList(),
         serverChannel: '${json['server_channel'] ?? ''}',
-        nextCursor: (json['head_seq'] as num?)?.toInt() ?? 0,
+        // 01412 M3: resume from the ACTUAL last delivered seq; head_seq is
+        // informational only — jumping there on overflow skips notifications.
+        nextCursor:
+            (json['next_cursor'] as num?)?.toInt() ??
+            (json['head_seq'] as num?)?.toInt() ??
+            0,
         overflow: json['overflow'] == true,
       );
 }

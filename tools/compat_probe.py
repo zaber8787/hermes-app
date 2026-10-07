@@ -147,8 +147,11 @@ def offline(args):
             # Preserve only non-secret execution essentials. Never read the real .env.
             env = {"PATH": os.environ.get("PATH", "/usr/bin:/bin"), "HOME": str(home),
                    "HERMES_HOME": str(hermes), "PYTHONDONTWRITEBYTECODE": "1",
-                   "PYTHONPATH": str(clean), "LANG": "C.UTF-8", "HERMES_EXEC_ASK": "1",
-                   "NO_PROXY": "127.0.0.1,localhost", "TERM": "dumb"}
+                    "PYTHONPATH": str(clean), "LANG": "C.UTF-8", "HERMES_EXEC_ASK": "1",
+                    "NO_PROXY": "127.0.0.1,localhost", "TERM": "dumb",
+                    # Workers must inherit the disk scratch (01412 audit: the
+                    # original env dropped TMPDIR and fell back to /tmp).
+                    **({"TMPDIR": os.environ["TMPDIR"]} if os.environ.get("TMPDIR") else {})}
             output = home/"result.json"
             cmd = [str(python), "-B", str(Path(__file__).resolve()), "--worker", case,
                    "--agent-root", str(clean), "--worker-output", str(output)]

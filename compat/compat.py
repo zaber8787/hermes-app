@@ -3493,7 +3493,14 @@ def _install_steer_inbox(tx):
     async def steer(self, request, **kwargs):
         _api = kwargs.get("_api_server") or sys.modules["gateway.platforms.api_server"]
         if not enabled():
-            return await old_post(self, request, _api_server=_api)
+            # 01412 M10 / PLAN:49: the runtime kill switch REFUSES new
+            # admission — it never reopens the native memory-only buffer
+            # (that would silently break durability, ordering and identity).
+            # Existing receipts stay readable; only a full uninstall puts
+            # the native POST back.
+            return api._error_response(
+                "Cross-device steer is disabled on this server; existing "
+                "receipts remain readable.", 503, code="steer_disabled")
         run_id = request.match_info["run_id"]
         _r, status, agent, _task, err = runs._load_owned_run(
             self, request, _api_server=_api, permission=None, active_fallback=False)
@@ -3536,11 +3543,12 @@ def _install_steer_inbox(tx):
         session_id = body.get("session_id")
         server_epoch = body.get("server_epoch")
         # Re-read the live identity AFTER the body race (terminal/stop may
-        # have happened during JSON read; the guard serializes with the seal).
+        # have happened during JSON read; the guard serializes with the
+        # seal). 01412 M9: NO stale-agent fallback — an agent that unbound
+        # during the body await is gone, and admit_request re-verifies the
+        # live binding inside the guard anyway.
         live_status = getattr(self, "_run_statuses", {}).get(run_id) or status
         live_agent = getattr(self, "_active_run_agents", {}).get(run_id)
-        if live_agent is None:
-            live_agent = agent
         if live_status is None and live_agent is not None:
             live_status = {"status": "running"}
         run_sid = str((live_status or {}).get("session_id") or "")
@@ -3599,18 +3607,37 @@ def _install_steer_inbox(tx):
                 rows.append((method, path, handler))
         return rows
 
-    async def _owned(self, request, *, active_fallback=True):
+    async def _owned(self, request):
+        # 01412 M7: NO active_fallback here — an expired pollable status is
+        # answered from the durable sidecar as expired, never resurrected to
+        # "running" on the read surfaces.
         _api = sys.modules["gateway.platforms.api_server"]
         _r, status, _agent, _task, err = runs._load_owned_run(
             self, request, _api_server=_api, permission=None,
-            active_fallback=active_fallback)
+            active_fallback=False)
         return status, err
 
     async def steers_get(self, request):
+        try:
+            owner_scope = self._run_idempotency_scope(request)
+        except Exception:
+            return api._error_response("Run ownership unresolved.", 403,
+                                       code="gateway_auth_failed")
+        if owner_scope is None:
+            return api._error_response("Run ownership unresolved.", 403,
+                                       code="gateway_auth_failed")
+        run_id = request.match_info["run_id"]
         status, err = await _owned(self, request)
         if err is not None:
-            return err
-        run_id = request.match_info["run_id"]
+            # 01412 M7: a native 404 (run transport/TTL expiry) falls back to
+            # the DURABLE sidecar owner — receipts answer after the run is
+            # gone, still owner-checked. Auth refusals never fall back.
+            gone = getattr(err, "status", None) == 404 or (
+                isinstance(err, dict) and err.get("http") == 404)
+            if not (gone and steer_inbox.durable_run(
+                    inbox, owner_scope=owner_scope, run_id=run_id)):
+                return err
+            status = None
         after = request.query.get("after_seq", "0")
         try:
             after = int(after)
@@ -3620,27 +3647,29 @@ def _install_steer_inbox(tx):
         if after < 0:
             return api._error_response("after_seq must not be negative.", 400,
                                        code="invalid_cursor")
-        try:
-            owner_scope = self._run_idempotency_scope(request)
-        except Exception:
-            return api._error_response("Run ownership unresolved.", 403,
-                                       code="gateway_auth_failed")
         payload = await asyncio.to_thread(
             steer_inbox.listing, inbox, self, run_id=run_id,
             owner_scope=owner_scope, status=status, after_seq=after)
         return api.web.json_response(payload, headers={"Cache-Control": "no-store"})
 
     async def receipt_get(self, request):
-        status, err = await _owned(self, request)
-        if err is not None:
-            return err
-        run_id = request.match_info["run_id"]
-        steer_id = request.match_info["steer_id"]
         try:
             owner_scope = self._run_idempotency_scope(request)
         except Exception:
             return api._error_response("Run ownership unresolved.", 403,
                                        code="gateway_auth_failed")
+        if owner_scope is None:
+            return api._error_response("Run ownership unresolved.", 403,
+                                       code="gateway_auth_failed")
+        run_id = request.match_info["run_id"]
+        status, err = await _owned(self, request)
+        if err is not None:
+            gone = getattr(err, "status", None) == 404 or (
+                isinstance(err, dict) and err.get("http") == 404)
+            if not (gone and steer_inbox.durable_run(
+                    inbox, owner_scope=owner_scope, run_id=run_id)):
+                return err
+        steer_id = request.match_info["steer_id"]
         payload = await asyncio.to_thread(
             steer_inbox.receipt, inbox, owner_scope=owner_scope, run_id=run_id,
             steer_id=steer_id)
@@ -3847,13 +3876,15 @@ def _install_notification_events(tx):
             after = int(request.query.get("after", "0"))
         except ValueError:
             return api._error_response("after must be an integer.", 400, code="invalid_cursor")
-        items, overflow, head = await asyncio.to_thread(
+        items, overflow, next_cursor = await asyncio.to_thread(
             notification_store.events_after, notification_events.home_of(reg),
             scope, max(after, 0))
+        head = await asyncio.to_thread(notification_store.head_seq,
+                                       notification_events.home_of(reg))
         return api.web.json_response({
             "object": "list", "schema_version": 1,
             "server_channel": notification_events.system_channel(reg),
-            "head_seq": head, "overflow": overflow, "data": [
+            "head_seq": head, "next_cursor": next_cursor, "overflow": overflow, "data": [
                 {k: item.get(k) for k in ("event_id", "run_id", "sid", "kind", "source_id",
                                           "created_seq", "payload", "created_at",
                                           "read_at", "read_by")} for item in items],
@@ -3897,12 +3928,13 @@ def _install_notification_events(tx):
                                        code="channel_not_browser")
         if event.get("read_at"):
             return api._error_response("Event already read.", 409, code="already_read")
+        token = api.uuid.uuid4().hex  # minted BEFORE the claim, persisted BY it
         verdict, assigned = notification_store.claim_delivery(
             store, event_id=event_id, phase="initial", channel="browser",
-            delivery_id=delivery_id, device_id=device_id)
-        token = api.uuid.uuid4().hex if verdict == "claimed" else None
+            delivery_id=delivery_id, device_id=device_id, show_token=token)
         return api.web.json_response({"verdict": verdict, "delivery_id": assigned,
-                                      "show_token": token})
+                                      "show_token": token if verdict == "claimed"
+                                      else None})
 
     async def delivery_post(self, request):
         if not enabled():
@@ -3916,10 +3948,15 @@ def _install_notification_events(tx):
         except Exception:
             body = {}
         outcome = str(body.get("outcome") or "")
+        device_id = str(body.get("device_id") or "")[:64] or None
+        show_token = str(body.get("show_token") or "")[:64] or None
+        # 01412 M1: owner, event, claim owner and the durable token are ALL
+        # verified in the SAME transaction that writes the outcome.
         state_now = await asyncio.to_thread(
             notification_store.note_delivery, notification_events.home_of(reg),
             delivery_id=str(body.get("delivery_id") or ""), outcome=outcome,
-            channel="browser")
+            channel="browser", event_id=request.match_info["event_id"],
+            owner_scope=scope, device_id=device_id, show_token=show_token)
         if state_now is None:
             return api._error_response("Delivery not found.", 404, code="delivery_not_found")
         return api.web.json_response({"delivery": outcome or state_now})

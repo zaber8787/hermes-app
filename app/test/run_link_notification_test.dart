@@ -127,5 +127,64 @@ void main() {
       expect(withReq.link.eventId, 'ev1');
       expect(e.kind, NotificationKind.approvalRequest);
     });
+
+    // 01412 F2 (M2/M3, App side): the cursor follows the ACTUAL delivered
+    // seq, never the global head, so an overflow page cannot skip the tail.
+    test('fromJson prefers next_cursor over head_seq (no head jump)', () {
+      final page = NotificationPage.fromJson({
+        'data': const [],
+        'server_channel': 'ntfy',
+        'head_seq': 102,
+        'next_cursor': 100,
+        'overflow': true,
+      });
+      expect(page.nextCursor, 100);
+      expect(page.overflow, isTrue);
+    });
+
+    test('an old server answer still parses (head fallback)', () {
+      final page = NotificationPage.fromJson({
+        'data': const [],
+        'head_seq': 7,
+      });
+      expect(page.nextCursor, 7);
+    });
+
+    test('overflow continuation lands every event exactly once', () {
+      final ledger = NotificationLedger();
+      final first = List.generate(
+        100,
+        (i) => event('e$i', seq: i + 1),
+      );
+      ledger.merge(
+        NotificationPage(
+          items: first,
+          serverChannel: 'ntfy',
+          nextCursor: 100, // the last DELIVERED seq, not head 101
+          overflow: true,
+        ),
+      );
+      expect(ledger.cursor, 100);
+      ledger.merge(
+        NotificationPage(
+          items: [event('e100', seq: 101)],
+          serverChannel: 'ntfy',
+          nextCursor: 101,
+          overflow: false,
+        ),
+      );
+      expect(ledger.unread.length, 101); // nothing skipped, nothing doubled
+      expect(ledger.cursor, 101);
+    });
+
+    test('a converged read reappears and lands read (phantom-unread fix)', () {
+      final ledger = NotificationLedger();
+      ledger.merge(page([event('a')], 1));
+      expect(ledger.hasUnread, isTrue);
+      // device B acked on the server; the delta re-delivers it WITH the ack
+      ledger.merge(page([event('a', read: true, seq: 2)], 2));
+      expect(ledger.hasUnread, isFalse);
+      expect(ledger.cursor, 2);
+    });
   });
 }

@@ -100,3 +100,8 @@ scripts/watch-nudge.sh
 .steerweb-evidence/
 .approvalfix-evidence/
 .steerweb-evidence/
+
+# TASK-01412FIX-IMPL scratch/evidence (never commit)
+.fix-scratch/
+.audit-scratch/
+.01412fix-evidence/

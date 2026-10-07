@@ -320,6 +320,16 @@ def staged_batches(home) -> list[dict]:
     return out
 
 
+def accepted_runs(home) -> list[tuple[str, str]]:
+    """(owner_scope, run_id) pairs that still hold ACCEPTED (unclaimed) items."""
+    conn = _conn_for(home)
+    with _LOCK:
+        rows = conn.execute(
+            "SELECT DISTINCT owner_scope, run_id FROM steers WHERE state='accepted'"
+        ).fetchall()
+    return [(r["owner_scope"], r["run_id"]) for r in rows]
+
+
 def prune_expired(home, now: float | None = None) -> int:
     """Terminal receipts live 30 days; purged keys answer later retries with
     410 expired, never as a fresh admission."""

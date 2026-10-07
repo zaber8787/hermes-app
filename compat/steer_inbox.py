@@ -170,11 +170,22 @@ def _verdict(status: str, *, agent, epoch_ok: bool):
 
 def admit_request(inbox, adapter, *, run_id, owner_scope, status, agent,
                   session_id, input_text, client_request_id, server_epoch):
-    """Serialize admission with the run's seal under the exact run guard."""
+    """Serialize admission with the run's seal under the exact run guard.
+
+    01412 M9: the LIVE identity is re-read INSIDE the guard — a status/agent
+    that vanished during the body await (unregister, terminal, stop) is
+    caught here, and a stale pre-await snapshot can never vouch for it."""
     guard = run_guard(inbox, adapter, run_id)
-    kind, code = _verdict(str((status or {}).get("status") or ""), agent=agent,
-                          epoch_ok=(server_epoch in (None, inbox["epoch"])))
     with guard:
+        live_map = getattr(adapter, "_active_run_agents", None)
+        live_agent = agent if live_map is None else live_map.get(run_id)
+        status_map = getattr(adapter, "_run_statuses", None)
+        live_status = status if status_map is None else status_map.get(run_id, status)
+        if live_status is None and live_agent is not None:
+            live_status = {"status": "running"}
+        kind, code = _verdict(str((live_status or {}).get("status") or ""),
+                              agent=live_agent,
+                              epoch_ok=(server_epoch in (None, inbox["epoch"])))
         store = steer_store.open_store(home_of(inbox))
         if owner_scope:
             # Duplicate lookup FIRST (R2: the success-repeat lookup and
@@ -431,9 +442,51 @@ def confirm_flushed_rows(inbox, batch_rows):
 # restart recovery (R3 item 7) — never replays into a new run
 # --------------------------------------------------------------------------
 
+def _live_run_ids(inbox):
+    """run_ids THIS process still has a live agent binding for. After a real
+    restart nothing qualifies (empty registry); a hot reload keeps exactly
+    the runs whose agents are still bound."""
+    live = set()
+    try:
+        with inbox["lock"]:
+            adapters = list(inbox["adapters"])
+            bound = [rid for _agent, (_ad, rid) in inbox["agent_runs"].items()]
+    except Exception:
+        return live
+    live.update(bound)
+    for adapter in adapters:
+        try:
+            live.update((getattr(adapter, "_active_run_agents", {}) or {}).keys())
+        except Exception:
+            continue
+    return live
+
+
+def durable_run(inbox, *, owner_scope, run_id) -> bool:
+    """Does the durable sidecar hold a run for THIS owner (01412 M7)? A
+    TTL-expired native status never erases the receipts' right to answer."""
+    if not owner_scope:
+        return False
+    store = steer_store.open_store(home_of(inbox))
+    return steer_store.get_run(store, owner_scope, run_id) is not None
+
+
 def recover(inbox):
     store = steer_store.open_store(home_of(inbox))
-    repaired = {"delivered": 0, "outcome_unknown": 0}
+    repaired = {"delivered": 0, "outcome_unknown": 0, "retired": 0}
+    # 01412 M8 / PLAN:91: an ACCEPTED item of a run with no live binding in
+    # THIS process can never be injected again (its process died). Seal the
+    # run so the item honestly ends as not_delivered — never replayed into a
+    # new run, never left pretending to be queued forever.
+    live = _live_run_ids(inbox)
+    for owner_scope, run_id in steer_store.accepted_runs(store):
+        if run_id in live:
+            continue
+        run = steer_store.get_run(store, owner_scope, run_id)
+        if run is not None and run["closed_reason"] is not None:
+            continue  # already sealed; the seal retired its accepted items
+        steer_store.seal_run(store, owner_scope, run_id, "restart_stale_epoch")
+        repaired["retired"] += 1
     for batch in steer_store.staged_batches(store):
         evidence = _find_committed_batch(store, batch["owner_scope"],
                                          batch["run_id"], batch["batch_id"])
