@@ -17,7 +17,8 @@ import tempfile
 import time
 
 CASES = ("upload", "limits", "media", "history", "approval", "skills", "activity", "push",
-         "approval_inbox", "approval_push", "cron_bridge", "wake", "wakecap", "selfwake")
+         "approval_inbox", "approval_push", "approval_central", "cron_bridge", "wake",
+         "wakecap", "selfwake", "steer_inbox", "notification_events")
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -174,12 +175,15 @@ def offline(args):
                 "skills": "tools.skills_tool._find_all_skills",
                 "activity": "APIServerAdapter activity snapshot / run-status & chat hooks / registry",
                 "push": "session-stream approval/prepare/write/drain/status wrappers / ntfy publisher",
-                "approval_inbox": "session-stream/runs notify capture / pending GET / exact POST / settle bridge",
+                "approval_inbox": "central _set_run_status capture cut / pending GET / exact POST / settle bridge",
                 "approval_push": "immediate dispatcher / reminder timer / Unicode JSON title / exit hand-off and rollback",
+                "approval_central": "API producers (session/runs/no-SSE/detach/OpenAI stream) / escalation / dedup-replay / error isolation / rollback on the single status cut",
                 "cron_bridge": "app platform registration + cron scheduler identity/mirror/outcome shims / atomic bridge writer",
                 "wake": "messages provenance / auto-wake admission ledger, quota, receipts, dispatch CAS",
                 "wakecap": "hot-reload route sync: live/frozen routers resolve compat route rows to the current handlers",
                 "selfwake": "server self-wake: durable intents in the receipt transaction, generation/cutoff, reconciliation, shadow/off gates, chain fuse, audit",
+                "steer_inbox": "durable run-scoped steer inbox: auth/epoch gates, idempotent admission, receipts, seal, capability fail-closed",
+                "notification_events": "notification ledger: stable event ids, single publish, read-gated reminders, browser claim, terminals never replayed",
                 "control": "clean HEAD without plugin", "lifecycle": "register/on_unload transactions",
             }[case]
             result["expected"] = "all selected behavior assertions pass"

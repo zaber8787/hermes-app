@@ -37,6 +37,7 @@ class Message {
     this.reasoning = '',
     this.timestamp = 0,
     this.cronProvenance,
+    this.steerProvenance,
   });
   final String id;
   final String role;
@@ -54,6 +55,12 @@ class Message {
   /// candidate", never "an unverified candidate".
   final CronProvenance? cronProvenance;
 
+  /// STEERWEB R6: the server-verified steer batch identity, present ONLY on
+  /// rows whose whitelisted steer_provenance the compat projection validated.
+  /// Text equality NEVER substitutes for this identity (R4: receipts retire
+  /// only against an exact batch id).
+  final SteerProvenance? steerProvenance;
+
   factory Message.fromJson(Json json, {String? fallbackId}) => Message(
     id: textOf(json['id'] ?? fallbackId),
     role: textOf(json['role']),
@@ -67,6 +74,7 @@ class Message {
     reasoning: textOf(json['reasoning'] ?? json['reasoning_content']),
     timestamp: (json['timestamp'] as num?)?.toDouble() ?? 0,
     cronProvenance: CronProvenance.tryParse(json['cron_provenance']),
+    steerProvenance: SteerProvenance.tryParse(json['steer_provenance']),
   );
 
   bool get isUserTurn => role == 'user' && displayKind == null;
@@ -131,7 +139,13 @@ const systemLabels = <String, MessageKey>{
 enum EntryKind { user, finalReply, narration, tool, system }
 
 class DisplayEntry {
-  const DisplayEntry(this.kind, this.message, {this.call, this.result, this.label});
+  const DisplayEntry(
+    this.kind,
+    this.message, {
+    this.call,
+    this.result,
+    this.label,
+  });
   final EntryKind kind;
   final Message message;
   final ToolCall? call;
@@ -190,7 +204,9 @@ List<DisplayEntry> projectMessages(
       entries.add(
         wakeRowIds.contains(m.id)
             ? DisplayEntry(
-                EntryKind.system, m, label: MessageKey.systemWakeRead,
+                EntryKind.system,
+                m,
+                label: MessageKey.systemWakeRead,
               )
             : DisplayEntry(EntryKind.user, m),
       );
@@ -228,4 +244,57 @@ List<Message> mergeMessages(Iterable<Message> old, Iterable<Message> incoming) {
     final byTime = a.timestamp.compareTo(b.timestamp);
     return byTime != 0 ? byTime : a.id.compareTo(b.id);
   });
+}
+
+/// STEERWEB R6 typed steer provenance: schema-1, server-minted identity only
+/// (run/batch/exact items). Malformed or partial blocks parse to ABSENT —
+/// never to a partially trusted value.
+class SteerProvenance {
+  const SteerProvenance({
+    required this.runId,
+    required this.batchId,
+    required this.items,
+  });
+  final String runId;
+  final String batchId;
+  final List<SteerProvenanceItem> items;
+
+  static SteerProvenance? tryParse(dynamic raw) {
+    if (raw is! Map) return null;
+    if (raw['schema'] != 1) return null;
+    final batchId = raw['batch_id'];
+    if (batchId is! String || batchId.trim().isEmpty) return null;
+    final runId = raw['run_id'];
+    final list = raw['items'];
+    if (list is! List || list.isEmpty) return null;
+    final items = <SteerProvenanceItem>[];
+    for (final e in list) {
+      if (e is! Map) return null;
+      final steerId = e['steer_id'];
+      final input = e['input'];
+      final sequence = e['sequence'];
+      if (steerId is! String || steerId.trim().isEmpty) return null;
+      if (input is! String) return null;
+      if (sequence is! int) return null;
+      items.add(
+        SteerProvenanceItem(steerId: steerId, sequence: sequence, input: input),
+      );
+    }
+    return SteerProvenance(
+      runId: runId is String ? runId : '',
+      batchId: batchId,
+      items: List.unmodifiable(items),
+    );
+  }
+}
+
+class SteerProvenanceItem {
+  const SteerProvenanceItem({
+    required this.steerId,
+    required this.sequence,
+    required this.input,
+  });
+  final String steerId;
+  final int sequence;
+  final String input;
 }

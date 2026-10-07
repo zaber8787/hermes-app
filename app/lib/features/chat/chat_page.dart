@@ -19,6 +19,8 @@ import '../attachments/gallery_picker.dart';
 import '../settings/local_store.dart';
 import '../settings/management_page.dart';
 import 'approval_inbox_view.dart';
+import 'notification_inbox.dart';
+import 'remote_steer.dart';
 import 'chat_controller.dart';
 import 'client_commands.dart';
 import 'local_attempt.dart';
@@ -516,9 +518,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       if (row.actionable)
                         ListTile(
                           key: ValueKey(
-                            'chat.stopChooser.${remoteStopShortId(
-                                  row.target!.runId,
-                                )}',
+                            'chat.stopChooser.${remoteStopShortId(row.target!.runId)}',
                           ),
                           title: Text(row.label),
                           onTap: () => Navigator.pop(context, row.target),
@@ -628,6 +628,121 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     );
   }
 
+  // ---- STEERWEB R4: per-row steer affordance ------------------------------
+  Widget _remoteSteerAction(
+    AppStrings strings,
+    ChatController c,
+    ActivityRun r,
+  ) {
+    final runId = r.runId;
+    if (runId == null || runId.trim().isEmpty) return const SizedBox.shrink();
+    final steerable =
+        c.steerTargetForRun(runId) != null ||
+        r.status == 'waiting_for_approval';
+    if (!steerable) {
+      return Expanded(
+        child: Row(
+          key: ValueKey('chat.remoteSteerDisabled.$runId'),
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Icon(Icons.chat_bubble_outline, size: 18),
+            const SizedBox(width: 4),
+            Flexible(
+              child: Text(
+                strings.resolve(MessageKey.steerUnavailable),
+                style: const TextStyle(fontSize: 12),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+    return IconButton(
+      key: ValueKey('chat.remoteSteer.$runId'),
+      onPressed: () => unawaited(_steerDialog(c, runId)),
+      tooltip: strings.resolve(MessageKey.steerAction),
+      icon: const Icon(Icons.chat_bubble_outline),
+    );
+  }
+
+  Future<void> _steerDialog(ChatController c, String runId) async {
+    final strings = AppStrings.of(context);
+    final controller = TextEditingController(
+      text: c.steerDraftFor(runId) ?? '',
+    );
+    var watch = false;
+    final send = await showDialog<bool>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setState) => AlertDialog(
+          title: Text(strings.resolve(MessageKey.steerAction)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(
+                strings.resolve(MessageKey.steerNextBoundary),
+                style: const TextStyle(fontSize: 12),
+              ),
+              const SizedBox(height: 8),
+              TextField(
+                key: const ValueKey('chat.steerInput'),
+                controller: controller,
+                autofocus: true,
+                maxLines: 3,
+                maxLength: 8192,
+              ),
+              // R7: steer.ready is an EXPLICIT per-run opt-in (the ledger
+              // records nothing without this), never a per-message nag.
+              CheckboxListTile(
+                key: const ValueKey('chat.steerWatch'),
+                value: watch,
+                onChanged: (v) => setState(() => watch = v ?? false),
+                controlAffinity: ListTileControlAffinity.leading,
+                dense: true,
+                contentPadding: EdgeInsets.zero,
+                title: Text(
+                  strings.resolve(MessageKey.steerNotifyReady),
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(strings.resolve(MessageKey.commonCancel)),
+            ),
+            FilledButton(
+              key: const ValueKey('chat.steerSend'),
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(strings.resolve(MessageKey.steerAction)),
+            ),
+          ],
+        ),
+      ),
+    );
+    final text = controller.text.trim();
+    if (send != true || text.isEmpty) return;
+    if (watch) await c.watchSteerReady(runId);
+    final target = c.steerTargetForRun(runId);
+    final outcome = target == null
+        ? const RemoteSteerOutcome(RemoteSteerKind.staleTarget)
+        : await c.submitRemoteSteer(target, text);
+    if (!mounted) return;
+    final message = outcome.message ?? remoteSteerMessage(outcome.kind);
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        key: const ValueKey('chat.steerOutcome'),
+        content: Text(
+          message is UiLocal
+              ? strings.resolve(message.key, args: message.args)
+              : '$message',
+        ),
+      ),
+    );
+  }
+
   Future<void> rename() async {
     final controller = TextEditingController(text: title);
     final next = await showDialog<String>(
@@ -645,7 +760,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text(AppStrings.of(context).resolve(MessageKey.commonCancel)),
+            child: Text(
+              AppStrings.of(context).resolve(MessageKey.commonCancel),
+            ),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, controller.text.trim()),
@@ -756,9 +873,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
     if (value.startsWith('/steer ')) {
       if (!controller.detailed || !controller.canControl) {
-        setState(
-          () => draftError = const UiMessage.local(MessageKey.chatM001),
-        );
+        setState(() => draftError = const UiMessage.local(MessageKey.chatM001));
         return;
       }
       try {
@@ -779,8 +894,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           .where((c) => c.name == name)
           .firstOrNull;
       if (cmd != null) {
-        if (preparing ||
-            (controller.displayBusy && !cmd.worksWhileBusy)) {
+        if (preparing || (controller.displayBusy && !cmd.worksWhileBusy)) {
           return;
         }
         input.clear();
@@ -876,7 +990,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(context),
-            child: Text(AppStrings.of(context).resolve(MessageKey.commonCancel)),
+            child: Text(
+              AppStrings.of(context).resolve(MessageKey.commonCancel),
+            ),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(context, draft.text),
@@ -893,9 +1009,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: const LocalizedText(
-              UiMessage.local(MessageKey.chatM005),
-            ),
+            content: const LocalizedText(UiMessage.local(MessageKey.chatM005)),
           ),
         );
       }
@@ -958,7 +1072,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 ),
             ...skills
                 .where((s) => s.name.startsWith(match.group(1)!))
-                .map((s) => _SlashItem('/${s.name}', UiMessage.raw(s.description))),
+                .map(
+                  (s) => _SlashItem('/${s.name}', UiMessage.raw(s.description)),
+                ),
           ].take(8).toList()
         : const <_SlashItem>[];
     if (!c.loading && (!firstLoaded || follow) && !c.loadingOlder) {
@@ -1059,783 +1175,951 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             child: Column(
               children: [
                 Padding(
-                  padding:
-                      const EdgeInsets.symmetric(horizontal: 20, vertical: 4),
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 20,
+                    vertical: 4,
+                  ),
                   child: Row(
                     children: [
-                  Text(
-                    strings.resolve(
-                      c.detailed
-                          ? MessageKey.chatM011
-                          : MessageKey.chatM012,
-                    ),
-                    style: Theme.of(context).textTheme.labelMedium,
-                  ),
-                  const Spacer(),
-                  if (c.busy)
-                    Text(
-                      strings.resolve(MessageKey.chatM013),
-                      style: const TextStyle(fontSize: 12),
-                    )
-                  else if (c.remoteBusy)
-                    Text(
-                      strings.resolve(MessageKey.chatRemoteBusy),
-                      style: const TextStyle(fontSize: 12),
-                    )
-                  else if (c.activityBlocksSend)
-                    Text(
-                      strings.resolve(MessageKey.chatM014),
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                ],
-              ),
-            ),
-            if (c.backgrounded)
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text(strings.resolve(MessageKey.chatM015)),
-              ),
-            if (c.remoteBusy)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    for (final r in c.remoteActiveRuns)
-                      Row(
-                        children: [
-                          Expanded(
-                            flex: 3,
-                            child: Text(
-                              ChatController.formatRemoteRunLabel(strings, r),
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                          // CROSSDEV-STOP §3.3/§5.2: a `stopping` row shows
-                          // 「正在核對」 purely from the fresh activity — no
-                          // local state, no pending, no POST of any kind.
-                          if (c.remoteStoppingRunIds.contains(r.runId))
-                            Text(
-                              strings.resolve(
-                                MessageKey.chatStopRemoteChecking,
-                              ),
-                              style: const TextStyle(fontSize: 12),
-                            )
-                          else if (!r.isTerminal)
-                            const TypingDots(),
-                          // §5.1/§5.3: per-row stop action; disabled rows
-                          // carry a READABLE reason, never tooltip-only.
-                          _remoteStopAction(strings, c, r),
-                        ],
-                      ),
-                    if (c.observedActivity?.overflow == true)
-                      Text(strings.resolve(MessageKey.chatM016),
-                          style: const TextStyle(fontSize: 12)),
-                  ],
-                ),
-              ),
-            if (c.activityFreshness == ActivityFreshness.stale)
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text(
-                  // Fixed local HH:mm in both locales (I18N-PLAN §7).
-                  strings.resolve(
-                    MessageKey.chatActivityStaleSummary,
-                    args: {
-                      'time': c.lastActivitySuccess == null
-                          ? ''
-                          : strings.resolve(
-                              MessageKey.commonParenthesized,
-                              args: {
-                                'value': formatLocalClock(
-                                  c.lastActivitySuccess!,
-                                ),
-                              },
-                            ),
-                    },
-                  ),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.error,
-                  ),
-                ),
-              ),
-            if (c.stopNoticeKind != StopNotice.none)
-              MaterialBanner(
-                content: Text(
-                  // Explicit provenance replaces the old startsWith('{')
-                  // heuristic (§4.4); the stored JSON is never displayed.
-                  c.stopNoticeMessage != null
-                      ? strings.render(c.stopNoticeMessage!)
-                      : strings.resolve(MessageKey.chatM019),
-                ),
-                actions: [
-                  TextButton(
-                    onPressed: c.dismissStopNotice,
-                    child: Text(strings.resolve(MessageKey.chatM020)),
-                  ),
-                ],
-              ),
-            // CROSSDEV-STOP R2 §5.2/§5.3: remote wording rides the SECONDARY
-            // tone — requested/checking/unavailable/unconfirmed/ended are
-            // reconciliation states, never the red error slot, and never a
-            // local stop-banner.
-            if (c.remoteStopFeedback != null)
-              Padding(
-                key: const ValueKey('chat.remoteStopFeedback'),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text(
-                  strings.render(c.remoteStopFeedback!),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.tertiary,
-                  ),
-                ),
-              ),
-            // SILENCE-DROP §3.3: "waiting for a reply" is its own
-            // secondary-tone line — never red, never folded into the
-            // error slot (the stream is alive; nothing failed).
-            if (c.streamWaitingNotice != null)
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Text(
-                  strings.render(c.streamWaitingNotice!),
-                  style: TextStyle(
-                    color: Theme.of(context).colorScheme.onSurfaceVariant,
-                  ),
-                ),
-              ),
-            if (c.error != null ||
-                c.recoveryNotice != null ||
-                c.failedCard != null)
-              Padding(
-                padding: const EdgeInsets.all(12),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (c.error != null)
                       Text(
-                        strings.render(c.error!),
-                        style: TextStyle(
-                          // SILENCE-DROP §3.3: neutral recovery wording
-                          // (silence/recheck) renders in the secondary
-                          // tone; ONLY observed stream failures stay red.
-                          color: switch (c.error) {
-                            UiLocal(key: MessageKey.chatStreamChecking) ||
-                            UiLocal(key: MessageKey.chatStreamUnconfirmed) ||
-                            // WEBSYNC F1: delivered is a fact, not a fault.
-                            UiLocal(
-                              key: MessageKey.chatDeliveredReplyLoading,
-                            ) =>
-                              Theme.of(context).colorScheme.tertiary,
-                            _ => Theme.of(context).colorScheme.error,
-                          },
+                        strings.resolve(
+                          c.detailed
+                              ? MessageKey.chatM011
+                              : MessageKey.chatM012,
                         ),
+                        style: Theme.of(context).textTheme.labelMedium,
                       ),
-                    // STUCK-BUSY B2: the "ended without a final" notice has
-                    // its own slot so a cleanup failure never masks it.
-                    if (c.recoveryNotice != null)
-                      Text(
-                        strings.render(c.recoveryNotice!),
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.tertiary,
+                      const Spacer(),
+                      if (c.busy)
+                        Text(
+                          strings.resolve(MessageKey.chatM013),
+                          style: const TextStyle(fontSize: 12),
+                        )
+                      else if (c.remoteBusy)
+                        Text(
+                          strings.resolve(MessageKey.chatRemoteBusy),
+                          style: const TextStyle(fontSize: 12),
+                        )
+                      else if (c.activityBlocksSend)
+                        Text(
+                          strings.resolve(MessageKey.chatM014),
+                          style: const TextStyle(fontSize: 12),
                         ),
-                      ),
-                    // R3 §5.3: the notDispatched card survives into idle
-                    // reloads (journal-sourced), where no live `error` was
-                    // ever set for it.
-                    if (c.failedCard != null && c.error == null)
-                      Text(
-                        strings.render(c.failedCard!),
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.error,
-                        ),
-                      ),
-                    // R3 §5.3/§6: the neutral delivery note for an
-                    // attempt-backed attempt still stuck at "unknown".
-                    if (c.deliveryNotice != null)
-                      Text(
-                        strings.render(c.deliveryNotice!),
-                        style: TextStyle(
-                          color: Theme.of(context).colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    Row(
+                    ],
+                  ),
+                ),
+                if (c.backgrounded)
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(strings.resolve(MessageKey.chatM015)),
+                  ),
+                if (c.remoteBusy)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        // STUCK-BUSY B4: 「重新核對」 shows only while the
-                        // ONE persisted allowance is still unconsumed.
-                        if (c.phase == ChatPhase.uncertain &&
-                            c.recoveryRetryAvailable)
-                          TextButton(
-                            onPressed: c.retryReconcile,
-                            child: Text(strings.resolve(MessageKey.chatM021)),
-                          ),
-                        // R3 §5.3: the ONLY retry POST affordance — the
-                        // notDispatched card's. Without RESOLVED Web Locks
-                        // it renders DISABLED beside the degraded notice
-                        // (§4.5); unknown/rejected never offer retry.
-                        if (c.retryUnsentAttemptId != null)
-                          TextButton(
-                            key: const ValueKey('chat.retryUnsent'),
-                            onPressed: c.retryUnsentAvailable
-                                ? () => unawaited(
-                                    c.retryUnsent(c.retryUnsentAttemptId!),
-                                  )
-                                : null,
-                            child: Text(
-                              strings.resolve(MessageKey.chatRetryUnsent),
-                            ),
-                          ),
-                        // R2 §4.2: an abandoned tombstone's ONLY action is
-                        // the local cleanup retry — zero POSTs, no budget.
-                        if (c.localCleanupRetryAvailable)
-                          TextButton(
-                            onPressed: () => unawaited(c.retryLocalCleanup()),
-                            child: Text(
-                              strings.resolve(MessageKey.chatClearLocalWaiting),
-                            ),
-                          ),
-                        if (c.phase == ChatPhase.uncertain &&
-                            c.hasLocalWaitingRecord &&
-                            !c.localCleanupRetryAvailable)
-                          TextButton(
-                            onPressed: c.clearLocalWaitingRecord,
-                            child: Text(
-                              strings.resolve(MessageKey.chatClearLocalWaiting),
-                            ),
-                          ),
-                        // §4.3: the uncertain-row clear above routes through
-                        // the SAME journal-first local end (clearLocalWaiting
-                        // Record → endLocalAttempt) — one exit, no second
-                        // button duplicating it.
-                        if (!c.busy)
-                          TextButton(
-                            onPressed: c.load,
-                            child: Text(strings.resolve(MessageKey.commonRetry)),
-                          ),
-                      ],
-                    ),
-                  ],
-                ),
-              ),
-            Expanded(
-              child: c.loading
-                  ? const Center(child: CircularProgressIndicator())
-                  : RefreshIndicator(
-                      onRefresh: () async {
-                        ref.invalidate(skillsProvider);
-                        await c.load();
-                      },
-                      child: ListView(
-                        controller: scroll,
-                        physics: const AlwaysScrollableScrollPhysics(),
-                        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                        children: [
-                          if (c.hasOlder)
-                            Center(
-                              child: TextButton(
-                                onPressed: c.loadingOlder || c.busy
-                                    ? null
-                                    : older,
+                        for (final r in c.remoteActiveRuns)
+                          Row(
+                            children: [
+                              Expanded(
+                                flex: 3,
                                 child: Text(
+                                  ChatController.formatRemoteRunLabel(
+                                    strings,
+                                    r,
+                                  ),
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              ),
+                              // CROSSDEV-STOP §3.3/§5.2: a `stopping` row shows
+                              // 「正在核對」 purely from the fresh activity — no
+                              // local state, no pending, no POST of any kind.
+                              if (c.remoteStoppingRunIds.contains(r.runId))
+                                Text(
                                   strings.resolve(
-                                    c.loadingOlder
-                                        ? MessageKey.chatM022
-                                        : MessageKey.chatM023,
+                                    MessageKey.chatStopRemoteChecking,
                                   ),
-                                ),
-                              ),
-                            ),
-                          if (c.messages.isEmpty && c.live == null)
-                            Padding(
-                              padding: const EdgeInsets.all(40),
-                              child: Text(
-                                strings.resolve(MessageKey.chatM024),
-                                textAlign: TextAlign.center,
-                              ),
-                            ),
-                          MessageTimeline(
-                            messages: c.messages,
-                            remoteRows: c.remoteRows,
-                            wakeRowIds: c.wakeRowIds,
-                            detailed: c.detailed,
-                            toolOverrides: toolOverlap.durableOverrides,
-                            slotScope: toolOverlap.scope,
+                                  style: const TextStyle(fontSize: 12),
+                                )
+                              else if (!r.isTerminal)
+                                const TypingDots(),
+                              // §5.1/§5.3: per-row stop action; disabled rows
+                              // carry a READABLE reason, never tooltip-only.
+                              _remoteStopAction(strings, c, r),
+                              if (c.steerInboxEnabled)
+                                _remoteSteerAction(strings, c, r),
+                            ],
                           ),
-                          // APPWAKE D: quiet status line while reports wait
-                          // for their (rate-limited) auto-read.
-                          if (c.wakeFeatureOffered &&
-                              _wakeHintText(strings, c) != null)
-                            Padding(
-                              key: const ValueKey('chat.wakeHint'),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 20,
-                                vertical: 2,
-                              ),
-                              child: Row(
-                                children: [
-                                  Icon(
-                                    Icons.schedule,
-                                    size: 14,
-                                    color:
-                                        Theme.of(context).colorScheme.outline,
-                                  ),
-                                  const SizedBox(width: 6),
-                                  Text(
-                                    _wakeHintText(strings, c)!,
-                                    style: const TextStyle(fontSize: 12),
-                                  ),
-                                ],
-                              ),
-                            ),
-                          // R2: every busy shape must look busy. The pending
-                          // bubble follows one rule in both branches (never
-                          // twice-drawn once history carries the row); the
-                          // "發言中" row covers what LiveTurnView does not
-                          // narrate: live==null busy states — the sending
-                          // gap before the stream attaches, bootstrap
-                          // recovering, and the detached poll pass.
-                          if (c.pendingBubbleText != null)
-                            EntryView(
-                              entry: DisplayEntry(
-                                EntryKind.user,
-                                Message(
-                                  id: 'pending',
-                                  role: 'user',
-                                  content: c.pendingBubbleText!,
-                                ),
-                              ),
-                            ),
-                          if (c.busy && c.live == null)
-                            Padding(
-                              padding: const EdgeInsets.only(right: 20, bottom: 4),
-                              child: Row(
-                                mainAxisAlignment: MainAxisAlignment.end,
-                                children: [
-                                  // STUCK-BUSY B4 / OFFLINE-SEND R1 (A5) /
-                                  // R3 §5.3: the controller derives ONE
-                                  // presentation state; this row only
-                                  // renders it. `dispatching` says「正在送出
-                                  // 訊息…」with NO dots (never 發言中);
-                                  // `activeConfirmed` keeps the existing
-                                  // 發言中 row; `countdown` shows the
-                                  // persisted recovery countdown; `silent`
-                                  // (uncertain / evidence-less) shows and
-                                  // animates nothing.
-                                  if (c.livePresentation ==
-                                      LivePresentation.countdown)
-                                    Text(
-                                      strings.render(
-                                        UiMessage.local(
-                                          MessageKey.chatRecoveryCountdown,
-                                          args: {
-                                            'seconds':
-                                                c.recoverySecondsRemaining!,
-                                          },
-                                        ),
-                                      ),
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                      ),
-                                    )
-                                  else if (c.livePresentation ==
-                                      LivePresentation.dispatching)
-                                    Text(
-                                      strings.resolve(
-                                        MessageKey.chatSendDispatching,
-                                      ),
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                      ),
-                                    )
-                                  else if (c.livePresentation ==
-                                      LivePresentation.activeConfirmed) ...[
-                                    Text(
-                                      strings.resolve(MessageKey.chatM025),
-                                      style: TextStyle(
-                                        fontSize: 12,
-                                        color: Theme.of(context)
-                                            .colorScheme
-                                            .onSurfaceVariant,
-                                      ),
-                                    ),
-                                    const SizedBox(width: 8),
-                                    const TypingDots(),
-                                  ],
-                                ],
-                              ),
-                            ),
-                          // APPROVALPUSH B3 (R6): exact-request cards for
-                          // every pending approval in this session (local OR
-                          // remote — never a fake turn row).
-                          if (c.approvalInboxSupported)
-                            PendingApprovalsPanel(
-                              requests: c.pendingApprovals(),
-                              unconfirmedRuns: c.approvalUnconfirmedRuns,
-                              onResolve: c.resolveApprovalExact,
-                              onReconfirm: c.reconfirmApprovals,
-                            ),
-                          if (c.approvalLegacyNotice)
-                            Padding(
-                              key: const ValueKey('approval-legacy-notice'),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 16,
-                                vertical: 4,
-                              ),
-                              child: Text(
-                                strings.resolve(
-                                  MessageKey.approvalCrossDeviceUnavailable,
-                                ),
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  color: Theme.of(
-                                    context,
-                                  ).colorScheme.onSurfaceVariant,
-                                ),
-                              ),
-                            ),
-                          if (c.live != null)
-                            LiveTurnView(
-                              turn: c.live!,
-                              detailed: c.detailed,
-                              onResolve: c.resolveApproval,
-                              // R1 (A5): the transcript owns its dots on the
-                              // SAME phase rule as before — uncertain never
-                              // "types". (R3 §5.3 changes the WORDING of an
-                              // unacknowledged send, not this animation.)
-                              showTyping: switch (c.phase) {
-                                ChatPhase.sending => true,
-                                ChatPhase.recovering => c.recoveryActiveConfirmed,
-                                _ => false,
-                              },
-                              // GHOST-DUP B4 (legacy) + R3 §5.4: attempt-
-                              // backed turns exclude transcript rows by
-                              // durable ID ONLY — never on text.
-                              transcriptUserAnchor: c.pendingInput,
-                              identityOnlyExclusion: c.turnIsAttemptBacked,
-                              representedUserIds: {
-                                for (final m in c.messages) m.id,
-                              },
-                              toolProjection: toolOverlap,
-                            ),
-                        ],
-                      ),
+                        if (c.observedActivity?.overflow == true)
+                          Text(
+                            strings.resolve(MessageKey.chatM016),
+                            style: const TextStyle(fontSize: 12),
+                          ),
+                      ],
                     ),
-            ),
-            if (suggestions.isNotEmpty)
-              ConstrainedBox(
-                constraints: const BoxConstraints(maxHeight: 220),
-                child: ListView(
-                  shrinkWrap: true,
-                  children: suggestions
-                      .map(
-                        (s) => ListTile(
-                          dense: true,
-                          title: Text(s.command),
-                          subtitle: Text(
-                            strings.render(s.description),
-                            maxLines: 1,
-                            overflow: TextOverflow.ellipsis,
-                          ),
-                          onTap: () {
-                            final prefix = input.text.substring(
-                              0,
-                              match!.start,
-                            );
-                            input.text =
-                                '$prefix${prefix.isEmpty ? '' : ' '}${s.command} ';
-                            input.selection = TextSelection.collapsed(
-                              offset: input.text.length,
-                            );
-                          },
-                        ),
-                      )
-                      .toList(),
-                ),
-              ),
-            if (draftError != null)
-              Padding(
-                padding: const EdgeInsets.all(8),
-                child: Text(
-                  strings.render(draftError!),
-                  style: TextStyle(color: Theme.of(context).colorScheme.error),
-                ),
-              ),
-            // R2 §4.5: a browser WITHOUT Web Locks cannot coordinate tabs —
-            // say it out loud instead of pretending cross-tab safety.
-            if (storeTxCapability == StoreTxCapability.unavailable)
-              Padding(
-                key: const ValueKey('chat.crossTabSafetyReduced'),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Text(
-                  strings.resolve(MessageKey.chatCrossTabSafetyReduced),
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Theme.of(context).colorScheme.error,
                   ),
-                ),
-              ),
-            // R2 §4.3: the restore snapshot is consumed EXACTLY ONCE and
-            // never overwrites current text — with text present it is the
-            // conflict notice plus the (still available) restore action.
-            if (_restoreAttemptId != null || _restoreConflict)
-              Padding(
-                key: const ValueKey('chat.restoreDraft'),
-                padding: const EdgeInsets.symmetric(horizontal: 12),
-                child: Row(
-                  children: [
-                    if (_restoreConflict)
-                      Expanded(
-                        child: Text(
-                          strings.resolve(MessageKey.chatDraftRestoreConflict),
-                          style: TextStyle(
-                            fontSize: 12,
-                            color: Theme.of(context).colorScheme.onSurfaceVariant,
-                          ),
-                        ),
-                      ),
-                    if (_restoreAttemptId != null)
-                      TextButton(
-                        onPressed: () => unawaited(_performRestore()),
-                        child: Text(strings.resolve(MessageKey.chatRestoreDraft)),
-                      ),
-                  ],
-                ),
-              ),
-            Padding(
-              padding: const EdgeInsets.all(12),
-              child: Column(
-                children: [
-                  if (c.busy)
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      children: [
-                        if (c.detailed)
-                          TextButton.icon(
-                            onPressed: c.canControl && !c.steerBusy
-                                ? showSteer
-                                : null,
-                            icon: const Icon(Icons.add_comment_outlined),
-                            label: Text(strings.resolve(MessageKey.chatSteer)),
-                          ),
-                        TextButton.icon(
-                          // R2 §4.3: ONE stop entry — server control when a
-                          // run exists, the local end when only this page's
-                          // attempt waiting is (stop() branches internally).
-                          // CROSSDEV-STOP §5.3: a stoppable remote row also
-                          // enables it (stop() still routes LOCAL FIRST; the
-                          // remote branch only runs when local has no target,
-                          // and never while a remote flight is in flight).
-                          onPressed:
-                              (c.canStop ||
-                                      c.canEndLocalWaiting ||
-                                      c.canRequestRemoteStop) &&
-                                  !c.remoteStopInFlight
-                              ? () => unawaited(_stopPath(c))
-                              : null,
-                          icon: const Icon(Icons.stop_circle_outlined),
-                          label: Text(
-                            strings.resolve(
-                              c.canStop || c.canEndLocalWaiting
-                                  ? MessageKey.chatM026
-                                  : MessageKey.chatStopRemote,
-                            ),
-                          ),
-                        ),
-                      ],
-                    )
-                  else if (c.canRequestRemoteStop ||
-                      c.remoteDisabledReason != null ||
-                      c.remoteStopInFlight)
-                    // CROSSDEV-STOP §5.3: the remote affordance outside the
-                    // local busy row. Honest enablement matrix: enabled only
-                    // with a stoppable target and never mid-flight; a disabled
-                    // pair shows the reason as READABLE text (chatStopRemote
-                    // NoRunId / RefreshRequired), never tooltip-only.
-                    Row(
-                      mainAxisAlignment: MainAxisAlignment.end,
-                      key: const ValueKey('chat.remoteStopAffordance'),
-                      children: [
-                        if (c.remoteDisabledReason != null &&
-                            !c.canRequestRemoteStop)
-                          Flexible(
-                            child: Text(
-                              strings.resolve(c.remoteDisabledReason!),
-                              style: const TextStyle(fontSize: 12),
-                            ),
-                          ),
-                        TextButton.icon(
-                          onPressed:
-                              c.canRequestRemoteStop && !c.remoteStopInFlight
-                              ? () => unawaited(_stopPath(c))
-                              : null,
-                          icon: const Icon(Icons.stop_circle_outlined),
-                          label: Text(
-                            strings.resolve(MessageKey.chatStopRemote),
-                          ),
-                        ),
-                      ],
-                    ),
-                  if (attachments.error != null)
-                    Text(
-                      strings.render(attachments.error!),
-                      style: TextStyle(
-                        color: Theme.of(context).colorScheme.error,
-                      ),
-                    )
-                  else if (attachments.batchParts.isNotEmpty)
-                    // Locale-specific join happens HERE (plan §4.3): the
-                    // controller kept typed counts + descriptors only.
-                    Text(
+                if (c.activityFreshness == ActivityFreshness.stale)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      // Fixed local HH:mm in both locales (I18N-PLAN §7).
                       strings.resolve(
-                        attachments.batchSucceeded == 0
-                            ? MessageKey.attachmentBatchM005
-                            : MessageKey.attachmentBatchM006,
+                        MessageKey.chatActivityStaleSummary,
                         args: {
-                          'parts': strings.joinParts(
-                            attachments.batchParts.map(strings.render).toList(),
-                          ),
-                          'count': attachments.batchSucceeded,
+                          'time': c.lastActivitySuccess == null
+                              ? ''
+                              : strings.resolve(
+                                  MessageKey.commonParenthesized,
+                                  args: {
+                                    'value': formatLocalClock(
+                                      c.lastActivitySuccess!,
+                                    ),
+                                  },
+                                ),
                         },
-                        count: attachments.batchSucceeded,
                       ),
                       style: TextStyle(
+                        fontSize: 12,
                         color: Theme.of(context).colorScheme.error,
                       ),
                     ),
-                  if (attachments.busy) const LinearProgressIndicator(),
-                  if (attachments.drafts.isNotEmpty)
-                    ConstrainedBox(
-                      constraints: const BoxConstraints(maxHeight: 120),
-                      child: SingleChildScrollView(
-                        child: Wrap(
-                          children: attachments.drafts
-                              .asMap()
-                              .entries
-                              .map(
-                                (e) => InputChip(
-                                  label: Text(
-                                    '${e.value.filename}'
-                                    '${e.value.uploaded ? strings.resolve(MessageKey.chatM027) : ''}',
-                                  ),
-                                  onDeleted:
-                                      c.busy || preparing || attachments.busy
-                                      ? null
-                                      : () => attachments.remove(e.key),
-                                ),
-                              )
-                              .toList(),
-                        ),
-                      ),
+                  ),
+                if (c.stopNoticeKind != StopNotice.none)
+                  MaterialBanner(
+                    content: Text(
+                      // Explicit provenance replaces the old startsWith('{')
+                      // heuristic (§4.4); the stored JSON is never displayed.
+                      c.stopNoticeMessage != null
+                          ? strings.render(c.stopNoticeMessage!)
+                          : strings.resolve(MessageKey.chatM019),
                     ),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.end,
-                    children: [
-                      IconButton(
-                        tooltip: strings.resolve(MessageKey.chatM028),
-                        icon: const Icon(Icons.add),
-                        onPressed: c.busy || preparing || attachments.busy
-                            ? null
-                            : () async {
-                                final picked = await pickFromGallery(
-                                  context,
-                                  onPickOther: () => unawaited(
-                                    pickWithFeedback(attachments, context),
-                                  ),
-                                );
-                                if (picked != null) {
-                                  await attachments.pickSource(
-                                    picked.source,
-                                    picked.filename,
-                                  );
-                                }
-                              },
-                      ),
-                      Expanded(
-                        child: Focus(
-                          onKeyEvent: _inputKey,
-                          onFocusChange: (has) {
-                            _focused = has;
-                            chat.noteInputActive(
-                              has || input.text.trim().isNotEmpty,
-                            );
-                          },
-                          child: TextField(
-                            controller: input,
-                            enabled: !preparing && !attachments.busy,
-                            keyboardType: TextInputType.multiline,
-                            minLines: 1,
-                            maxLines: 6,
-                            // 兩端 action=newline：行動端 Enter（含軟鍵盤）
-                            // 必定換行（第一優先，Flutter 版本間 maxLines 行為
-                            // 有漂移）。實機驗證項：行動端以 ↑ 送出鍵傳送；若
-                            // IME 仍送來 send/done action，由 onSubmitted 接手。
-                            textInputAction: TextInputAction.newline,
-                            // onSubmitted 前框架預設會先清 composing 並 unfocus
-                            // ——提供 onEditingComplete 攔下預設流程（保留 focus
-                            // 與 composing），選字未確認時的 send action 才會
-                            // 在下方守門被擋掉（零 POST、候選文字保留）。
-                            onEditingComplete: () {},
-                            onSubmitted: (_) {
-                              if (input.value.composing.isValid) return;
-                              _submitFromIme();
-                            },
-                            decoration: InputDecoration(
-                              hintText: strings.resolve(
-                                c.busy
-                                    ? MessageKey.chatM029
-                                    : c.remoteBusy
-                                ? MessageKey.chatM030
-                                : c.activityBlocksSend
-                                ? MessageKey.chatM031
-                                : _mobileComposer
-                                ? MessageKey.chatM032
-                                : MessageKey.chatM033,
-                              ),
-                              border: OutlineInputBorder(
-                                borderRadius: BorderRadius.circular(22),
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton.filled(
-                        tooltip: strings.resolve(MessageKey.chatM034),
-                        onPressed:
-                            preparing ||
-                                attachments.busy ||
-                                (input.text.trim().isEmpty &&
-                                    attachments.drafts.isEmpty) ||
-                                (c.sendBlocked &&
-                                    !_busyCommandAllowed(c, input.text))
-                            ? null
-                            : send,
-                        icon: const Icon(Icons.arrow_upward),
+                    actions: [
+                      TextButton(
+                        onPressed: c.dismissStopNotice,
+                        child: Text(strings.resolve(MessageKey.chatM020)),
                       ),
                     ],
                   ),
-                ],
-              ),
+                // CROSSDEV-STOP R2 §5.2/§5.3: remote wording rides the SECONDARY
+                // tone — requested/checking/unavailable/unconfirmed/ended are
+                // reconciliation states, never the red error slot, and never a
+                // local stop-banner.
+                if (c.remoteStopFeedback != null)
+                  Padding(
+                    key: const ValueKey('chat.remoteStopFeedback'),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      strings.render(c.remoteStopFeedback!),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.tertiary,
+                      ),
+                    ),
+                  ),
+                // SILENCE-DROP §3.3: "waiting for a reply" is its own
+                // secondary-tone line — never red, never folded into the
+                // error slot (the stream is alive; nothing failed).
+                if (c.streamWaitingNotice != null)
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                      strings.render(c.streamWaitingNotice!),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                if (c.error != null ||
+                    c.recoveryNotice != null ||
+                    c.failedCard != null)
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        if (c.error != null)
+                          Text(
+                            strings.render(c.error!),
+                            style: TextStyle(
+                              // SILENCE-DROP §3.3: neutral recovery wording
+                              // (silence/recheck) renders in the secondary
+                              // tone; ONLY observed stream failures stay red.
+                              color: switch (c.error) {
+                                UiLocal(key: MessageKey.chatStreamChecking) ||
+                                UiLocal(
+                                  key: MessageKey.chatStreamUnconfirmed,
+                                ) ||
+                                // WEBSYNC F1: delivered is a fact, not a fault.
+                                UiLocal(
+                                  key: MessageKey.chatDeliveredReplyLoading,
+                                ) => Theme.of(context).colorScheme.tertiary,
+                                _ => Theme.of(context).colorScheme.error,
+                              },
+                            ),
+                          ),
+                        // STUCK-BUSY B2: the "ended without a final" notice has
+                        // its own slot so a cleanup failure never masks it.
+                        if (c.recoveryNotice != null)
+                          Text(
+                            strings.render(c.recoveryNotice!),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.tertiary,
+                            ),
+                          ),
+                        // R3 §5.3: the notDispatched card survives into idle
+                        // reloads (journal-sourced), where no live `error` was
+                        // ever set for it.
+                        if (c.failedCard != null && c.error == null)
+                          Text(
+                            strings.render(c.failedCard!),
+                            style: TextStyle(
+                              color: Theme.of(context).colorScheme.error,
+                            ),
+                          ),
+                        // R3 §5.3/§6: the neutral delivery note for an
+                        // attempt-backed attempt still stuck at "unknown".
+                        if (c.deliveryNotice != null)
+                          Text(
+                            strings.render(c.deliveryNotice!),
+                            style: TextStyle(
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onSurfaceVariant,
+                            ),
+                          ),
+                        Row(
+                          children: [
+                            // STUCK-BUSY B4: 「重新核對」 shows only while the
+                            // ONE persisted allowance is still unconsumed.
+                            if (c.phase == ChatPhase.uncertain &&
+                                c.recoveryRetryAvailable)
+                              TextButton(
+                                onPressed: c.retryReconcile,
+                                child: Text(
+                                  strings.resolve(MessageKey.chatM021),
+                                ),
+                              ),
+                            // R3 §5.3: the ONLY retry POST affordance — the
+                            // notDispatched card's. Without RESOLVED Web Locks
+                            // it renders DISABLED beside the degraded notice
+                            // (§4.5); unknown/rejected never offer retry.
+                            if (c.retryUnsentAttemptId != null)
+                              TextButton(
+                                key: const ValueKey('chat.retryUnsent'),
+                                onPressed: c.retryUnsentAvailable
+                                    ? () => unawaited(
+                                        c.retryUnsent(c.retryUnsentAttemptId!),
+                                      )
+                                    : null,
+                                child: Text(
+                                  strings.resolve(MessageKey.chatRetryUnsent),
+                                ),
+                              ),
+                            // R2 §4.2: an abandoned tombstone's ONLY action is
+                            // the local cleanup retry — zero POSTs, no budget.
+                            if (c.localCleanupRetryAvailable)
+                              TextButton(
+                                onPressed: () =>
+                                    unawaited(c.retryLocalCleanup()),
+                                child: Text(
+                                  strings.resolve(
+                                    MessageKey.chatClearLocalWaiting,
+                                  ),
+                                ),
+                              ),
+                            if (c.phase == ChatPhase.uncertain &&
+                                c.hasLocalWaitingRecord &&
+                                !c.localCleanupRetryAvailable)
+                              TextButton(
+                                onPressed: c.clearLocalWaitingRecord,
+                                child: Text(
+                                  strings.resolve(
+                                    MessageKey.chatClearLocalWaiting,
+                                  ),
+                                ),
+                              ),
+                            // §4.3: the uncertain-row clear above routes through
+                            // the SAME journal-first local end (clearLocalWaiting
+                            // Record → endLocalAttempt) — one exit, no second
+                            // button duplicating it.
+                            if (!c.busy)
+                              TextButton(
+                                onPressed: c.load,
+                                child: Text(
+                                  strings.resolve(MessageKey.commonRetry),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                Expanded(
+                  child: c.loading
+                      ? const Center(child: CircularProgressIndicator())
+                      : RefreshIndicator(
+                          onRefresh: () async {
+                            ref.invalidate(skillsProvider);
+                            await c.load();
+                          },
+                          child: ListView(
+                            controller: scroll,
+                            physics: const AlwaysScrollableScrollPhysics(),
+                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+                            children: [
+                              if (c.hasOlder)
+                                Center(
+                                  child: TextButton(
+                                    onPressed: c.loadingOlder || c.busy
+                                        ? null
+                                        : older,
+                                    child: Text(
+                                      strings.resolve(
+                                        c.loadingOlder
+                                            ? MessageKey.chatM022
+                                            : MessageKey.chatM023,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              if (c.messages.isEmpty && c.live == null)
+                                Padding(
+                                  padding: const EdgeInsets.all(40),
+                                  child: Text(
+                                    strings.resolve(MessageKey.chatM024),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                              MessageTimeline(
+                                messages: c.messages,
+                                remoteRows: c.remoteRows,
+                                wakeRowIds: c.wakeRowIds,
+                                detailed: c.detailed,
+                                toolOverrides: toolOverlap.durableOverrides,
+                                slotScope: toolOverlap.scope,
+                              ),
+                              // APPWAKE D: quiet status line while reports wait
+                              // for their (rate-limited) auto-read.
+                              if (c.wakeFeatureOffered &&
+                                  _wakeHintText(strings, c) != null)
+                                Padding(
+                                  key: const ValueKey('chat.wakeHint'),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 20,
+                                    vertical: 2,
+                                  ),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        Icons.schedule,
+                                        size: 14,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.outline,
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Text(
+                                        _wakeHintText(strings, c)!,
+                                        style: const TextStyle(fontSize: 12),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              // R2: every busy shape must look busy. The pending
+                              // bubble follows one rule in both branches (never
+                              // twice-drawn once history carries the row); the
+                              // "發言中" row covers what LiveTurnView does not
+                              // narrate: live==null busy states — the sending
+                              // gap before the stream attaches, bootstrap
+                              // recovering, and the detached poll pass.
+                              if (c.pendingBubbleText != null)
+                                EntryView(
+                                  entry: DisplayEntry(
+                                    EntryKind.user,
+                                    Message(
+                                      id: 'pending',
+                                      role: 'user',
+                                      content: c.pendingBubbleText!,
+                                    ),
+                                  ),
+                                ),
+                              if (c.busy && c.live == null)
+                                Padding(
+                                  padding: const EdgeInsets.only(
+                                    right: 20,
+                                    bottom: 4,
+                                  ),
+                                  child: Row(
+                                    mainAxisAlignment: MainAxisAlignment.end,
+                                    children: [
+                                      // STUCK-BUSY B4 / OFFLINE-SEND R1 (A5) /
+                                      // R3 §5.3: the controller derives ONE
+                                      // presentation state; this row only
+                                      // renders it. `dispatching` says「正在送出
+                                      // 訊息…」with NO dots (never 發言中);
+                                      // `activeConfirmed` keeps the existing
+                                      // 發言中 row; `countdown` shows the
+                                      // persisted recovery countdown; `silent`
+                                      // (uncertain / evidence-less) shows and
+                                      // animates nothing.
+                                      if (c.livePresentation ==
+                                          LivePresentation.countdown)
+                                        Text(
+                                          strings.render(
+                                            UiMessage.local(
+                                              MessageKey.chatRecoveryCountdown,
+                                              args: {
+                                                'seconds':
+                                                    c.recoverySecondsRemaining!,
+                                              },
+                                            ),
+                                          ),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Theme.of(
+                                              context,
+                                            ).colorScheme.onSurfaceVariant,
+                                          ),
+                                        )
+                                      else if (c.livePresentation ==
+                                          LivePresentation.dispatching)
+                                        Text(
+                                          strings.resolve(
+                                            MessageKey.chatSendDispatching,
+                                          ),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Theme.of(
+                                              context,
+                                            ).colorScheme.onSurfaceVariant,
+                                          ),
+                                        )
+                                      else if (c.livePresentation ==
+                                          LivePresentation.activeConfirmed) ...[
+                                        Text(
+                                          strings.resolve(MessageKey.chatM025),
+                                          style: TextStyle(
+                                            fontSize: 12,
+                                            color: Theme.of(
+                                              context,
+                                            ).colorScheme.onSurfaceVariant,
+                                          ),
+                                        ),
+                                        const SizedBox(width: 8),
+                                        const TypingDots(),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              // APPROVALPUSH B3 (R6): exact-request cards for
+                              // every pending approval in this session (local OR
+                              // remote — never a fake turn row).
+                              if (c.approvalInboxSupported)
+                                PendingApprovalsPanel(
+                                  requests: c.pendingApprovals(),
+                                  unconfirmedRuns: c.approvalUnconfirmedRuns,
+                                  onResolve: c.resolveApprovalExact,
+                                  onReconfirm: c.reconfirmApprovals,
+                                ),
+                              if (c.approvalLegacyNotice)
+                                Padding(
+                                  key: const ValueKey('approval-legacy-notice'),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 4,
+                                  ),
+                                  child: Text(
+                                    strings.resolve(
+                                      MessageKey.approvalCrossDeviceUnavailable,
+                                    ),
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Theme.of(
+                                        context,
+                                      ).colorScheme.onSurfaceVariant,
+                                    ),
+                                  ),
+                                ),
+                              // STEERWEB R4: durable steer receipt cards — their
+                              // OWN surface; never message rows, never a turn.
+                              if (c.steerInboxEnabled &&
+                                  c.steerReceipts.isNotEmpty)
+                                Padding(
+                                  key: const ValueKey('steer-receipts-panel'),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 4,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      for (final r in c.steerReceipts)
+                                        Row(
+                                          key: ValueKey(
+                                            'steer-receipt-${r.steerId}',
+                                          ),
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            const Icon(Icons.outbox, size: 16),
+                                            const SizedBox(width: 6),
+                                            Flexible(
+                                              child: Text(
+                                                strings.resolve(
+                                                  steerStateKey(r),
+                                                  args: {
+                                                    'sequence': r.sequence,
+                                                  },
+                                                ),
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                      for (final runId in {
+                                        for (final r in c.steerReceipts)
+                                          r.runId,
+                                      })
+                                        if (c.steerDraftFor(runId) != null)
+                                          TextButton.icon(
+                                            key: ValueKey('steer-retry-$runId'),
+                                            onPressed: () => unawaited(
+                                              c.retrySteerDraft(runId),
+                                            ),
+                                            icon: const Icon(
+                                              Icons.refresh,
+                                              size: 16,
+                                            ),
+                                            label: Text(
+                                              strings.resolve(
+                                                MessageKey.steerRetrySame,
+                                              ),
+                                            ),
+                                          ),
+                                    ],
+                                  ),
+                                ),
+                              // STEERWEB R7: the account notification ledger —
+                              // exact-event cards with read acks; NEVER text-
+                              // derived, NEVER an approval action disguised.
+                              if (c.notificationEventsEnabled &&
+                                  c.notifications.hasUnread)
+                                Padding(
+                                  key: const ValueKey('notification-panel'),
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 16,
+                                    vertical: 4,
+                                  ),
+                                  child: Column(
+                                    crossAxisAlignment:
+                                        CrossAxisAlignment.start,
+                                    children: [
+                                      for (final e in c.notifications.unread)
+                                        Row(
+                                          key: ValueKey(
+                                            'notification-${e.eventId}',
+                                          ),
+                                          children: [
+                                            Expanded(
+                                              child: Text(
+                                                strings.resolve(switch (e
+                                                    .kind) {
+                                                  NotificationKind
+                                                      .approvalRequest =>
+                                                    MessageKey
+                                                        .notificationApproval,
+                                                  NotificationKind.completed =>
+                                                    MessageKey
+                                                        .notificationCompleted,
+                                                  NotificationKind.failed =>
+                                                    MessageKey
+                                                        .notificationFailed,
+                                                  NotificationKind.steerReady =>
+                                                    MessageKey
+                                                        .notificationSteerReady,
+                                                  _ =>
+                                                    MessageKey
+                                                        .notificationSettled,
+                                                }),
+                                                style: const TextStyle(
+                                                  fontSize: 12,
+                                                ),
+                                              ),
+                                            ),
+                                            TextButton(
+                                              key: ValueKey(
+                                                'notification-read-${e.eventId}',
+                                              ),
+                                              onPressed: () => unawaited(
+                                                c.markNotificationRead(
+                                                  e.eventId,
+                                                ),
+                                              ),
+                                              child: Text(
+                                                strings.resolve(
+                                                  MessageKey.notificationRead,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                        ),
+                                    ],
+                                  ),
+                                ),
+                              if (c.live != null)
+                                LiveTurnView(
+                                  turn: c.live!,
+                                  detailed: c.detailed,
+                                  onResolve: c.resolveApproval,
+                                  // R1 (A5): the transcript owns its dots on the
+                                  // SAME phase rule as before — uncertain never
+                                  // "types". (R3 §5.3 changes the WORDING of an
+                                  // unacknowledged send, not this animation.)
+                                  showTyping: switch (c.phase) {
+                                    ChatPhase.sending => true,
+                                    ChatPhase.recovering =>
+                                      c.recoveryActiveConfirmed,
+                                    _ => false,
+                                  },
+                                  // GHOST-DUP B4 (legacy) + R3 §5.4: attempt-
+                                  // backed turns exclude transcript rows by
+                                  // durable ID ONLY — never on text.
+                                  transcriptUserAnchor: c.pendingInput,
+                                  identityOnlyExclusion: c.turnIsAttemptBacked,
+                                  representedUserIds: {
+                                    for (final m in c.messages) m.id,
+                                  },
+                                  toolProjection: toolOverlap,
+                                ),
+                            ],
+                          ),
+                        ),
+                ),
+                if (suggestions.isNotEmpty)
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxHeight: 220),
+                    child: ListView(
+                      shrinkWrap: true,
+                      children: suggestions
+                          .map(
+                            (s) => ListTile(
+                              dense: true,
+                              title: Text(s.command),
+                              subtitle: Text(
+                                strings.render(s.description),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                              onTap: () {
+                                final prefix = input.text.substring(
+                                  0,
+                                  match!.start,
+                                );
+                                input.text =
+                                    '$prefix${prefix.isEmpty ? '' : ' '}${s.command} ';
+                                input.selection = TextSelection.collapsed(
+                                  offset: input.text.length,
+                                );
+                              },
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
+                if (draftError != null)
+                  Padding(
+                    padding: const EdgeInsets.all(8),
+                    child: Text(
+                      strings.render(draftError!),
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                // R2 §4.5: a browser WITHOUT Web Locks cannot coordinate tabs —
+                // say it out loud instead of pretending cross-tab safety.
+                if (storeTxCapability == StoreTxCapability.unavailable)
+                  Padding(
+                    key: const ValueKey('chat.crossTabSafetyReduced'),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Text(
+                      strings.resolve(MessageKey.chatCrossTabSafetyReduced),
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
+                // R2 §4.3: the restore snapshot is consumed EXACTLY ONCE and
+                // never overwrites current text — with text present it is the
+                // conflict notice plus the (still available) restore action.
+                if (_restoreAttemptId != null || _restoreConflict)
+                  Padding(
+                    key: const ValueKey('chat.restoreDraft'),
+                    padding: const EdgeInsets.symmetric(horizontal: 12),
+                    child: Row(
+                      children: [
+                        if (_restoreConflict)
+                          Expanded(
+                            child: Text(
+                              strings.resolve(
+                                MessageKey.chatDraftRestoreConflict,
+                              ),
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Theme.of(
+                                  context,
+                                ).colorScheme.onSurfaceVariant,
+                              ),
+                            ),
+                          ),
+                        if (_restoreAttemptId != null)
+                          TextButton(
+                            onPressed: () => unawaited(_performRestore()),
+                            child: Text(
+                              strings.resolve(MessageKey.chatRestoreDraft),
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.all(12),
+                  child: Column(
+                    children: [
+                      if (c.busy)
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            if (c.detailed)
+                              TextButton.icon(
+                                onPressed: c.canControl && !c.steerBusy
+                                    ? showSteer
+                                    : null,
+                                icon: const Icon(Icons.add_comment_outlined),
+                                label: Text(
+                                  strings.resolve(MessageKey.chatSteer),
+                                ),
+                              ),
+                            TextButton.icon(
+                              // R2 §4.3: ONE stop entry — server control when a
+                              // run exists, the local end when only this page's
+                              // attempt waiting is (stop() branches internally).
+                              // CROSSDEV-STOP §5.3: a stoppable remote row also
+                              // enables it (stop() still routes LOCAL FIRST; the
+                              // remote branch only runs when local has no target,
+                              // and never while a remote flight is in flight).
+                              onPressed:
+                                  (c.canStop ||
+                                          c.canEndLocalWaiting ||
+                                          c.canRequestRemoteStop) &&
+                                      !c.remoteStopInFlight
+                                  ? () => unawaited(_stopPath(c))
+                                  : null,
+                              icon: const Icon(Icons.stop_circle_outlined),
+                              label: Text(
+                                strings.resolve(
+                                  c.canStop || c.canEndLocalWaiting
+                                      ? MessageKey.chatM026
+                                      : MessageKey.chatStopRemote,
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      else if (c.canRequestRemoteStop ||
+                          c.remoteDisabledReason != null ||
+                          c.remoteStopInFlight)
+                        // CROSSDEV-STOP §5.3: the remote affordance outside the
+                        // local busy row. Honest enablement matrix: enabled only
+                        // with a stoppable target and never mid-flight; a disabled
+                        // pair shows the reason as READABLE text (chatStopRemote
+                        // NoRunId / RefreshRequired), never tooltip-only.
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          key: const ValueKey('chat.remoteStopAffordance'),
+                          children: [
+                            if (c.remoteDisabledReason != null &&
+                                !c.canRequestRemoteStop)
+                              Flexible(
+                                child: Text(
+                                  strings.resolve(c.remoteDisabledReason!),
+                                  style: const TextStyle(fontSize: 12),
+                                ),
+                              ),
+                            TextButton.icon(
+                              onPressed:
+                                  c.canRequestRemoteStop &&
+                                      !c.remoteStopInFlight
+                                  ? () => unawaited(_stopPath(c))
+                                  : null,
+                              icon: const Icon(Icons.stop_circle_outlined),
+                              label: Text(
+                                strings.resolve(MessageKey.chatStopRemote),
+                              ),
+                            ),
+                          ],
+                        ),
+                      if (attachments.error != null)
+                        Text(
+                          strings.render(attachments.error!),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        )
+                      else if (attachments.batchParts.isNotEmpty)
+                        // Locale-specific join happens HERE (plan §4.3): the
+                        // controller kept typed counts + descriptors only.
+                        Text(
+                          strings.resolve(
+                            attachments.batchSucceeded == 0
+                                ? MessageKey.attachmentBatchM005
+                                : MessageKey.attachmentBatchM006,
+                            args: {
+                              'parts': strings.joinParts(
+                                attachments.batchParts
+                                    .map(strings.render)
+                                    .toList(),
+                              ),
+                              'count': attachments.batchSucceeded,
+                            },
+                            count: attachments.batchSucceeded,
+                          ),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.error,
+                          ),
+                        ),
+                      if (attachments.busy) const LinearProgressIndicator(),
+                      if (attachments.drafts.isNotEmpty)
+                        ConstrainedBox(
+                          constraints: const BoxConstraints(maxHeight: 120),
+                          child: SingleChildScrollView(
+                            child: Wrap(
+                              children: attachments.drafts
+                                  .asMap()
+                                  .entries
+                                  .map(
+                                    (e) => InputChip(
+                                      label: Text(
+                                        '${e.value.filename}'
+                                        '${e.value.uploaded ? strings.resolve(MessageKey.chatM027) : ''}',
+                                      ),
+                                      onDeleted:
+                                          c.busy ||
+                                              preparing ||
+                                              attachments.busy
+                                          ? null
+                                          : () => attachments.remove(e.key),
+                                    ),
+                                  )
+                                  .toList(),
+                            ),
+                          ),
+                        ),
+                      Row(
+                        crossAxisAlignment: CrossAxisAlignment.end,
+                        children: [
+                          IconButton(
+                            tooltip: strings.resolve(MessageKey.chatM028),
+                            icon: const Icon(Icons.add),
+                            onPressed: c.busy || preparing || attachments.busy
+                                ? null
+                                : () async {
+                                    final picked = await pickFromGallery(
+                                      context,
+                                      onPickOther: () => unawaited(
+                                        pickWithFeedback(attachments, context),
+                                      ),
+                                    );
+                                    if (picked != null) {
+                                      await attachments.pickSource(
+                                        picked.source,
+                                        picked.filename,
+                                      );
+                                    }
+                                  },
+                          ),
+                          Expanded(
+                            child: Focus(
+                              onKeyEvent: _inputKey,
+                              onFocusChange: (has) {
+                                _focused = has;
+                                chat.noteInputActive(
+                                  has || input.text.trim().isNotEmpty,
+                                );
+                              },
+                              child: TextField(
+                                controller: input,
+                                enabled: !preparing && !attachments.busy,
+                                keyboardType: TextInputType.multiline,
+                                minLines: 1,
+                                maxLines: 6,
+                                // 兩端 action=newline：行動端 Enter（含軟鍵盤）
+                                // 必定換行（第一優先，Flutter 版本間 maxLines 行為
+                                // 有漂移）。實機驗證項：行動端以 ↑ 送出鍵傳送；若
+                                // IME 仍送來 send/done action，由 onSubmitted 接手。
+                                textInputAction: TextInputAction.newline,
+                                // onSubmitted 前框架預設會先清 composing 並 unfocus
+                                // ——提供 onEditingComplete 攔下預設流程（保留 focus
+                                // 與 composing），選字未確認時的 send action 才會
+                                // 在下方守門被擋掉（零 POST、候選文字保留）。
+                                onEditingComplete: () {},
+                                onSubmitted: (_) {
+                                  if (input.value.composing.isValid) return;
+                                  _submitFromIme();
+                                },
+                                decoration: InputDecoration(
+                                  hintText: strings.resolve(
+                                    c.busy
+                                        ? MessageKey.chatM029
+                                        : c.remoteBusy
+                                        ? MessageKey.chatM030
+                                        : c.activityBlocksSend
+                                        ? MessageKey.chatM031
+                                        : _mobileComposer
+                                        ? MessageKey.chatM032
+                                        : MessageKey.chatM033,
+                                  ),
+                                  border: OutlineInputBorder(
+                                    borderRadius: BorderRadius.circular(22),
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          IconButton.filled(
+                            tooltip: strings.resolve(MessageKey.chatM034),
+                            onPressed:
+                                preparing ||
+                                    attachments.busy ||
+                                    (input.text.trim().isEmpty &&
+                                        attachments.drafts.isEmpty) ||
+                                    (c.sendBlocked &&
+                                        !_busyCommandAllowed(c, input.text))
+                                ? null
+                                : send,
+                            icon: const Icon(Icons.arrow_upward),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
             ),
-          ],
-          ),
           ),
           if (_dragging)
             Positioned.fill(
               child: IgnorePointer(
                 child: DecoratedBox(
                   decoration: BoxDecoration(
-                    color: Theme.of(context)
-                        .colorScheme
-                        .primary
-                        .withValues(alpha: 0.08),
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.primary.withValues(alpha: 0.08),
                     border: Border.all(
                       color: Theme.of(context).colorScheme.primary,
                       width: 3,
@@ -1843,9 +2127,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Center(
-                    child: LocalizedText(
-                      UiMessage.local(MessageKey.chatM035),
-                    ),
+                    child: LocalizedText(UiMessage.local(MessageKey.chatM035)),
                   ),
                 ),
               ),

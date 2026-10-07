@@ -306,7 +306,7 @@ async def case_lifecycle(args):
     check(state["manifest"]["push"]["status"] == "skipped_incompatible",
           "approval incompatibility fail-closes push (native callback is its only producer)")
     check(state["manifest"]["approval_inbox"]["status"] == "skipped_incompatible",
-          "approval incompatibility fail-closes approval_inbox (its native callbacks are the capture points)")
+          "approval incompatibility fail-closes approval_inbox (its admission/status seams are the capture points)")
     check(approval_context._is_unattended_platform_approval_context is original_predicate and
           approval._is_unattended_platform_approval_context is original_predicate, "approval transaction restores both policy bindings")
     check(all(state["manifest"][u]["status"] == "applied" for u in ("upload","limits","media","history","skills")), "other five groups survive approval incompatibility")
@@ -390,7 +390,7 @@ async def run(args):
         # case's own assertions show what the installed subset actually does,
         # while the gate keeps a partially skipped install from ever reading PASS.
         manifest_ok = args.worker == "control" or (
-            len(manifest) == 12 and all(v["status"] == "applied" for v in manifest.values()))
+            len(manifest) == 14 and all(v["status"] == "applied" for v in manifest.values()))
         if args.worker == "approval":
             from .approval import case_approval
             outcome = await case_approval(args, server, check)
@@ -406,6 +406,15 @@ async def run(args):
         elif args.worker == "approval_push":
             from .approval_push import case_approval_push
             outcome = await case_approval_push(args, server, check)
+        elif args.worker == "notification_events":
+            from .notification_events import case_notification_events
+            outcome = await case_notification_events(args, server, check)
+        elif args.worker == "steer_inbox":
+            from .steer_inbox import case_steer_inbox
+            outcome = await case_steer_inbox(args, server, check)
+        elif args.worker == "approval_central":
+            from .approval_central import case_approval_central
+            outcome = await case_approval_central(args, server, check)
         elif args.worker == "cron_bridge":
             from .cron_bridge import case_cron_bridge
             outcome = await case_cron_bridge(args, server, check)
@@ -423,7 +432,7 @@ async def run(args):
         status, detail = outcome or ("PASS", f"{len(DETAILS)} assertions")
         if not manifest_ok:
             status = "FAIL"
-            detail = f"behavior: {detail} | gate: twelve hook groups not applied: {manifest}"
+            detail = f"behavior: {detail} | gate: thirteen hook groups not applied: {manifest}"
         return {"id":args.worker,"status":status,"detail":detail,"assertions":DETAILS,
                 "manifest":manifest,"peak_rss_kib":resource.getrusage(resource.RUSAGE_SELF).ru_maxrss}
     except Exception as exc:

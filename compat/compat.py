@@ -31,7 +31,8 @@ EXTRA_MIMES = frozenset({
     "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 })
 UNITS = ("limits", "upload", "media", "history", "approval", "skills", "activity", "push",
-         "approval_inbox", "cron_bridge", "wake", "selfwake")
+         "approval_inbox", "cron_bridge", "wake", "selfwake", "steer_inbox",
+         "notification_events")
 log = logging.getLogger("hermes-app-compat")
 _STATE = "_hermes_app_compat_state_v1"
 _MISSING = object()
@@ -655,6 +656,8 @@ def _install_history(tx):
             return result
     message.__hermes_app_compat__ = VERSION
     tx.set(cls, "_message_response", staticmethod(message))
+
+
 
 
 def _install_skills(tx):
@@ -1381,6 +1384,15 @@ def _push_schedule(registry, st, transition):
 def _push_publish(st, kind, text=""):
     """Single publish exit; call under the registry lock on the run's loop."""
     from . import ntfy_notify
+    try:
+        from . import notification_events as _ne
+        if _ne.capability_enabled() and kind in ("completed", "failed"):
+            # R6: while the notification ledger is live IT owns terminal
+            # notifications (read/notification ledger decides, never the
+            # socket-ack policy); no second publish from this exit.
+            return
+    except Exception:
+        pass
     server, topic = st["settings"]
     if kind == "approval":
         ntfy_notify.publish(
@@ -1930,6 +1942,8 @@ def _install_wake(tx):
         return result
     message.__hermes_app_compat__ = VERSION
     tx.set(cls, "_message_response", staticmethod(message))
+
+
 
     # -- B: routes (admit / receipt GET+report / release) ----------------------
     old_table = cls._http_route_table
@@ -3007,14 +3021,24 @@ async def _session_agent(
         self._inflight_agent_runs -= 1
 
 
-# ---- approval_inbox unit (APPROVALPUSH R1-R3: registry + GET + exact POST) ----
-# Target backend only. The core queue stays the single settlement authority;
-# this unit captures BOTH api admission callbacks (session-stream and
-# /v1/runs), maintains an exact-id registry with display payloads, exposes
-# GET /v1/runs/{run_id}/approvals and hardens POST /v1/runs/{id}/approval to
-# exact request_id semantics. The release step (B4) ships it ENABLED;
-# set_capability(False) is the kill switch and makes every wrapper a pure
-# passthrough again, so a disabled server behaves exactly like HEAD.
+# ---- approval_inbox unit (APPROVALPUSH R1-R3 + APPROVALSCAN central cut) -----
+# Target backend only. The core queue stays the single settlement authority.
+# APPROVALSCAN §建議修復: capture lives at the ONE entrance every API approval
+# producer ends in — APIServerAdapter._set_run_status("waiting_for_approval",
+# approval=…) is written by the session-stream factory (api_server.py), the
+# /v1/runs factory (api_server_runs.py) AND the OpenAI chat-streaming factory
+# (api_server_openai_routes.py), so no per-factory wrapper is installed. The
+# push admission wrapper, native notify, answer handler and settlement
+# authority are untouched. Boundary (by design, not an oversight): generic
+# gateway TurnRunner cards/plain text, real cron and the no-callback `_pending`
+# fallback never write an API status and are NOT covered by this unit — the
+# no-listener gap is an admission/lifecycle problem owned elsewhere. The
+# release step (B4) ships it ENABLED; set_capability(False) is the kill switch
+# and is re-checked on EVERY status invocation (rollback contract: a callback
+# created before the switch stops capturing the moment it flips).
+
+INBOX_LOOPS_CAP = 1024        # admission loop bindings; oldest evicted, observable
+
 
 def _install_approval_inbox(tx):
     import sys
@@ -3034,21 +3058,23 @@ def _install_approval_inbox(tx):
             raise RuntimeError(unit + " unit not applied")
     if not state.get("activity_epoch"):
         raise RuntimeError("activity epoch missing")
-    _require(cls, "_register_session_stream_approval", "_set_run_status", "_http_route_table",
+    # The capture cut is the class method itself; the admission seams below only
+    # record the owner loop (they never touch approval semantics).
+    _require(cls, "_set_run_status", "_run_agent", "_http_route_table",
              "_handle_capabilities")
-    _require(runs, "_make_approval_notify", "_handle_run_approval", "_mark_run_event",
+    _require(runs, "_execute_run", "_handle_run_approval", "_mark_run_event",
              "_load_owned_run", "_run_event")
     _require(approval, "list_gateway_approvals", "resolve_gateway_approval")
     _require(api, "_approval_request_event", "_error_response", "_coerce_request_bool")
-    _signature(cls, "_register_session_stream_approval", "self", "run_id", "events", "message_id")
     _signature(cls, "_set_run_status", "self", "run_id", "status")
-    _signature(runs, "_make_approval_notify", "self", "run", "_api_server")
+    _signature(runs, "_execute_run", "self", "run")
     _signature(runs, "_handle_run_approval", "self", "request", "_api_server")
     _signature(runs, "_mark_run_event", "self", "run_id", "name")
     _signature(runs, "_load_owned_run", "self", "request", "_api_server", "permission",
                "active_fallback")
 
     inbox = approval_inbox.ApprovalInbox.open(state)
+    loops = inbox.setdefault("loops", {})  # (id(adapter), run_id) -> admission loop
 
     # -- approval push dispatcher (B2): ONE approval exit while enabled -------
     # Immediate initial notification + one near-timeout reminder replace the
@@ -3059,12 +3085,18 @@ def _install_approval_inbox(tx):
     legacy_exit = str(_push_raw_settings().get("approval_dispatcher") or "immediate") \
         .strip().lower() == "legacy"
     if not legacy_exit:
-        approval_push.attach(inbox)  # sets inbox["dispatch"]
+        def reminder_ok(entry, _attach=approval_push):
+            # Kill switch covers in-flight reminders: a disabled unit never
+            # publishes, on top of the run-not-terminal check.
+            return (approval_inbox.capability_enabled(inbox)
+                    and _attach._production_status_ok(entry))
+        approval_push.attach(inbox, status_ok=reminder_ok)
     tx.cleanups.append(lambda: inbox.__setitem__("dispatch", None))
 
     def close_all():
         with inbox["lock"]:
             inbox["closed"] = True
+            loops.clear()
             timers = [entry.get("timer") for bucket in inbox["by_run"].values()
                       for entry in bucket["entries"].values()]
         for timer in timers:
@@ -3075,64 +3107,91 @@ def _install_approval_inbox(tx):
 
     enabled = approval_inbox.capability_enabled
 
-    # -- capture inside the SESSION-STREAM native callback (one producer) ------
-    old_register = cls._register_session_stream_approval
+    # -- loop metadata at the EXISTING admission seams (APPROVALSCAN §loop) ----
+    # The admission coroutine that owns a run records its event loop BEFORE the
+    # worker starts. Capture (worker thread) never calls get_running_loop and
+    # never captures with loop=None: session turns already have their loop in
+    # the approval_queues mirror; runs/OpenAI turns bind here.
+    def bind_loop(adapter, run_id):
+        with inbox["lock"]:
+            loops[(id(adapter), run_id)] = asyncio.get_running_loop()
+            while len(loops) > INBOX_LOOPS_CAP:
+                dead = [k for k, lp in loops.items() if lp.is_closed()]
+                for k in dead:
+                    loops.pop(k, None)
+                while len(loops) > INBOX_LOOPS_CAP:
+                    loops.pop(next(iter(loops)))  # oldest admission first
 
-    @wraps(old_register)
-    def register(self, run_id, events, message_id):
-        callback = old_register(self, run_id, events, message_id)
-        if not enabled(inbox):
-            return callback
-        loop = events.loop
+    def unbind_loop(adapter, run_id):
+        with inbox["lock"]:
+            loops.pop((id(adapter), run_id), None)
 
-        def capturing(approval_data):
-            entry = None
-            try:
-                entry = approval_inbox.capture(
-                    inbox, adapter=self, run_id=run_id,
-                    session_id=events.session_id, loop=loop, data=approval_data)
-            except Exception as exc:
-                log.debug("inbox capture skipped: %s", type(exc).__name__)
-            result = callback(approval_data)  # native chain unchanged, called ONCE
-            if entry is not None:
-                try:  # additive enrichment belongs on the loop that serialises
-                    loop.call_soon_threadsafe(
-                        approval_inbox.enrich_event, inbox, self, run_id, entry["request_id"])
-                except RuntimeError:
-                    pass
-            return result
-        return capturing
-    tx.set(cls, "_register_session_stream_approval", register)
+    old_agent = cls._run_agent
 
-    # -- capture inside the /v1/runs native notify factory --------------------
-    old_notify = runs._make_approval_notify
+    @wraps(old_agent)
+    async def agent(self, *args, **kwargs):
+        try:
+            # Session stream and OpenAI chat streaming both hand their approval
+            # callback through this admission; sync/unattended callers pass no
+            # callback and bind nothing (there is no answerable run).
+            if kwargs.get("approval_notify_callback") is not None:
+                owned = kwargs.get("approval_session_key") or kwargs.get("active_run_id")
+                if owned:
+                    bind_loop(self, owned)
+        except Exception as exc:
+            log.info("approval loop bind skipped: stage=run-agent error=%s",
+                     type(exc).__name__)
+        return await old_agent(self, *args, **kwargs)
+    tx.set(cls, "_run_agent", agent)
 
-    @wraps(old_notify)
-    def notify(self, run, **kwargs):
-        callback = old_notify(self, run, **kwargs)
-        if not enabled(inbox):
-            return callback
-        loop = asyncio.get_running_loop()
+    old_exec = runs._execute_run
 
-        def capturing(approval_data):
-            entry = None
-            try:
-                entry = approval_inbox.capture(
-                    inbox, adapter=self, run_id=run.run_id,
-                    session_id=getattr(run, "session_id", None), loop=loop, data=approval_data)
-            except Exception as exc:
-                log.debug("inbox capture skipped: %s", type(exc).__name__)
-            result = callback(approval_data)
-            if entry is not None:
-                try:
-                    loop.call_soon_threadsafe(
-                        approval_inbox.enrich_event, inbox, self, run.run_id,
-                        entry["request_id"])
-                except RuntimeError:
-                    pass
-            return result
-        return capturing
-    tx.set(runs, "_make_approval_notify", notify)
+    @wraps(old_exec)
+    async def execute(self, launch, **kwargs):
+        try:
+            bind_loop(self, launch.run_id)
+        except Exception as exc:
+            log.info("approval loop bind skipped: stage=run-executor error=%s",
+                     type(exc).__name__)
+        return await old_exec(self, launch, **kwargs)
+    tx.set(runs, "_execute_run", execute)
+
+    # -- THE capture cut: native waiting_for_approval writes (APPROVALSCAN) ----
+    def capture_status(self, run_id, event):
+        # The status event is only the API envelope: it supplies the exact
+        # request_id; capture() reads the native flags/pattern keys from the
+        # core entry's own data and verifies the entry is STILL pending there.
+        # The native status write above already happened and is never altered.
+        request_id = event.get("request_id") if isinstance(event, dict) else None
+        if not isinstance(request_id, str) or not request_id:
+            return
+        if not self._run_approval_sessions.get(run_id):
+            # No exact _run_approval_sessions key: no answering authority, so
+            # this is not ours to track (turn already retired its mapping).
+            approval_inbox._metric(inbox, "capture_key_unbound")
+            return
+        mirror = state.get("approval_queues", {}).get((id(self), run_id))
+        loop = getattr(mirror, "loop", None) if mirror is not None else None
+        if loop is None:
+            loop = loops.get((id(self), run_id))
+        if loop is None:
+            # Fail closed and LOUD, never loop=None: a worker-thread capture
+            # without an owner loop would write loop-owned queues directly.
+            approval_inbox._metric(inbox, "loop_unbound")
+            log.info("approval capture skipped: stage=loop run_id=%s request_id=%s",
+                     run_id, request_id)
+            return
+        session_id = (getattr(mirror, "session_id", None) if mirror is not None
+                      else (self._run_statuses.get(run_id) or {}).get("session_id"))
+        entry = approval_inbox.capture(inbox, adapter=self, run_id=run_id,
+                                       session_id=session_id, loop=loop,
+                                       request_id=request_id)
+        if entry is not None:
+            try:  # additive enrichment belongs on the loop that serialises
+                loop.call_soon_threadsafe(
+                    approval_inbox.enrich_event, inbox, self, run_id, request_id)
+            except RuntimeError:
+                pass
 
     # -- GET /v1/runs/{run_id}/approvals (read-only, owner/approve scoped) -----
     endpoint = ("run_approvals", ("GET", "/v1/runs/{run_id}/approvals"))
@@ -3235,17 +3294,32 @@ def _install_approval_inbox(tx):
             log.debug("inbox respond reconcile skipped: %s", type(exc).__name__)
         return result
 
-    # -- run terminal settles every still-open card of that run ----------------
+    # -- the single entrance: pending capture + terminal settle -----------------
+    # The capability is re-checked on EVERY invocation (never captured into a
+    # closure at callback-creation time): flipping the kill switch silences in
+    # flight callbacks immediately, while the native status write above always
+    # keeps its original meaning and ordering.
     old_set = cls._set_run_status
 
     @wraps(old_set)
     def set_status(self, run_id, status, **fields):
         result = old_set(self, run_id, status, **fields)
-        try:
-            if enabled(inbox) and status in ACTIVITY_TERMINAL:
+        if not enabled(inbox):
+            return result
+        if status == "waiting_for_approval":
+            try:
+                capture_status(self, run_id, fields.get("approval"))
+            except Exception as exc:
+                approval_inbox._metric(inbox, "capture_error")
+                log.info("approval capture failed: stage=status run_id=%s error=%s",
+                         run_id, type(exc).__name__)
+        elif status in ACTIVITY_TERMINAL:
+            try:
+                unbind_loop(self, run_id)
                 approval_inbox.settle_run(inbox, self, run_id, "run-" + status)
-        except Exception:
-            pass
+            except Exception as exc:
+                log.info("approval terminal settle skipped: stage=settle run_id=%s error=%s",
+                         run_id, type(exc).__name__)
         return result
 
     tx.set(cls, "_handle_run_approvals", approvals)
@@ -3273,6 +3347,622 @@ def _install_approval_inbox(tx):
             return api.web.json_response(payload, status=response.status)
         except Exception as exc:
             log.warning("capabilities approval_inbox advertisement failed: %s",
+                        type(exc).__name__)
+            return response
+    tx.set(cls, "_handle_capabilities", capabilities)
+
+
+# STEERWEB (B1+): the run-scoped durable steer inbox. Five hooks must ALL be
+# live before the capability may claim enabled: admission (POST steer route),
+# agent/run binding (live adapters' _active_run_agents + _run_owners guarded
+# identity), the tool-boundary injection wrapper, the persist-confirmation
+# wrapper around _db_flush_write, and the terminal/stop seal on the single
+# _set_run_status entrance. Anything failing raises: the transaction rolls
+# back atomically and the manifest shows skipped_incompatible — never a
+# half-installed route set (R1).
+STEER_TARGET_FINGERPRINTS = {
+    "_finalize_tool_batch": "1ff9e103f00368bdf9022f1838af036a19bb0db6684867cfe91b3cd27c779590",
+    "_db_flush_write": "54b346ff56fc7c950e0a74af0fcf3181c178d2b234a694601fa3f9b5d765728c",
+    "apply_pending_steer_to_tool_results":
+        "082070fe6d4056f3d1d69becfec796fbd4aeaf309769cfa32592ed7cc4457f29",
+}
+STEER_BODY_CAP = 64 * 1024
+STEER_INPUT_CAP = 8 * 1024
+
+
+def _steer_fingerprint(module, name):
+    if _BACKEND != "target":
+        raise RuntimeError("steer_inbox backend not reviewed for this source")
+    actual = hashlib.sha256(
+        inspect.getsource(inspect.unwrap(getattr(module, name))).encode()).hexdigest()
+    if actual != STEER_TARGET_FINGERPRINTS[name]:
+        raise RuntimeError(f"steer source changed: {name}")
+
+
+def _steer_config_enabled() -> bool:
+    # Profile-aware config.yaml read (degraded raw path, same discipline as
+    # _push_raw_settings): app_compat.steer_inbox.enabled, default FALSE.
+    try:
+        from hermes_cli.config import get_config_path
+        from utils import fast_safe_load
+        with open(get_config_path(), encoding="utf-8-sig") as handle:
+            raw = fast_safe_load(handle)
+        compat_block = raw.get("app_compat") if isinstance(raw, dict) else None
+        block = compat_block.get("steer_inbox") if isinstance(compat_block, dict) else None
+        return bool(block.get("enabled")) if isinstance(block, dict) else False
+    except Exception:
+        return False
+
+
+def _install_steer_inbox(tx):
+    import sys
+    from . import steer_inbox, steer_store
+    from gateway.platforms import api_server_runs as runs
+    cls = api.APIServerAdapter
+    if _BACKEND != "target":
+        raise RuntimeError("steer_inbox backend not implemented for this source")
+    state = getattr(api, _STATE, None)
+    if state is None:
+        raise RuntimeError("compat state missing")
+    if state["groups"].get("activity") is None or \
+            state["manifest"].get("activity", {}).get("status") != "applied":
+        raise RuntimeError("activity unit not applied")
+    if not state.get("activity_epoch"):
+        raise RuntimeError("activity epoch missing")
+    _require(cls, "_set_run_status", "_http_route_table", "_handle_capabilities",
+             "_run_idempotency_scope")
+    _require(runs, "_handle_steer_run", "_load_owned_run")
+    _signature(cls, "_set_run_status", "self", "run_id", "status")
+    _signature(runs, "_handle_steer_run", "self", "request", "_api_server")
+    _signature(runs, "_load_owned_run", "self", "request", "_api_server", "permission",
+               "active_fallback")
+    # -- hooks 3+4 source gates: the boundary call site, the native injector,
+    # and the flush writer must be the reviewed revisions.
+    from agent import agent_runtime_helpers, session_persistence, tool_executor
+    _steer_fingerprint(tool_executor, "_finalize_tool_batch")
+    _steer_fingerprint(session_persistence, "_db_flush_write")
+    _steer_fingerprint(agent_runtime_helpers, "apply_pending_steer_to_tool_results")
+    import run_agent as run_agent_module
+    boundary_binding = inspect.getattr_static(
+        run_agent_module.AIAgent, "_apply_pending_steer_to_tool_results")
+    if not callable(boundary_binding):
+        raise RuntimeError("steer boundary binding missing")
+
+    inbox = steer_inbox.open_inbox(state)
+    steer_inbox.set_capability(_steer_config_enabled())
+    tx.cleanups.append(lambda: steer_inbox.set_capability(False))
+
+    def close_all():
+        steer_inbox.set_capability(False)
+        with suppress(Exception):
+            steer_store.close_all()
+    tx.cleanups.append(close_all)
+
+    enabled = steer_inbox.capability_enabled
+
+    # -- restart recovery: exact-metadata reconcile for staged batches; NEVER
+    # replays anything into a new run (R3 item 7).
+    try:
+        steer_inbox.recover(inbox)
+    except Exception as exc:
+        log.warning("steer inbox recovery skipped: %s", type(exc).__name__)
+
+    # -- hook 3: tool-boundary injection AFTER the native apply (never into
+    # native _pending_steer, never before a completed tool batch).
+    def boundary(self, messages, num_tool_msgs):
+        result = boundary_binding(self, messages, num_tool_msgs)
+        try:
+            steer_inbox.on_tool_boundary(inbox, self, messages, num_tool_msgs)
+        except Exception as exc:
+            log.debug("steer boundary injection skipped: %s", type(exc).__name__)
+        return result
+    tx.set(run_agent_module.AIAgent, "_apply_pending_steer_to_tool_results", boundary)
+
+    # -- hook 4: persist confirmation from the committed rows' exact metadata.
+    old_flush = session_persistence._db_flush_write
+
+    @wraps(old_flush)
+    def flush(agent, batch_rows, batch_msgs, messages):
+        old_flush(agent, batch_rows, batch_msgs, messages)
+        try:
+            steer_inbox.confirm_flushed_rows(inbox, batch_rows)
+        except Exception as exc:
+            log.debug("steer persist confirmation skipped: %s", type(exc).__name__)
+    tx.set(session_persistence, "_db_flush_write", flush)
+
+    # -- hook 5 + adapter discovery + accepting transition on the single
+    # status entrance: stop/terminal seal the same run guard admission uses.
+    old_set = cls._set_run_status
+
+    @wraps(old_set)
+    def set_status(self, run_id, status, **fields):
+        result = old_set(self, run_id, status, **fields)
+        try:
+            steer_inbox.note_adapter(inbox, self)
+            if status == "stopping" or status in ACTIVITY_TERMINAL:
+                steer_inbox.seal(inbox, self, run_id, "run_" + str(status))
+            steer_inbox.observe_status(inbox, self, run_id, status)
+        except Exception as exc:
+            log.debug("steer status seal skipped: %s", type(exc).__name__)
+        return result
+    tx.set(cls, "_set_run_status", set_status)
+
+    # -- hook 1: admission replaces the legacy POST steer while enabled.
+    old_post = runs._handle_steer_run
+
+    async def steer(self, request, **kwargs):
+        _api = kwargs.get("_api_server") or sys.modules["gateway.platforms.api_server"]
+        if not enabled():
+            return await old_post(self, request, _api_server=_api)
+        run_id = request.match_info["run_id"]
+        _r, status, agent, _task, err = runs._load_owned_run(
+            self, request, _api_server=_api, permission=None, active_fallback=False)
+        if err is not None:
+            return err
+        # Body limits BEFORE parsing; auth/owner already answered above.
+        try:
+            declared = int(request.headers.get("Content-Length") or 0)
+        except ValueError:
+            declared = STEER_BODY_CAP + 1
+        if declared > STEER_BODY_CAP:
+            return api._error_response("Steer body too large.", 413, code="steer_body_too_large")
+        raw = await request.read()
+        if len(raw) > STEER_BODY_CAP:
+            return api._error_response("Steer body too large.", 413, code="steer_body_too_large")
+        if not raw:
+            return await old_post(self, request, _api_server=_api)  # original empty-body 400
+        try:
+            body = json.loads(raw)
+        except Exception:
+            return await old_post(self, request, _api_server=_api)
+        if not isinstance(body, dict):
+            return await old_post(self, request, _api_server=_api)
+        text = next((body.get(k) for k in ("input", "message", "text")
+                     if isinstance(body.get(k), str)), None)
+        if text is None or not text.strip() or len(text.strip().encode("utf-8")) > STEER_INPUT_CAP:
+            return api._error_response("Steer input must be a non-empty string of at most "
+                                       "8 KiB UTF-8.", 400, code="invalid_steer_input")
+        client_request_id = body.get("client_request_id")
+        if client_request_id is not None:
+            client_request_id = str(client_request_id)
+            if len(client_request_id) > 64:
+                return api._error_response("client_request_id must be a UUID.", 400,
+                                           code="invalid_client_request_id")
+        else:
+            # Legacy body: the server mints the id (retry idempotency is then
+            # explicitly NOT promised to old clients). Still the SAME inbox —
+            # never the native _pending_steer bypass while enabled.
+            client_request_id = api.uuid.uuid4().hex
+        session_id = body.get("session_id")
+        server_epoch = body.get("server_epoch")
+        # Re-read the live identity AFTER the body race (terminal/stop may
+        # have happened during JSON read; the guard serializes with the seal).
+        live_status = getattr(self, "_run_statuses", {}).get(run_id) or status
+        live_agent = getattr(self, "_active_run_agents", {}).get(run_id)
+        if live_agent is None:
+            live_agent = agent
+        if live_status is None and live_agent is not None:
+            live_status = {"status": "running"}
+        run_sid = str((live_status or {}).get("session_id") or "")
+        if isinstance(session_id, str) and session_id and run_sid and \
+                session_id != run_sid:
+            return api._error_response("The steer targeted a different session.", 409,
+                                       code="steer_stale_target")
+        if isinstance(server_epoch, str) and server_epoch and server_epoch != inbox["epoch"]:
+            return api._error_response("Server epoch changed; re-resolve the run.", 409,
+                                       code="steer_epoch_stale")
+        try:
+            owner_scope = self._run_idempotency_scope(request)
+        except Exception:
+            return api._error_response("Run ownership unresolved.", 403,
+                                       code="gateway_auth_failed")
+        steer_inbox.bind_agent(inbox, self, run_id, live_agent)
+        verdict, payload = await asyncio.to_thread(
+            steer_inbox.admit_request, inbox, self, run_id=run_id,
+            owner_scope=owner_scope, status=live_status, agent=live_agent,
+            session_id=session_id or run_sid or None,
+            input_text=text.strip(), client_request_id=client_request_id,
+            server_epoch=server_epoch if isinstance(server_epoch, str) else None)
+        if verdict == "accepted" or verdict == "duplicate":
+            payload.setdefault("accepted", True)
+            payload.setdefault("run_id", run_id)
+            return api.web.json_response(payload, headers={"Cache-Control": "no-store"})
+        codes = {"conflict": (409, "steer_identity_conflict",
+                              "This steer id was used for different content."),
+                 "not_ready": (409, "run_not_ready",
+                               "The run is not ready to accept a steer yet."),
+                 "closed": (409, "run_closed", "The run no longer accepts steers."),
+                 "stale": (409, "steer_stale_target", "Re-resolve the run before steering."),
+                 "queue_full": (429, "steer_queue_full", "Too many steers are pending."),
+                 "expired": (410, "steer_expired", "The steer receipt has expired.")}
+        status_code, code, message = codes.get(verdict, (409, "run_closed", "Refused."))
+        return api._error_response(message, status_code, code=code)
+
+    # -- R2 read surfaces: the receipt ledger answers even after run/status
+    # TTL expiry (still owner-checked), which is what lets a rollback stay
+    # read-only.
+    list_endpoint = ("run_steers", ("GET", "/v1/runs/{run_id}/steers"))
+    receipt_endpoint = ("run_steer_receipt", ("GET", "/v1/runs/{run_id}/steers/{steer_id}"))
+    for name, route in api._CAPABILITY_ENDPOINTS:
+        if (name, route) not in (list_endpoint, receipt_endpoint) and \
+                (name in ("run_steers", "run_steer_receipt") or
+                 route in (list_endpoint[1], receipt_endpoint[1])):
+            raise RuntimeError("steer_inbox capability collision")
+    old_table = cls._http_route_table
+
+    @wraps(old_table)
+    def routes(self):
+        rows = list(old_table(self))
+        for method, path, handler in ((list_endpoint[1] + (self._handle_run_steers,),
+                                       receipt_endpoint[1] + (self._handle_run_steer_receipt,))):
+            if not any((m, p) == (method, path) for m, p, _ in rows):
+                rows.append((method, path, handler))
+        return rows
+
+    async def _owned(self, request, *, active_fallback=True):
+        _api = sys.modules["gateway.platforms.api_server"]
+        _r, status, _agent, _task, err = runs._load_owned_run(
+            self, request, _api_server=_api, permission=None,
+            active_fallback=active_fallback)
+        return status, err
+
+    async def steers_get(self, request):
+        status, err = await _owned(self, request)
+        if err is not None:
+            return err
+        run_id = request.match_info["run_id"]
+        after = request.query.get("after_seq", "0")
+        try:
+            after = int(after)
+        except ValueError:
+            return api._error_response("after_seq must be an integer.", 400,
+                                       code="invalid_cursor")
+        if after < 0:
+            return api._error_response("after_seq must not be negative.", 400,
+                                       code="invalid_cursor")
+        try:
+            owner_scope = self._run_idempotency_scope(request)
+        except Exception:
+            return api._error_response("Run ownership unresolved.", 403,
+                                       code="gateway_auth_failed")
+        payload = await asyncio.to_thread(
+            steer_inbox.listing, inbox, self, run_id=run_id,
+            owner_scope=owner_scope, status=status, after_seq=after)
+        return api.web.json_response(payload, headers={"Cache-Control": "no-store"})
+
+    async def receipt_get(self, request):
+        status, err = await _owned(self, request)
+        if err is not None:
+            return err
+        run_id = request.match_info["run_id"]
+        steer_id = request.match_info["steer_id"]
+        try:
+            owner_scope = self._run_idempotency_scope(request)
+        except Exception:
+            return api._error_response("Run ownership unresolved.", 403,
+                                       code="gateway_auth_failed")
+        payload = await asyncio.to_thread(
+            steer_inbox.receipt, inbox, owner_scope=owner_scope, run_id=run_id,
+            steer_id=steer_id)
+        if payload is None:
+            return api._error_response("Steer receipt not found.", 404,
+                                       code="steer_receipt_not_found")
+        return api.web.json_response(payload, headers={"Cache-Control": "no-store"})
+
+    tx.set(cls, "_handle_run_steers", steers_get)
+    tx.set(cls, "_handle_run_steer_receipt", receipt_get)
+    tx.set(cls, "_http_route_table", routes)
+    tx.set(runs, "_handle_steer_run", steer)
+    tx.set(api, "_CAPABILITY_ENDPOINTS",
+           (*api._CAPABILITY_ENDPOINTS, list_endpoint, receipt_endpoint))
+
+    # -- R1 advertisement: the App only offers cross-device steer when the
+    # WHOLE contract is live (fail-closed; enabled follows the kill switch).
+    old_caps = cls._handle_capabilities
+
+    @wraps(old_caps)
+    async def capabilities(self, request, **kwargs):
+        response = await old_caps(self, request, **kwargs)
+        try:
+            payload = json.loads(response.body)
+            payload["features"]["steer_inbox"] = {
+                "enabled": enabled(), "contract_version": 1,
+                "server_epoch": inbox["epoch"], "run_bound": True,
+                "idempotent": True, "receipt_endpoint": "/v1/runs/{run_id}/steers",
+            }
+            return api.web.json_response(payload, status=response.status)
+        except Exception as exc:
+            log.warning("capabilities steer_inbox advertisement failed: %s",
+                        type(exc).__name__)
+            return response
+    tx.set(cls, "_handle_capabilities", capabilities)
+
+    # -- R6 projection: ONLY server-written steer blocks become a typed
+    # steer_provenance on the messages projection; the rest of display_metadata
+    # never leaves the process (same whitelist discipline as cron_provenance).
+    descriptor = inspect.getattr_static(cls, "_message_response")
+    if not isinstance(descriptor, staticmethod):
+        raise RuntimeError("steer projection needs the static _message_response")
+    old_message = descriptor.__func__
+
+    @wraps(old_message)
+    def message(row):
+        result = old_message(row)
+        try:
+            meta = (row or {}).get("display_metadata")
+            if isinstance(meta, str):
+                meta = json.loads(meta)
+            block = (meta.get("hermes_app_steer") if isinstance(meta, dict) else None)
+            if (isinstance(block, dict)
+                    and int(block.get("schema") or 0) == 1
+                    and (row or {}).get("role") == "user"
+                    and (row or {}).get("display_kind") == "steer"
+                    and isinstance(block.get("batch_id"), str)):
+                items = []
+                for item in list(block.get("items") or ())[:64]:
+                    if (isinstance(item, dict) and isinstance(item.get("steer_id"), str)
+                            and isinstance(item.get("input"), str)
+                            and isinstance(item.get("sequence"), int)):
+                        items.append({"steer_id": item["steer_id"][:64],
+                                      "sequence": int(item["sequence"]),
+                                      "input": item["input"][:8192]})
+                if items:
+                    result = {**result, "steer_provenance": {
+                        "schema": 1,
+                        "run_id": str(block.get("run_id") or "")[:64],
+                        "batch_id": block["batch_id"][:64], "items": items}}
+        except Exception:
+            pass
+        return result
+    tx.set(cls, "_message_response", staticmethod(message))
+
+
+# STEERWEB (B4): the notification events ledger. One more entrance on the SAME
+# single _set_run_status cut (terminal kinds), plus the approval dispatcher's
+# gate and the steer.ready hook. Capability is read from profile config at
+# install and re-checked on EVERY gate call; with the ledger off the old push
+# policy is byte-for-byte intact (R6/R10).
+def _notification_config_enabled() -> bool:
+    try:
+        from hermes_cli.config import get_config_path
+        from utils import fast_safe_load
+        with open(get_config_path(), encoding="utf-8-sig") as handle:
+            raw = fast_safe_load(handle)
+        compat_block = raw.get("app_compat") if isinstance(raw, dict) else None
+        block = compat_block.get("notification_events") if isinstance(compat_block, dict) else None
+        return bool(block.get("enabled")) if isinstance(block, dict) else False
+    except Exception:
+        return False
+
+
+_NOTIFICATION_HANDLERS = {
+    "notification_events": "_handle_notification_events",
+    "notification_read": "_handle_notification_reads",
+    "notification_claim": "_handle_notification_claim",
+    "notification_delivery": "_handle_notification_delivery",
+    "notification_watch": "_handle_notification_watch",
+}
+
+
+def _install_notification_events(tx):
+    from . import notification_events, notification_store
+    from gateway.platforms import api_server_runs as runs
+    cls = api.APIServerAdapter
+    if _BACKEND != "target":
+        raise RuntimeError("notification_events backend not implemented for this source")
+    state = getattr(api, _STATE, None)
+    if state is None:
+        raise RuntimeError("compat state missing")
+    if state["manifest"].get("push", {}).get("status") != "applied":
+        raise RuntimeError("push unit not applied (it is the transport being routed)")
+    _require(cls, "_set_run_status", "_http_route_table", "_handle_capabilities",
+             "_run_idempotency_scope")
+    _require(runs, "_load_owned_run")
+    _signature(cls, "_set_run_status", "self", "run_id", "status")
+
+    reg = notification_events.open_ledger(state, settings=lambda: (_push_settings() or None))
+    notification_events.set_capability(_notification_config_enabled())
+    tx.cleanups.append(lambda: notification_events.set_capability(False))
+
+    def close_all():
+        notification_events.set_capability(False)
+        with suppress(Exception):
+            notification_store.close_all()
+    tx.cleanups.append(close_all)
+
+    enabled = notification_events.capability_enabled
+
+    inbox = state.get("approval_inbox")
+    if inbox is not None:
+        inbox["notify_gate"] = notification_events.approval_initial_hook(reg)
+        tx.cleanups.append(lambda: inbox.pop("notify_gate", None))
+    steer_state = state.get("steer_inbox")
+    if steer_state is not None:
+        def ready_hook(adapter, run_id):
+            if not enabled():
+                return
+            notification_events.steer_ready(
+                reg,
+                owner_scope=(getattr(adapter, "_run_owners", {}) or {}).get(run_id) or "",
+                run_id=run_id,
+                sid=(getattr(adapter, "_run_statuses", {}).get(run_id) or {}).get("session_id"))
+        steer_state["ready_hook"] = ready_hook
+        tx.cleanups.append(lambda: steer_state.__setitem__("ready_hook", None))
+
+    old_set = cls._set_run_status
+
+    @wraps(old_set)
+    def set_status(self, run_id, status, **fields):
+        result = old_set(self, run_id, status, **fields)
+        if not enabled():
+            return result
+        try:
+            if status in ACTIVITY_TERMINAL:
+                status_row = getattr(self, "_run_statuses", {}).get(run_id) or {}
+                notification_events.terminal_event(
+                    reg,
+                    owner_scope=(getattr(self, "_run_owners", {}) or {}).get(run_id) or "",
+                    run_id=run_id, sid=status_row.get("session_id"), status=status,
+                    summary=fields.get("output") or fields.get("error") or "")
+        except Exception as exc:
+            log.debug("notification terminal event skipped: %s", type(exc).__name__)
+        return result
+    tx.set(cls, "_set_run_status", set_status)
+
+    endpoints = (
+        ("notification_events", ("GET", "/api/notification-events")),
+        ("notification_read", ("POST", "/api/notification-events/{event_id}/read")),
+        ("notification_claim", ("POST", "/api/notification-events/{event_id}/claim")),
+        ("notification_delivery", ("POST", "/api/notification-events/{event_id}/delivery")),
+        ("notification_watch", ("POST", "/api/notification-events/steer-ready-watch")),
+    )
+    for name, route in api._CAPABILITY_ENDPOINTS:
+        for ours_name, ours_route in endpoints:
+            if (name == ours_name or route == ours_route) and (name, route) != (ours_name, ours_route):
+                raise RuntimeError("notification_events capability collision")
+    old_table = cls._http_route_table
+
+    @wraps(old_table)
+    def routes(self):
+        rows = list(old_table(self))
+        for name, (method, path) in endpoints:
+            if not any((m, p) == (method, path) for m, p, _ in rows):
+                rows.append((method, path, getattr(self, _NOTIFICATION_HANDLERS[name])))
+        return rows
+
+    def _owner(self, request):
+        try:
+            return self._run_idempotency_scope(request)
+        except Exception:
+            return None
+
+    async def events_get(self, request):
+        if not enabled():
+            return api._error_response("Notification events are disabled.", 404,
+                                       code="notification_events_disabled")
+        scope = _owner(self, request)
+        if scope is None:
+            return api._error_response("Ownership unresolved.", 403, code="gateway_auth_failed")
+        try:
+            after = int(request.query.get("after", "0"))
+        except ValueError:
+            return api._error_response("after must be an integer.", 400, code="invalid_cursor")
+        items, overflow, head = await asyncio.to_thread(
+            notification_store.events_after, notification_events.home_of(reg),
+            scope, max(after, 0))
+        return api.web.json_response({
+            "object": "list", "schema_version": 1,
+            "server_channel": notification_events.system_channel(reg),
+            "head_seq": head, "overflow": overflow, "data": [
+                {k: item.get(k) for k in ("event_id", "run_id", "sid", "kind", "source_id",
+                                          "created_seq", "payload", "created_at",
+                                          "read_at", "read_by")} for item in items],
+        }, headers={"Cache-Control": "no-store"})
+
+    async def read_post(self, request):
+        if not enabled():
+            return api._error_response("Notification events are disabled.", 404,
+                                       code="notification_events_disabled")
+        scope = _owner(self, request)
+        if scope is None:
+            return api._error_response("Ownership unresolved.", 403, code="gateway_auth_failed")
+        event_id = request.match_info["event_id"]
+        result = await asyncio.to_thread(notification_store.mark_read,
+                                         notification_events.home_of(reg), scope,
+                                         event_id, "device")
+        if result is None:
+            return api._error_response("Event not found.", 404, code="event_not_found")
+        return api.web.json_response(result)
+
+    async def claim_post(self, request):
+        if not enabled():
+            return api._error_response("Notification events are disabled.", 404,
+                                       code="notification_events_disabled")
+        scope = _owner(self, request)
+        if scope is None:
+            return api._error_response("Ownership unresolved.", 403, code="gateway_auth_failed")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        event_id = request.match_info["event_id"]
+        device_id = str(body.get("device_id") or "")[:64]
+        delivery_id = str(body.get("delivery_id") or api.uuid.uuid4().hex)[:64]
+        store = notification_events.home_of(reg)
+        event = notification_store.get_event(store, scope, event_id)
+        if event is None:
+            return api._error_response("Event not found.", 404, code="event_not_found")
+        if notification_events.system_channel(reg) != "browser":
+            return api._error_response("The system channel is not browser.", 409,
+                                       code="channel_not_browser")
+        if event.get("read_at"):
+            return api._error_response("Event already read.", 409, code="already_read")
+        verdict, assigned = notification_store.claim_delivery(
+            store, event_id=event_id, phase="initial", channel="browser",
+            delivery_id=delivery_id, device_id=device_id)
+        token = api.uuid.uuid4().hex if verdict == "claimed" else None
+        return api.web.json_response({"verdict": verdict, "delivery_id": assigned,
+                                      "show_token": token})
+
+    async def delivery_post(self, request):
+        if not enabled():
+            return api._error_response("Notification events are disabled.", 404,
+                                       code="notification_events_disabled")
+        scope = _owner(self, request)
+        if scope is None:
+            return api._error_response("Ownership unresolved.", 403, code="gateway_auth_failed")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        outcome = str(body.get("outcome") or "")
+        state_now = await asyncio.to_thread(
+            notification_store.note_delivery, notification_events.home_of(reg),
+            delivery_id=str(body.get("delivery_id") or ""), outcome=outcome,
+            channel="browser")
+        if state_now is None:
+            return api._error_response("Delivery not found.", 404, code="delivery_not_found")
+        return api.web.json_response({"delivery": outcome or state_now})
+
+    async def watch_post(self, request):
+        if not enabled():
+            return api._error_response("Notification events are disabled.", 404,
+                                       code="notification_events_disabled")
+        scope = _owner(self, request)
+        if scope is None:
+            return api._error_response("Ownership unresolved.", 403, code="gateway_auth_failed")
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        run_id = str(body.get("run_id") or "")[:64]
+        on = bool(body.get("watch"))
+        notification_events.watch(reg, owner_scope=scope, run_id=run_id, on=on)
+        return api.web.json_response({"watched": on, "run_id": run_id})
+
+    tx.set(cls, "_handle_notification_events", events_get)
+    tx.set(cls, "_handle_notification_reads", read_post)
+    tx.set(cls, "_handle_notification_claim", claim_post)
+    tx.set(cls, "_handle_notification_delivery", delivery_post)
+    tx.set(cls, "_handle_notification_watch", watch_post)
+    tx.set(cls, "_http_route_table", routes)
+    tx.set(api, "_CAPABILITY_ENDPOINTS",
+           (*api._CAPABILITY_ENDPOINTS, *endpoints))
+
+    old_caps = cls._handle_capabilities
+
+    @wraps(old_caps)
+    async def capabilities(self, request, **kwargs):
+        response = await old_caps(self, request, **kwargs)
+        try:
+            payload = json.loads(response.body)
+            payload["features"]["notification_events"] = {
+                "enabled": enabled(), "contract_version": 1, "exact_ids": True,
+                "system_channel": notification_events.system_channel(reg),
+            }
+            return api.web.json_response(payload, status=response.status)
+        except Exception as exc:
+            log.warning("notification_events advertisement failed: %s",
                         type(exc).__name__)
             return response
     tx.set(cls, "_handle_capabilities", capabilities)

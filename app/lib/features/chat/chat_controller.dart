@@ -12,11 +12,15 @@ import '../../models/session_activity.dart';
 import '../../platform/connectivity_hint.dart';
 import '../../platform/store_tx.dart';
 import '../settings/local_store.dart';
+import 'dart:math' as math;
 import 'auto_wake.dart';
 import 'approval_inbox.dart';
 import 'live_turn.dart';
 import 'local_attempt.dart';
 import 'remote_stop.dart';
+import 'notification_inbox.dart';
+import 'remote_steer.dart';
+import 'steer_inbox.dart';
 import 'turn_history_match.dart';
 import 'viewers.dart';
 
@@ -172,9 +176,8 @@ class StopResult {
       (kind == StopResultKind.remoteResult &&
           remote != null &&
           (remote!.requestedOrChecking ||
-            remote!.kind == RemoteStopKind.ended ||
-            remote!.kind == RemoteStopKind.alreadyGone));
-
+              remote!.kind == RemoteStopKind.ended ||
+              remote!.kind == RemoteStopKind.alreadyGone));
 
   final String? attemptId;
 
@@ -315,13 +318,19 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// Pending (discovered, not yet admitted) report count for the UI hint.
   int get wakePendingCount => _wake?.pendingCount ?? 0;
 
-  AutoWakeObserver _wakeObserver() =>
-      _wake ??= AutoWakeObserver(store: store, serverUrl: serverUrl, sid: sid, now: _clock);
+  AutoWakeObserver _wakeObserver() => _wake ??= AutoWakeObserver(
+    store: store,
+    serverUrl: serverUrl,
+    sid: sid,
+    now: _clock,
+  );
 
   // ---- APPWAKE C dispatch state (plan §4/§5) ------------------------------
   Json? _wakeCap; // null = not fetched / fetch failed; {} = no auto-wake
   Timer? _wakeDebounce;
-  bool _wakeDispatching = false, _wakeQuotaHit = false, _wakePostHappened = false;
+  bool _wakeDispatching = false,
+      _wakeQuotaHit = false,
+      _wakePostHappened = false;
   String? _wakeBatchInFlight; // ledger batch of the CURRENT auto-wake turn
 
   /// Every trigger goes through the SAME debounce (1s = plan §5's merge
@@ -331,7 +340,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// A healthy admit resets it — a dead-end ledger path can never churn.
   int _wakeFailStreak = 0;
   bool get _wakeSettingsOn =>
-      store.autoWakeEnabled(serverUrl) && !store.autoWakeSessionOff(serverUrl, sid);
+      store.autoWakeEnabled(serverUrl) &&
+      !store.autoWakeSessionOff(serverUrl, sid);
 
   void _wakeSchedule([int seconds = 1]) {
     if (_disposed || !_wakeSettingsOn) return; // OFF = no timers, no traffic
@@ -339,10 +349,15 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     const ladder = [2, 5, 15, 30, 60];
     final floor = _wakeFailStreak == 0
         ? 1
-        : ladder[_wakeFailStreak > ladder.length ? ladder.length - 1 : _wakeFailStreak - 1];
-    _wakeDebounce = Timer(Duration(seconds: seconds > floor ? seconds : floor), () {
-      if (!_disposed) unawaited(_wakeDispatch());
-    });
+        : ladder[_wakeFailStreak > ladder.length
+              ? ladder.length - 1
+              : _wakeFailStreak - 1];
+    _wakeDebounce = Timer(
+      Duration(seconds: seconds > floor ? seconds : floor),
+      () {
+        if (!_disposed) unawaited(_wakeDispatch());
+      },
+    );
   }
 
   Future<Json?> _wakeCapOnce() async {
@@ -385,7 +400,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// 409/410 from the dispatch POST: the LEDGER already knows this batch.
   /// Read-only recovery ONLY — history reconcile + receipt GET, NEVER a
   /// second POST of the same sentence (plan §4, ghost-dup red line).
-  Future<void> _wakeGateVerdict(String batchId, int status, Object? token) async {
+  Future<void> _wakeGateVerdict(
+    String batchId,
+    int status,
+    Object? token,
+  ) async {
     String? read;
     try {
       final r = await repo.wakeReceipt(sid, batchId);
@@ -507,8 +526,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           _detached ||
           _inputActive ||
           ChatViewers.count(sid) == 0 ||
-          WidgetsBinding.instance.lifecycleState !=
-              AppLifecycleState.resumed) {
+          WidgetsBinding.instance.lifecycleState != AppLifecycleState.resumed) {
         var freed = false;
         try {
           freed = (await repo.wakeRelease(sid, batchId))['status'] == 'ok';
@@ -863,10 +881,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         message: remoteStopMessage(RemoteStopKind.preflightFailed),
         error: refresh.error,
       );
-      _setRemoteStop(
-        RemoteStopPhaseState.none,
-        feedback: out.message,
-      );
+      _setRemoteStop(RemoteStopPhaseState.none, feedback: out.message);
       return out;
     }
     if (connectionGeneration != target.connectionGeneration) {
@@ -874,9 +889,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     }
     // (b) the SAME tuple must STILL classify stoppable — anything that moved
     // ends the attempt; never silently aim at another run (§3 rule 4).
-    final sameTuple = remoteStopCandidates.any(
-      (t) => t.sameIdentityAs(target),
-    );
+    final sameTuple = remoteStopCandidates.any((t) => t.sameIdentityAs(target));
     if (!sameTuple) {
       final classified = await _remoteTargetMoved(target);
       return classified;
@@ -977,14 +990,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// recentTerminal ENDS tracking honestly; a same-run `stopping` row just
   /// reconciles; anything else is targetChanged / an unavailable vanish —
   /// never a retarget onto whichever row looks similar (§5.1).
-  Future<RemoteStopOutcome> _remoteTargetMoved(
-    RemoteStopTarget target,
-  ) async {
+  Future<RemoteStopOutcome> _remoteTargetMoved(RemoteStopTarget target) async {
     final snap = observedActivity;
     if (snap != null &&
         (snap.sessionId != target.requestedSessionId ||
-         snap.resolvedSessionId != target.resolvedSessionId ||
-         snap.serverEpoch != target.serverEpoch)) {
+            snap.resolvedSessionId != target.resolvedSessionId ||
+            snap.serverEpoch != target.serverEpoch)) {
       return _remoteOutcome(RemoteStopKind.targetChanged);
     }
     ActivityRun? row;
@@ -1193,8 +1204,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   bool get activityBlocksSend => switch (activityFreshness) {
     ActivityFreshness.fresh || ActivityFreshness.unsupported => false,
     ActivityFreshness.unknown => _everAttached,
-    ActivityFreshness.stale =>
-      observedActivity?.activeRuns.isNotEmpty ?? false,
+    ActivityFreshness.stale => observedActivity?.activeRuns.isNotEmpty ?? false,
   };
 
   bool get sendBlocked =>
@@ -1367,6 +1377,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     }
     return hits == 1;
   }
+
   bool stopBusy = false, steerBusy = false;
   bool get busy => phase != ChatPhase.idle;
 
@@ -1575,9 +1586,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     return const ActivityRefreshOutcome(ActivityRefreshResult.staleContext);
   }
 
-  Future<void> _activityTick() =>
-      _disposed ? Future.value() : _activityFlight ??= _activitySnapshot()
-          .whenComplete(() => _activityFlight = null);
+  Future<void> _activityTick() => _disposed
+      ? Future.value()
+      : _activityFlight ??= _activitySnapshot().whenComplete(
+          () => _activityFlight = null,
+        );
 
   Future<void> _activitySnapshot() async {
     final token = _turnToken;
@@ -1604,6 +1617,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _lastAppliedActivitySeq = seq;
       _activityFailure = null;
       _applyActivity(snap, token);
+      unawaited(_steerPoll());
+      unawaited(_probeNotifyCap());
+      unawaited(_notificationPoll());
     } on ApiException catch (e) {
       if (!mine()) return;
       _failedActivitySeq = seq;
@@ -1627,7 +1643,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _failedActivitySeq = seq;
       _activityFailure = e;
       activityFreshness = observedActivity == null
-          ? ActivityFreshness.unknown // cold fail: still unconfirmed
+          ? ActivityFreshness
+                .unknown // cold fail: still unconfirmed
           : ActivityFreshness.stale;
       notifyListeners();
     }
@@ -1659,7 +1676,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final remoteGone =
         prev != null &&
         remoteActive(prev.activeRuns, activeRunId).any(
-          (r) => !snap.activeRuns.any((x) => x.observationId == r.observationId),
+          (r) =>
+              !snap.activeRuns.any((x) => x.observationId == r.observationId),
         );
     observedActivity = snap;
     // R1 §4: the success stamp rides the INJECTED clock so STOP freshness
@@ -1697,8 +1715,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       for (final r in snap.activeRuns)
         if (!isLocallyRepresentedRun(r) && r.user != null) r,
       for (final r in snap.recentTerminal)
-        if (!isLocallyRepresentedRun(r) && r.user != null &&
-            !snap.activeRuns.any((a) => a.observationId == r.observationId)) r,
+        if (!isLocallyRepresentedRun(r) &&
+            r.user != null &&
+            !snap.activeRuns.any((a) => a.observationId == r.observationId))
+          r,
     ]..sort((a, b) => a.startedAt.compareTo(b.startedAt));
     if (waiting.isEmpty) return;
     final claimed = _claimedRows.values.toSet();
@@ -1845,7 +1865,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   bool _bootActive = false, _bootKnownText = true, _bootRetryUsed = false;
   int _bootFails = 0;
   bool _bootTick = false;
-  bool get _bootstrapWaiting => _bootActive && live == null && pendingInput == null;
+  bool get _bootstrapWaiting =>
+      _bootActive && live == null && pendingInput == null;
 
   /// AUDIT-21 (D2): a turn whose cross-tab claim is still in flight has
   /// not reached the SSE yet while already `sendBlocked`. If the last
@@ -1911,7 +1932,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     if (_remoteStopObserved != null &&
         _remoteStopTimer == null &&
         (_remoteStopPhase == RemoteStopPhaseState.checking ||
-         _remoteStopPhase == RemoteStopPhaseState.confirming)) {
+            _remoteStopPhase == RemoteStopPhaseState.confirming)) {
       _remoteStopTimer = Timer.periodic(
         watchInterval,
         (_) => unawaited(_remoteStopTick()),
@@ -1997,7 +2018,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         if (settled) return;
         if (!_owns(token)) return; // the turn was settled/replaced mid-GET
         if (await _budgetGate(token)) return; // expiry during the GETs
-        _ensurePollTimer(token); // AUDIT-05①: keep the schedule, don't strand busy
+        _ensurePollTimer(
+          token,
+        ); // AUDIT-05①: keep the schedule, don't strand busy
       }
       return;
     }
@@ -2006,17 +2029,17 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       status = await repo.runStatus(runId);
     } on ApiException catch (e) {
       if (!_owns(token)) return; // stale response: the new turn owns everything
-        if (e.status == 404) {
-          if (_isStoppedRun(runId)) {
-            _watchTimer?.cancel();
-            _watchTimer = null;
-            _setStop(
-              StopNotice.accepted,
-              const UiMessage.local(MessageKey.chatStateStoppedByYou),
-            );
-            await _finish(soft: true, token: token); // AUDIT-05③
-            return;
-          }
+      if (e.status == 404) {
+        if (_isStoppedRun(runId)) {
+          _watchTimer?.cancel();
+          _watchTimer = null;
+          _setStop(
+            StopNotice.accepted,
+            const UiMessage.local(MessageKey.chatStateStoppedByYou),
+          );
+          await _finish(soft: true, token: token); // AUDIT-05③
+          return;
+        }
         // The gateway forgot this run — fall back to a history reconciliation
         // pass; a CONFIRMED-quiet no-final turn settles with the incomplete
         // notice (B2), anything weaker lands in uncertain with a REAL
@@ -2032,15 +2055,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         } catch (_) {}
         if (settled || !_owns(token)) return;
         if (!busy) return;
-        final quiet = await _quietRound(
-          token,
-          _recoveryEpoch,
-          () async {
-            try {
-              await _reconcile(epoch: _recoveryEpoch);
-            } catch (_) {}
-          },
-        );
+        final quiet = await _quietRound(token, _recoveryEpoch, () async {
+          try {
+            await _reconcile(epoch: _recoveryEpoch);
+          } catch (_) {}
+        });
         if (!_owns(token)) return;
         if (await _budgetGate(token)) return;
         final pendingTurn = store.loadPending(serverUrl, sid);
@@ -2049,8 +2068,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           quietConfirmed: quiet,
           activeConfirmed:
               activityFreshness == ActivityFreshness.fresh &&
-              (observedActivity?.activeRuns.any((r) => !r.isTerminal) ??
-                  false),
+              (observedActivity?.activeRuns.any((r) => !r.isTerminal) ?? false),
           history: inspectPendingHistory(
             rows: messages,
             pendingText: pendingInput,
@@ -2097,7 +2115,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _watchTimer = null;
       if (state == 'cancelled') {
         _setStop(
-          _stopRequestedFor(runId) ? StopNotice.accepted : StopNotice.serverEnded,
+          _stopRequestedFor(runId)
+              ? StopNotice.accepted
+              : StopNotice.serverEnded,
           UiMessage.local(
             _stopRequestedFor(runId)
                 ? MessageKey.chatStateStoppedByYou
@@ -2129,13 +2149,16 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           notifyListeners();
         }
       }
-      _ensurePollTimer(token); // AUDIT-05①: the card waits WITH a live scheduler
+      _ensurePollTimer(
+        token,
+      ); // AUDIT-05①: the card waits WITH a live scheduler
       return; // the card lets the user answer from here
     }
     // Still running: make sure SOMETHING keeps polling — attach() may have
     // cleared the timer mid-request, and there is no SSE re-subscribe route.
     _ensurePollTimer(token);
   }
+
   bool approvalBusy = false;
 
   // ---- APPROVALPUSH B3: cross-device approval inbox (spec R6) -------------
@@ -2190,8 +2213,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   static bool _approvalTerminalEvent(String type) => switch (type) {
-    'run.completed' || 'run.failed' || 'run.cancelled' || 'run.interrupted' =>
-      true,
+    'run.completed' ||
+    'run.failed' ||
+    'run.cancelled' ||
+    'run.interrupted' => true,
     _ => false,
   };
 
@@ -2393,13 +2418,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     return a != null && (a.rawDraft != null || a.terminalEvidence != null);
   }
 
-
   /// CP/LiveTurnView read this to pick identity-only transcript exclusion
   /// (§5.4): backed turns never drop transcript rows on text equality.
   bool get turnIsAttemptBacked => !_disposed && _turnAttemptBacked;
 
   /// The one attempt record behind the current/last turn's evidence.
-  String? get turnAttemptId => _turnAttemptId ?? store.loadPending(serverUrl, sid)?.attemptId;
+  String? get turnAttemptId =>
+      _turnAttemptId ?? store.loadPending(serverUrl, sid)?.attemptId;
 
   /// §5.3: the ONE derived busy-state presentation. Both widgets consume
   /// this — never their own guesses.
@@ -2519,7 +2544,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     if (parent == null) return false;
     final stamp = parent.terminalEvidence?['retriedBy'];
     if (stamp == childAttemptId) return true;
-    if (stamp != null && stamp != replacing) return false; // another view's child
+    if (stamp != null && stamp != replacing)
+      return false; // another view's child
     final next = Map<String, dynamic>.from(parent.terminalEvidence ?? const {})
       ..['retriedBy'] = childAttemptId;
     return store.saveAttempt(
@@ -2548,7 +2574,6 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       ),
     );
   }
-
 
   /// Flushes every queued journal merge (test/decision-point seam).
   @visibleForTesting
@@ -2597,7 +2622,6 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   bool get localCleanupRetryAvailable =>
       !_disposed && _localCleanupOnly && phase == ChatPhase.uncertain;
 
-
   /// run 404-after-stop is terminal-by-the-user, not "vanished": the stop
   /// record is the only surviving evidence. `accepted` settles; a bare
   /// `requested` (POST outcome uncertain, e.g. 409-reload) must NOT be
@@ -2623,12 +2647,15 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final turn = live;
     final token = _turnToken;
     final id = turn?.approvalRunId; // R4: bridge events carry their own run_id
-    if (turn == null || id == null || turn.approval == null || approvalBusy) return;
+    if (turn == null || id == null || turn.approval == null || approvalBusy)
+      return;
     approvalBusy = true;
     notifyListeners();
     try {
       await repo.resolveApproval(id, choice);
-      if (_disposed || !identical(live, turn) || !identical(_turnToken, token)) {
+      if (_disposed ||
+          !identical(live, turn) ||
+          !identical(_turnToken, token)) {
         return; // the answer landed on a turn we no longer own
       }
       turn.approval = null;
@@ -2645,6 +2672,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       notifyListeners();
     }
   }
+
   final _beforeSend = <String>{};
   Timer? _silenceWatch;
   DateTime _lastEventAt = DateTime.now();
@@ -2676,14 +2704,14 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// secondary tone in chat_page, never [error] and never [recoveryNotice].
   UiMessage? get streamWaitingNotice =>
       phase == ChatPhase.sending &&
-              !backgrounded &&
-              !_detached &&
-              _waitingSeconds != null
-          ? UiMessage.local(
-              MessageKey.chatStreamWaiting,
-              args: {'seconds': _waitingSeconds},
-            )
-          : null;
+          !backgrounded &&
+          !_detached &&
+          _waitingSeconds != null
+      ? UiMessage.local(
+          MessageKey.chatStreamWaiting,
+          args: {'seconds': _waitingSeconds},
+        )
+      : null;
 
   @override
   void notifyListeners() {
@@ -2726,7 +2754,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     ChatViewers.unregister(sid, this); // eviction ledger follows dispose
     _silenceWatch?.cancel();
-    _waitingSeconds = null; // SILENCE-DROP §3.1.6: a dead controller shows nothing
+    _waitingSeconds =
+        null; // SILENCE-DROP §3.1.6: a dead controller shows nothing
     super.dispose();
   }
 
@@ -2834,11 +2863,14 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // cold default-off path would cost every session open (and leak a
     // pending timeout into every legacy test harness).
     if (store.autoWakeEnabled(serverUrl)) {
-      unawaited(_wakeCapOnce().then((_) {
-        if (!_disposed) notifyListeners();
-      }));
+      unawaited(
+        _wakeCapOnce().then((_) {
+          if (!_disposed) notifyListeners();
+        }),
+      );
     }
-    if (_disposed || busy || loading || _bootstrapping) return; // duplicate: no-op
+    if (_disposed || busy || loading || _bootstrapping)
+      return; // duplicate: no-op
     loading = _bootstrapping = true; // AUDIT-09: no send until decided
     error = null;
     notifyListeners();
@@ -2989,16 +3021,17 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     phase = ChatPhase.recovering; // busy: waiting, never idle-without-trying
     notifyListeners(); // PUBLISH before the first GET (A2)
     _watchTimer?.cancel();
-    _watchTimer = Timer.periodic(watchInterval, (_) => unawaited(_bootstrapTick()));
+    _watchTimer = Timer.periodic(
+      watchInterval,
+      (_) => unawaited(_bootstrapTick()),
+    );
     _armDeadlineTimer();
     _armCountdownTicker();
     unawaited(_bootstrapTick());
     // Display rows ride a READ-ONLY best-effort load: a transient miss is
     // retried by the observation ticks (their expiry publishes the honest
     // state) and must never escape this already-published bootstrap.
-    unawaited(
-      _latest(adoptToken, _recoveryEpoch).catchError((_) {}),
-    );
+    unawaited(_latest(adoptToken, _recoveryEpoch).catchError((_) {}));
   }
 
   void _cancelBootstrapWaiting() {
@@ -3083,7 +3116,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     phase = ChatPhase.uncertain;
     // 保留 pending：逾時不等於中斷；「重新核對」最多一次，之後只剩清帳。
     error = UiMessage.local(
-      retryUsed ? MessageKey.chatRecoveryExhausted : MessageKey.chatRecoveryUncertain,
+      retryUsed
+          ? MessageKey.chatRecoveryExhausted
+          : MessageKey.chatRecoveryUncertain,
     );
 
     notifyListeners();
@@ -3416,7 +3451,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final token = _turnToken;
     try {
       final page = await repo.messages(sid, offset: _offset);
-      if (_disposed || !identical(_turnToken, token)) return; // new turn owns state
+      if (_disposed || !identical(_turnToken, token))
+        return; // new turn owns state
       messages = mergeMessages(messages, page);
       _offset += page.length; // Raw page size, NOT de-duplicated rendered rows.
       hasOlder = page.length == 200;
@@ -3426,9 +3462,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _refreshUserProjections();
       // APPWAKE A: an OLD page may close a cursor gap — scan it WITHOUT
       // latest-page rights (it can queue rows, never advance the cursor).
-      unawaited(
-        _wakeObserver().onHistoryCommit(messages, latestPage: false),
-      );
+      unawaited(_wakeObserver().onHistoryCommit(messages, latestPage: false));
     } catch (e) {
       error = UiMessage.local(
         MessageKey.chatStateM019,
@@ -3475,10 +3509,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // auto-wake dispatch path is deliberately NOT gated: it has its own
     // server ledger and this gate would strand admitted batches.)
     if (!isWake && _connectivity() == ConnectivityHint.offline) {
-      await _blockSendBeforeDispatch(
-        rawDraft ?? spentDraft,
-        retryOf: retryOf,
-      );
+      await _blockSendBeforeDispatch(rawDraft ?? spentDraft, retryOf: retryOf);
       return;
     }
     // R3 §5.3 ORDER: `old.retriedBy = <child id>` is recorded BEFORE the
@@ -3700,7 +3731,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         // R3 §5.4: keep the epoch this watermark was taken under — once
         // the epoch moves, it can no longer hard-attribute rows.
         serverEpoch:
-            entry.serverEpoch ?? int.tryParse(observedActivity?.serverEpoch ?? ''),
+            entry.serverEpoch ??
+            int.tryParse(observedActivity?.serverEpoch ?? ''),
         recoveryStartedAt: entry.recoveryStartedAt,
         recoveryDeadline: entry.recoveryDeadline,
         retryUsed: entry.retryUsed,
@@ -3732,10 +3764,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       }
       _dispatchInFlight = true;
     }
-    _leaseTimer = Timer.periodic(
-      leaseInterval,
-      (_) => unawaited(_leaseTick()),
-    );
+    _leaseTimer = Timer.periodic(leaseInterval, (_) => unawaited(_leaseTick()));
     if (_detachArmed) {
       _detachArmed = false;
       detach(); // the viewer left while the claim was in flight
@@ -3774,8 +3803,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // verdict is a different evidence track). Callbacks are identity-
     // guarded here; the journal CAS (monotonic stage, first-wins fields)
     // runs in the merge queue.
-    final observation =
-        !isWake && _turnAttemptId != null
+    final observation = !isWake && _turnAttemptId != null
         ? _JournalObservation(this, token, _turnAttemptId!)
         : null;
     repo.stageChatObservation(sid, observation);
@@ -3999,12 +4027,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       }
       final drain4xx =
           !isWake &&
-          observation != null &&
-          observation.httpStatus != null &&
-          observation.httpStatus! >= 400 &&
-          observation.httpStatus! < 500
-      ? observation.httpStatus
-      : null;
+              observation != null &&
+              observation.httpStatus != null &&
+              observation.httpStatus! >= 400 &&
+              observation.httpStatus! < 500
+          ? observation.httpStatus
+          : null;
       if (drain4xx != null && _turnAttemptId != null) {
         sendOutcome = SendOutcome.rejected;
         _mergeAttemptEvidence(
@@ -4082,7 +4110,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _attemptMirror = attempt; // the card is honest even if the write fails
     _evidenceQueue = _evidenceQueue.then((_) async {
       if (!await store.saveAttempt(serverUrl, sid, attempt)) {
-        storageNotice = const UiMessage.local(MessageKey.chatRecoveryStorageFailed);
+        storageNotice = const UiMessage.local(
+          MessageKey.chatRecoveryStorageFailed,
+        );
       }
     });
     await _evidenceQueue;
@@ -4159,7 +4189,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       if (_disposed || !identical(_turnToken, token)) return;
       final journal = store.loadAttempt(serverUrl, sid, attemptId);
       if (journal == null) return; // entry is gone: never resurrect one here
-      final ev = Map<String, dynamic>.from(journal.terminalEvidence ?? const {});
+      final ev = Map<String, dynamic>.from(
+        journal.terminalEvidence ?? const {},
+      );
       if (stage != null) {
         final cur = _stageNamed(ev['stage']);
         if (cur == null || cur.index < stage.index) ev['stage'] = stage.name;
@@ -4192,7 +4224,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _mirrorAttemptId = attemptId;
       _attemptMirror = next; // positive evidence lives even if the write dies
       if (!await store.saveAttempt(serverUrl, sid, next)) {
-        storageNotice = const UiMessage.local(MessageKey.chatRecoveryStorageFailed);
+        storageNotice = const UiMessage.local(
+          MessageKey.chatRecoveryStorageFailed,
+        );
         if (!_disposed) notifyListeners();
       }
     });
@@ -4219,7 +4253,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // accepted outcome (the composer must not double-clear a delivered
     // send's attachments).
     sendOutcome ??= SendOutcome.lostOwnership;
-    _waitingSeconds = null; // SILENCE-DROP §3.1.6: ownership loss resets UX state
+    _waitingSeconds =
+        null; // SILENCE-DROP §3.1.6: ownership loss resets UX state
     _turnRecoveryCause = null;
     error = message;
     notifyListeners();
@@ -4236,9 +4271,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final held = await store.touchPending(serverUrl, sid, token);
     if (_disposed) return;
     if (!held) {
-      _losePendingOwnership(
-        const UiMessage.local(MessageKey.chatStateM021),
-      );
+      _losePendingOwnership(const UiMessage.local(MessageKey.chatStateM021));
     }
   }
 
@@ -4321,13 +4354,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     UiMessage? settleError;
     if (state == 'cancelled') {
       final runId = turn.runId;
-      final mine = runId != null && runId.isNotEmpty && _stopRequestedFor(runId);
+      final mine =
+          runId != null && runId.isNotEmpty && _stopRequestedFor(runId);
       _setStop(
         mine ? StopNotice.accepted : StopNotice.serverEnded,
         UiMessage.local(
-          mine
-              ? MessageKey.chatStateStoppedByYou
-              : MessageKey.chatStateM012,
+          mine ? MessageKey.chatStateStoppedByYou : MessageKey.chatStateM012,
         ),
       );
     } else if (state == 'failed' || state == 'interrupted') {
@@ -4386,9 +4418,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     if (_disposed) return false;
     if (identical(_settledTurn, token)) {
       final gate = _settleGate;
-      if (gate != null) return gate; // same turn settling (again): join, never double-clear
+      if (gate != null)
+        return gate; // same turn settling (again): join, never double-clear
     }
-    if (!identical(_turnToken, token)) return false; // not my turn anymore: no-op
+    if (!identical(_turnToken, token))
+      return false; // not my turn anymore: no-op
     _settledTurn = token;
     final gate = _settleCore(
       token,
@@ -4442,8 +4476,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       // was seen has positive delivery evidence — stamp it into the journal
       // (evidence only, disposition stays R2-conservative) so the snapshot
       // never resurfaces as a restore offer. Unknown outcomes keep it.
-      final deliveredAttemptId =
-          sendOutcome == SendOutcome.accepted
+      final deliveredAttemptId = sendOutcome == SendOutcome.accepted
           ? store.loadPending(serverUrl, sid)?.attemptId
           : null;
       try {
@@ -4594,7 +4627,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
 
   void _noteRecoveryCause(RecoveryCause cause) {
     final explicit =
-        cause == RecoveryCause.streamEnded || cause == RecoveryCause.streamError;
+        cause == RecoveryCause.streamEnded ||
+        cause == RecoveryCause.streamError;
     if (explicit && !_observedStreamFailure) {
       _turnRecoveryCause = cause; // neutral → observed failure: upgrade
     } else {
@@ -4712,10 +4746,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           ? (_turnSendWatermark ?? _evidenceAttempt?.historyAfterId)
           : null,
       attemptBacked: backed,
-      epochMoved: backed && (_sendEpochMoved || _attemptEpochMoved(_evidenceAttempt)),
+      epochMoved:
+          backed && (_sendEpochMoved || _attemptEpochMoved(_evidenceAttempt)),
     );
     final landed =
-        (backed ? inspection.anchorFound : inspection.anchorFound || inspection.ambiguous) ||
+        (backed
+            ? inspection.anchorFound
+            : inspection.anchorFound || inspection.ambiguous) ||
         live?.runId != null;
     _refreshUserProjections();
     error = landed
@@ -4794,10 +4831,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _setStop(StopNotice.none);
       return;
     }
-    _setStop(
-      StopNotice.lost,
-      const UiMessage.local(MessageKey.chatStateM028),
-    );
+    _setStop(StopNotice.lost, const UiMessage.local(MessageKey.chatStateM028));
   }
 
   Future<void> retryReconcile() async {
@@ -4872,7 +4906,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _stopFails = 0;
       notifyListeners();
       _watchTimer?.cancel();
-      _watchTimer = Timer.periodic(watchInterval, (_) => unawaited(_stopTick()));
+      _watchTimer = Timer.periodic(
+        watchInterval,
+        (_) => unawaited(_stopTick()),
+      );
       unawaited(_stopTick());
       return;
     }
@@ -5043,8 +5080,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         message: const UiMessage.local(MessageKey.chatLocalWaitingEnded),
       );
     }
-    final endedByToken =
-        tomb.terminalEvidence?['ended_by_token'] is String
+    final endedByToken = tomb.terminalEvidence?['ended_by_token'] is String
         ? tomb.terminalEvidence!['ended_by_token'] as String
         : null;
     final res = await store.endLocalAttempt(
@@ -5107,7 +5143,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// refs + editor revision), persist the abandoned tombstone, and only
   /// then the inlined compare-delete. A journal refusal changes NOTHING;
   /// a moved record is reported honestly (mismatch → M021, no delete).
-  Future<StopResult> _endLocalAttempt(Object? turnToken, String attemptId) async {
+  Future<StopResult> _endLocalAttempt(
+    Object? turnToken,
+    String attemptId,
+  ) async {
     if (identical(_turnToken, turnToken)) _dispatchInFlight = false;
     final pending = store.loadPending(serverUrl, sid);
     if (pending == null) {
@@ -5131,9 +5170,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     }
     final journal = store.loadAttempt(serverUrl, sid, attemptId);
     final slot = store.draft(serverUrl, sid);
-    final raw = journal?.rawDraft ?? (slot.isNotEmpty ? slot : pending.userText);
-    final snapshots =
-        journal != null && journal.attachmentSnapshots.isNotEmpty
+    final raw =
+        journal?.rawDraft ?? (slot.isNotEmpty ? slot : pending.userText);
+    final snapshots = journal != null && journal.attachmentSnapshots.isNotEmpty
         ? journal.attachmentSnapshots
         : store.attachments(serverUrl, sid);
     final revision = store.draftRevision(serverUrl, sid);
@@ -5156,7 +5195,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       runId: journal?.runId ?? pending.runId,
       historyAfterId: journal?.historyAfterId ?? pending.historyAfterId,
       serverEpoch: journal?.serverEpoch,
-      recoveryStartedAt: journal?.recoveryStartedAt ?? pending.recoveryStartedAt,
+      recoveryStartedAt:
+          journal?.recoveryStartedAt ?? pending.recoveryStartedAt,
       recoveryDeadline: journal?.recoveryDeadline ?? pending.recoveryDeadline,
       retryUsed: journal?.retryUsed ?? pending.recoveryRetryUsed,
       draftRestoredRevision: journal?.draftRestoredRevision,
@@ -5305,7 +5345,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// The 「清除本機等待紀錄」 button only makes sense while a record IS
   /// here; another tab's claim is cleared by settlement compare rules, not
   /// by pretending this page can delete it.
-  bool get hasLocalWaitingRecord => busy && store.loadPending(serverUrl, sid) != null;
+  bool get hasLocalWaitingRecord =>
+      busy && store.loadPending(serverUrl, sid) != null;
 
   Timer? _countdownTicker;
 
@@ -5337,7 +5378,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _budgetDeadline = deadline;
     _bootRetryUsed = retryUsed;
     _budgetRetryUsed = retryUsed;
-    if (deadline != null && phase == ChatPhase.recovering) _armCountdownTicker();
+    if (deadline != null && phase == ChatPhase.recovering)
+      _armCountdownTicker();
   }
 
   /// CROSSDEV-STOP R1 test seam: issue a RAW activity snapshot (the same
@@ -5529,7 +5571,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _stopFails = 0;
       _recoveryEpoch++;
       _cancelBootstrapWaiting();
-      _watchTimer = Timer.periodic(watchInterval, (_) => unawaited(_stopTick()));
+      _watchTimer = Timer.periodic(
+        watchInterval,
+        (_) => unawaited(_stopTick()),
+      );
       unawaited(_stopTick());
     }
     // live / detached paths keep their existing owner (SSE or _pollRun, which
@@ -5607,9 +5652,14 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// then release busy — a history-refresh failure must not re-arm running,
   /// it only adds a retry hint. The token guard keeps a delayed stop response
   /// from a RETIRED turn from touching the current turn (AUDIT-12).
-  Future<void> _settleStoppedRun(Object? token, {bool keepStopSource = false}) async {
+  Future<void> _settleStoppedRun(
+    Object? token, {
+    bool keepStopSource = false,
+  }) async {
     if (!_owns(token)) return;
-    if (keepStopSource && _stopRunId != null && _stopRequestedFor(_stopRunId!)) {
+    if (keepStopSource &&
+        _stopRunId != null &&
+        _stopRequestedFor(_stopRunId!)) {
       // Terminal reached while a stop request was outstanding: that confirms
       // the user's own hand — surface it instead of a silent/generic notice.
       _setStop(
@@ -5641,6 +5691,34 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     steerBusy = true;
     error = null;
     notifyListeners();
+    // STEERWEB R4: with the durable inbox live the LOCAL composer submits
+    // through the SAME resolver/receipt path; the legacy POST is only the
+    // capability-off fallback.
+    await _probeSteerCap();
+    if (steerInboxEnabled && live?.runId != null) {
+      final snap = observedActivity;
+      final runId = live!.runId!;
+      final target =
+          steerTargetForRun(runId) ??
+          RemoteSteerTarget(
+            connectionGeneration: connectionGeneration,
+            accountGeneration: connectionGeneration,
+            requestedSessionId: sid,
+            resolvedSessionId: snap?.resolvedSessionId ?? sid,
+            serverEpoch:
+                snap?.serverEpoch ?? '${_steerCap?['server_epoch'] ?? ''}',
+            observationId: null,
+            runId: runId,
+          );
+      final outcome = await submitRemoteSteer(target, input);
+      if (!_owns(token)) return;
+      steerBusy = false;
+      if (!outcome.tracked) {
+        error = outcome.message ?? remoteSteerMessage(outcome.kind);
+      }
+      notifyListeners();
+      return;
+    }
     try {
       await repo.steer(live!.runId!, input.trim());
     } catch (e) {
@@ -5655,6 +5733,356 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       steerBusy = false;
       notifyListeners();
     }
+  }
+
+  // ---- STEERWEB R4: cross-device durable steer inbox ----------------------
+  // Receipt cards live in their OWN ledger surface: they never enter
+  // _remoteRows, LocalAttempt, pending-turn ownership or wake/settleTurn.
+  // Drafts survive until a durable accepted receipt; an unknown answer keeps
+  // the SAME client_request_id (idempotent retry), never a chat re-send.
+
+  Map<String, dynamic>? _steerCap;
+  Map<String, dynamic>? _notifyCap;
+  bool _notifyCapAsked = false;
+  final NotificationLedger _notifications = NotificationLedger();
+  NotificationLedger get notifications => _notifications;
+  bool get notificationEventsEnabled =>
+      _notifyCap != null && _notifyCap!['enabled'] == true;
+  String get notificationServerChannel =>
+      '${_notifyCap?['system_channel'] ?? ''}';
+  bool _notifyPolling = false;
+
+  Future<void> _probeNotifyCap() async {
+    if (_notifyCap != null && _notifyCap!['enabled'] == true) return;
+    if (_notifyCapAsked) return; // one probe until the ledger appears
+    _notifyCapAsked = true;
+    final f = await repo.notificationEventsFeature(); // never throws
+    if (_disposed) return;
+    if (f != null && f['enabled'] == true) {
+      _notifyCap = f;
+      notifyListeners();
+    }
+  }
+
+  /// Ledger-cursor poll piggybacked on the activity tick (no second timer).
+  Future<void> _notificationPoll() async {
+    if (_notifyPolling || _disposed) return;
+    if (!notificationEventsEnabled) return;
+    _notifyPolling = true;
+    try {
+      final page = NotificationPage.fromJson(
+        await repo.notificationEvents(after: _notifications.cursor),
+      );
+      if (_disposed) return;
+      final before = _notifications.unread.length;
+      _notifications.merge(page);
+      if (_notifications.unread.length != before) notifyListeners();
+    } on Object {
+      // A failed poll changes NOTHING (never reads as "all read").
+    } finally {
+      _notifyPolling = false;
+    }
+  }
+
+  Future<void> markNotificationRead(String eventId) async {
+    try {
+      await repo.notificationRead(eventId);
+      _notifications.markRead(eventId);
+    } on Object {
+      // honest: a failed ack leaves the event unread
+    }
+    if (!_disposed) notifyListeners();
+  }
+
+  /// Explicit opt-in for steer.ready on ONE run (R7: per-run, never per msg).
+  Future<void> watchSteerReady(String runId, {bool on = true}) async {
+    try {
+      await repo.notificationWatch(runId, on: on);
+    } on Object {
+      // opt-in is best-effort; the ledger records only explicit watches
+    }
+  }
+
+  final Map<String, SteerListing> _steerListings = {};
+  final Map<String, SteerReceipt> _steerTracked = {};
+  final Map<String, String> _steerDrafts = {}; // clientRequestId -> text
+  final Map<String, String> _steerDraftKeys = {}; // runId -> clientRequestId
+  bool _steerPolling = false;
+  final Set<String> _steerUnconfirmed = {};
+
+  bool get steerInboxEnabled =>
+      _steerCap != null && _steerCap!['enabled'] == true;
+
+  Future<void> _probeSteerCap() async {
+    if (_steerCap != null && _steerCap!['enabled'] == true) return;
+    final f = await repo.steerInboxFeature(); // never throws
+    if (_disposed) return;
+    if (f != null && f['enabled'] == true) {
+      _steerCap = f;
+      notifyListeners();
+    }
+  }
+
+  /// Steerable candidates: running AND waiting_for_approval rows (queued /
+  /// stopping / terminal are never steerable targets — stoppable ≠ steerable).
+  List<RemoteSteerTarget> get steerTargets {
+    final snap = observedActivity;
+    if (snap == null || !activityEvidenceFreshNow) return const [];
+    final now = _clock();
+    final gen = connectionGeneration;
+    return [
+      for (final r in snap.activeRuns)
+        if (_classifySnapshotRunForSteer(snap, r, now) case final k
+            when k == RemoteRunSteerKind.steerable ||
+                k == RemoteRunSteerKind.approvalWait)
+          RemoteSteerTarget(
+            connectionGeneration: gen,
+            accountGeneration: gen,
+            requestedSessionId: sid,
+            resolvedSessionId: snap.resolvedSessionId,
+            serverEpoch: snap.serverEpoch,
+            observationId: r.observationId,
+            runId: r.runId!,
+          ),
+    ];
+  }
+
+  RemoteRunSteerKind _classifySnapshotRunForSteer(
+    SessionActivity snap,
+    ActivityRun r,
+    DateTime now,
+  ) => classifyRemoteSteer(
+    r,
+    now: now,
+    lastActivitySuccess: lastActivitySuccess,
+    syncInterval: syncInterval,
+    requestedSessionId: sid,
+    snapshotSessionId: snap.sessionId,
+    resolvedSessionId: snap.resolvedSessionId,
+    epoch: snap.serverEpoch,
+    isLocallyRepresented: isLocallyRepresentedRun(r),
+  );
+
+  RemoteSteerTarget? steerTargetForRun(String runId) {
+    for (final t in steerTargets) {
+      if (t.runId == runId) return t;
+    }
+    return null;
+  }
+
+  RemoteSteerBlock get steerBlockReason {
+    if (_disposed) return RemoteSteerBlock.stale;
+    if (!steerInboxEnabled) return RemoteSteerBlock.unsupported;
+    if (steerTargets.isNotEmpty) return RemoteSteerBlock.none;
+    final snap = observedActivity;
+    if (snap == null || lastActivitySuccess == null) {
+      return RemoteSteerBlock.noSnapshot;
+    }
+    if (!activityEvidenceFreshNow) return RemoteSteerBlock.stale;
+    return RemoteSteerBlock.noSteerableTarget;
+  }
+
+  /// Receipt cards tracked for this session (newest sequence first per run).
+  List<SteerReceipt> get steerReceipts {
+    final out = _steerTracked.values.toList()
+      ..sort((a, b) => b.sequence.compareTo(a.sequence));
+    return List.unmodifiable(out);
+  }
+
+  Set<String> get steerUnconfirmedRuns => Set.unmodifiable(_steerUnconfirmed);
+
+  String? steerDraftFor(String runId) => _steerDrafts[_steerDraftKeys[runId]];
+
+  String _mintClientRequestId() {
+    final rng = math.Random.secure();
+    final b = List<int>.generate(16, (_) => rng.nextInt(256));
+    return b.map((x) => x.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  /// The single entry point for remote AND local (capability-on) steers.
+  Future<RemoteSteerOutcome> submitRemoteSteer(
+    RemoteSteerTarget target,
+    String text,
+  ) async {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) {
+      return const RemoteSteerOutcome(RemoteSteerKind.failed);
+    }
+    if (!target.isValid) {
+      return const RemoteSteerOutcome(RemoteSteerKind.staleTarget);
+    }
+    if (_connectivity() == ConnectivityHint.offline) {
+      _steerDraftKeys[target.runId] =
+          _steerDraftKeys[target.runId] ?? _mintClientRequestId();
+      _steerDrafts[_steerDraftKeys[target.runId]!] = trimmed;
+      notifyListeners();
+      return const RemoteSteerOutcome(RemoteSteerKind.offline);
+    }
+    await _probeSteerCap();
+    if (_disposed || !steerInboxEnabled) {
+      return const RemoteSteerOutcome(RemoteSteerKind.notReady);
+    }
+    final key =
+        _steerDraftKeys.remove(target.runId) ??
+        _steerDrafts.keys.firstWhere(
+          (k) => _steerDraftKeys.containsValue(k),
+          orElse: () => _mintClientRequestId(),
+        );
+    final draft = _steerDrafts.remove(key) ?? trimmed;
+    // R4: re-validate the target BEFORE submitting — the SERVER's listing
+    // decides acceptance; a failed precheck is unconfirmed, never a POST.
+    late final SteerListing listing;
+    try {
+      listing = SteerListing.fromJson(await repo.runSteers(target.runId));
+    } on Object {
+      _steerDraftKeys[target.runId] = key;
+      _steerDrafts[key] = draft;
+      notifyListeners();
+      return const RemoteSteerOutcome(RemoteSteerKind.unconfirmed);
+    }
+    if (_disposed) return const RemoteSteerOutcome(RemoteSteerKind.failed);
+    _steerListings[target.runId] = listing;
+    if (!listing.accepting) {
+      final kind = switch (listing.acceptingReason) {
+        'closed' ||
+        'run_closed' ||
+        'run_stopping' ||
+        'run_expired' => RemoteSteerKind.closed,
+        'run_not_ready' => RemoteSteerKind.notReady,
+        _ => RemoteSteerKind.staleTarget,
+      };
+      // ANY rejection keeps the durable draft under the SAME key — the
+      // wording differs, the retry promise does not (R4/R10).
+      _steerDraftKeys[target.runId] = key;
+      _steerDrafts[key] = draft;
+      notifyListeners();
+      return RemoteSteerOutcome(kind, message: remoteSteerMessage(kind));
+    }
+    Json env;
+    try {
+      env = await repo.submitSteer(
+        target.runId,
+        input: draft,
+        clientRequestId: key,
+        sessionId: target.requestedSessionId,
+        serverEpoch: listing.serverEpoch ?? target.serverEpoch,
+      );
+    } on Object {
+      // Network-unknown: SAME key retained; a later retry/receipt lookup
+      // resolves idempotently (never mint a second id, never chat-send).
+      _steerDraftKeys[target.runId] = key;
+      _steerDrafts[key] = draft;
+      notifyListeners();
+      return const RemoteSteerOutcome(RemoteSteerKind.unconfirmed);
+    }
+    if (_disposed) return const RemoteSteerOutcome(RemoteSteerKind.failed);
+    if (env['accepted'] == true) {
+      final receipt = SteerReceipt.fromJson(env);
+      _steerTracked[receipt.steerId] = receipt;
+      _steerUnconfirmed.remove(target.runId);
+      unawaited(_steerPollRun(target.runId));
+      notifyListeners();
+      // 202 and an idempotent replay answer with the SAME durable receipt;
+      // both mean the ledger HOLDS it (a replay is not a second steer).
+      return RemoteSteerOutcome(RemoteSteerKind.accepted, receipt: receipt);
+    }
+    final code =
+        (env['error'] is Map ? (env['error'] as Map)['code'] : null) ?? '';
+    final kind = steerKindForError('$code');
+    // Not admitted: the draft survives under the SAME client_request_id for
+    // an idempotent retry (never a fresh id, never a chat re-send).
+    _steerDraftKeys[target.runId] = key;
+    _steerDrafts[key] = draft;
+    notifyListeners();
+    return RemoteSteerOutcome(kind, message: remoteSteerMessage(kind));
+  }
+
+  /// activityTick success hook: incremental receipt tracking for active
+  /// runs that still have pending receipts (R6: cursor-based, never empty-
+  /// on-error).
+  Future<void> _steerPoll() async {
+    if (_steerPolling || _disposed) return;
+    if (!steerInboxEnabled) return;
+    final pendingRuns = {
+      for (final r in _steerTracked.values)
+        if (!r.settled) r.runId,
+    };
+    // History identity retires transient cards: an exactly-matching server
+    // batch row (typed steer_provenance) IS the durable record (R4).
+    final seenBatches = {
+      for (final m in messages)
+        if (m.steerProvenance case final p?) p.batchId,
+    };
+    for (final id in [
+      for (final e in _steerTracked.entries)
+        if (e.value.batchId != null && seenBatches.contains(e.value.batchId))
+          e.key,
+    ]) {
+      _steerTracked.remove(id);
+    }
+    if (pendingRuns.isEmpty) return;
+    _steerPolling = true;
+    try {
+      for (final runId in pendingRuns) {
+        await _steerPollRun(runId);
+      }
+    } finally {
+      _steerPolling = false;
+    }
+  }
+
+  Future<void> _steerPollRun(String runId) async {
+    final after = _steerListings[runId]?.revision ?? 0;
+    try {
+      final listing = SteerListing.fromJson(
+        await repo.runSteers(runId, afterSeq: after),
+      );
+      if (_disposed) return;
+      final prev = _steerListings[runId];
+      _steerListings[runId] = prev == null
+          ? listing
+          : SteerListing(
+              accepting: listing.accepting,
+              acceptingReason: listing.acceptingReason,
+              revision: listing.revision,
+              overflow: listing.overflow,
+              serverEpoch: listing.serverEpoch,
+              items: [...prev.items, ...listing.items],
+            );
+      for (final r in _steerListings[runId]!.items) {
+        _steerTracked[r.steerId] = r;
+      }
+      _steerUnconfirmed.remove(runId);
+      // R4: a delivered receipt retires its transient card; the durable
+      // history row (exact batch identity) carries it from here.
+      for (final id in [
+        for (final e in _steerTracked.entries)
+          if (e.value.state == SteerState.delivered) e.key,
+      ]) {
+        _steerTracked.remove(id);
+      }
+      notifyListeners();
+    } on Object {
+      if (_disposed) return;
+      _steerUnconfirmed.add(runId); // never treat failure as empty/settled
+      notifyListeners();
+    }
+  }
+
+  /// Same-key idempotent retry for a kept draft (UI "retry this steer").
+  Future<RemoteSteerOutcome> retrySteerDraft(String runId) async {
+    final target = steerTargetForRun(runId);
+    final draft = steerDraftFor(runId);
+    if (target == null || draft == null) {
+      return const RemoteSteerOutcome(RemoteSteerKind.staleTarget);
+    }
+    return submitRemoteSteer(target, draft);
+  }
+
+  Future<void> discardSteerDraft(String runId) async {
+    final key = _steerDraftKeys.remove(runId);
+    if (key != null) _steerDrafts.remove(key);
+    notifyListeners();
   }
 }
 

@@ -74,12 +74,18 @@ def _send(job: tuple) -> None:
 def _send_json(fields: tuple) -> None:
     """JSON-body publish: the ONLY way a Unicode title reaches the hub
     (HTTP header values stay ASCII). Body bytes keep the hard cap; the title
-    is byte-capped like before. One attempt, no retry, never raises."""
-    server, topic, title, message, priority, tags, on_result = fields
+    is byte-capped like before. One attempt, no retry, never raises. The
+    optional click URL (STEERWEB R7) opens the app at the exact run/event;
+    it carries NO key, topic or other secret."""
+    server, topic, title, message, priority, tags, on_result = fields[:7]
+    click = fields[7] if len(fields) > 7 else None
     try:
-        payload = json.dumps({"topic": topic, "title": title, "message": message,
-                              "priority": PRIORITY.get(priority, PRIORITY["default"]),
-                              "tags": tags or []}, ensure_ascii=False).encode("utf-8")
+        body = {"topic": topic, "title": title, "message": message,
+                "priority": PRIORITY.get(priority, PRIORITY["default"]),
+                "tags": tags or []}
+        if click:
+            body["click"] = str(click)[:1024]
+        payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
         request = urllib.request.Request(server, data=payload, method="POST")
         request.add_header("Content-Type", "application/json")
         with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
@@ -131,7 +137,7 @@ def publish(server: str, topic: str, title: str, message: str, *,
 
 def publish_json(server: str, topic: str, title: str, message: str, *,
                  priority: str = "default", tags: list[str] | None = None,
-                 on_result=None) -> bool:
+                 on_result=None, click: str | None = None) -> bool:
     """Enqueue one JSON-body notification (Unicode title allowed). Returns
     whether the LOCAL queue accepted it — accepted is not delivery; the
     optional on_result(ok, sanitized_error_type) records the single POST
@@ -145,7 +151,7 @@ def publish_json(server: str, topic: str, title: str, message: str, *,
     try:
         _ensure_worker()
         _jobs.put_nowait(("json", (server, topic, title, message, priority,
-                                   safe_tags, on_result)))
+                                   safe_tags, on_result, click)))
         return True
     except queue.Full:
         log.debug("ntfy publish dropped (bounded queue full)")

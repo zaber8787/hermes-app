@@ -4,8 +4,11 @@ One registry entry per NATIVE pending approval inside an api_server run this
 process owns. The core queue (``tools.approval._gateway_queues``) is the only
 truth about what is still pending; this registry only enriches it with a
 desensitized display payload, a monotonic deadline and notification flags, and
-bridges the two API admission surfaces (session-stream callback and the runs
-``_make_approval_notify`` factory) into ONE inbox — never a second producer.
+captures from ONE entrance — the ``APIServerAdapter._set_run_status`` cut every
+API approval producer ends in (session stream, ``/v1/runs`` with or without
+SSE, and OpenAI chat streaming) — never a per-factory patch, never a second
+producer. Generic gateway TurnRunner cards, cron and the no-callback
+``_pending`` fallback never write that status and are out of scope by design.
 
 Keying follows R2: ``(adapter identity, run_id, native request_id)`` plus the
 server epoch for cross-restart freshness. Nothing is ever keyed on command
@@ -20,10 +23,13 @@ the run's event loop; nothing network- or await-shaped ever runs under a lock.
 """
 from __future__ import annotations
 
+import logging
 import math
 import re
 import threading
 import time
+
+log = logging.getLogger("hermes-app-compat.approval_inbox")
 
 VERSION = "1"
 INBOX_MAX_PENDING = 32        # per-run display cap; overflow reports degraded
@@ -39,6 +45,21 @@ _REDACTION_RE = re.compile(
 _REDACTION = "***"
 
 _capability_on = True  # B4: shipped enabled; set_capability(False) is the kill switch (R1 rollback)
+
+# APPROVALSCAN §判別表 observability: every stage between core queue, registry,
+# dispatcher and send answers one row of the table; all counters are plain
+# integers, sanitized by construction (never command text, topic or endpoint).
+METRIC_NAMES = ("registry_accepted", "registry_dropped", "push_enqueued", "push_dropped",
+               "push_dropped_config", "push_dropped_queue", "send_success", "send_fail",
+               "enqueue_dropped", "capture_replay", "capture_entry_missing",
+               "capture_error", "capture_key_unbound", "loop_unbound",
+               "dispatch_none", "dispatch_error")
+
+
+def _metric(inbox, name, delta=1):
+    metrics = inbox.setdefault("metrics", {})
+    metrics[name] = metrics.get(name, 0) + delta
+    return metrics[name]
 
 
 def set_capability(enabled: bool) -> None:
@@ -143,6 +164,10 @@ class ApprovalInbox:
             }
         inbox["closed"] = False       # a fresh install re-claims the registry
         inbox["epoch"] = state.get("activity_epoch")
+        inbox.setdefault("loops", {})  # (id(adapter), run_id) -> admission owner loop
+        metrics = inbox.setdefault("metrics", {})
+        for name in METRIC_NAMES:       # reload of an older dict keeps old values
+            metrics.setdefault(name, 0)
         return inbox
 
 
@@ -160,7 +185,7 @@ def _bucket(inbox, adapter, run_id, *, create=False, session_id=None, loop=None)
                                             for e in oldest[1]["entries"].values()):
                 oldest[1]["degraded"] = True
             inbox["by_run"].pop(oldest[0], None)
-            inbox["metrics"]["enqueue_dropped"] += 1
+            _metric(inbox, "enqueue_dropped")
     if bucket is not None:
         bucket["last_seen"] = time.monotonic()
         if loop is not None:
@@ -226,30 +251,53 @@ def make_settle_hook(inbox, adapter, run_id, request_id, previous):
     return _settle
 
 
-def capture(inbox, *, adapter, run_id, session_id=None, loop=None, data):
-    """Called from inside the NATIVE notify callback, before the original runs.
-    The core entry exists by now (enqueued before notify); if it already
-    settled (raced answer/withdraw) we publish no phantom pending and bind no
-    hook. Returns the entry, or None when the request is not (or no longer)
-    ours to track."""
-    request_id = str((data or {}).get("request_id") or "")
+def capture(inbox, *, adapter, run_id, session_id=None, loop=None, data=None,
+            request_id=None):
+    """Called from the single central ``_set_run_status`` cut for a native
+    ``waiting_for_approval`` write (``request_id`` from the status event,
+    payload read from the core entry's own data), or explicitly with ``data``
+    by unit tests. The core entry must exist (enqueued before notify) and be
+    pending here; if it already settled (raced answer/withdraw) we publish no
+    phantom pending and bind no hook. A replay of an already-captured pending
+    request returns the SAME entry: no second dispatch, no re-armed reminder,
+    no duplicate settle-hook chain. Returns the entry, or None when the
+    request is not (or no longer) ours to track."""
+    if request_id is None:
+        request_id = str((data or {}).get("request_id") or "")
+    else:
+        request_id = str(request_id)
     if not request_id:
         return None
     session_key = _session_key(adapter, run_id)
+    with inbox["lock"]:
+        bucket = inbox["by_run"].get((id(adapter), run_id))
+        prior = bucket["entries"].get(request_id) if bucket is not None else None
+        if prior is not None and prior["phase"] == "pending":
+            _metric(inbox, "capture_replay")  # status replay / duplicate notify
+            return prior
     from tools import approval as core
     try:
         with core._lock:  # brief, never re-entered: locate + chain under the SAME lock
             entry = next((e for e in core._gateway_queues.get(session_key, [])
                           if e.data.get("request_id") == request_id), None)
             if entry is None:
+                _metric(inbox, "capture_entry_missing")
+                log.info("approval capture skipped: stage=core-entry run_id=%s request_id=%s",
+                         run_id, request_id)
                 return None
+            # The status event is the API envelope; the PAYLOAD truth (native
+            # flags, pattern keys, redacted-at-display command) is entry.data.
+            payload = dict(entry.data) if data is None else data
             previous = entry.settle
             entry.settle = make_settle_hook(inbox, adapter, run_id, request_id, previous)
-    except Exception:
+    except Exception as exc:
+        _metric(inbox, "capture_error")
+        log.info("approval capture failed: stage=core-lookup run_id=%s error=%s",
+                 run_id, type(exc).__name__)
         return None
     timeout = DEFAULT_TIMEOUT()
     now_mono = time.monotonic()
-    new_entry = entry_from_data(data, server_epoch=inbox["epoch"], run_id=run_id,
+    new_entry = entry_from_data(payload, server_epoch=inbox["epoch"], run_id=run_id,
                                 session_id=session_id, session_key=session_key,
                                 timeout=timeout, now_mono=now_mono, loop=loop)
     new_entry["adapter"] = adapter
@@ -258,22 +306,29 @@ def capture(inbox, *, adapter, run_id, session_id=None, loop=None, data):
         bucket = _bucket(inbox, adapter, run_id, create=True, session_id=session_id, loop=loop)
         prior = bucket["entries"].get(request_id)
         if prior is not None and prior["phase"] == "pending":
-            return prior  # duplicate producer path / status replay: same entry, no reset
+            return prior  # raced duplicate producer path / status replay: same entry, no reset
         if prior is not None and prior.get("timer") is not None:
             prior["timer"].cancel()  # a re-captured ID is a NEW request; old timer dies
         if len(bucket["entries"]) >= INBOX_MAX_PENDING:
             bucket["degraded"] = True
-            inbox["metrics"]["registry_dropped"] += 1
+            _metric(inbox, "registry_dropped")
+            log.info("approval registry overflow degraded: stage=registry run_id=%s request_id=%s",
+                     run_id, request_id)
             return None
         bucket["entries"][request_id] = new_entry
         bucket["revision"] += 1
-        inbox["metrics"]["registry_accepted"] += 1
+        _metric(inbox, "registry_accepted")
         dispatch = inbox.get("dispatch")
-    if dispatch is not None:
+    if dispatch is None:
+        # Expected while push.approval_dispatcher=legacy (detached-only exit).
+        _metric(inbox, "dispatch_none")
+    else:
         try:
             dispatch(new_entry)  # immediate notification hook (B2; never blocks)
-        except Exception:
-            pass
+        except Exception as exc:
+            _metric(inbox, "dispatch_error")
+            log.info("approval dispatch failed: stage=dispatch run_id=%s request_id=%s "
+                     "error=%s", run_id, request_id, type(exc).__name__)
     return new_entry
 
 

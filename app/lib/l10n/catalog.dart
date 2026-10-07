@@ -201,7 +201,8 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.chatStateM035: 'Steer failed: {error}',
 
   // ---- SILENCE-DROP §3.3: quiet-stream waiting / neutral check / unconfirmed
-  MessageKey.chatStreamWaiting: 'Waiting for a reply (no output for {seconds}s)',
+  MessageKey.chatStreamWaiting:
+      'Waiting for a reply (no output for {seconds}s)',
   MessageKey.chatStreamChecking:
       'No stream updates received; checking history in {seconds}s. The message will not be resent.',
   MessageKey.chatStreamUnconfirmed:
@@ -226,8 +227,49 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.chatStopRemoteHelp:
       'Stop this run started by another device or source',
   MessageKey.chatStopRemoteRequested: 'Stop requested; checking status',
+  MessageKey.steerAction: 'Steer',
+  MessageKey.steerPickRun: 'Choose a run to steer',
+  MessageKey.steerNextBoundary:
+      'Applied after the next tool step; if the run ends first, it remains undelivered.',
+  MessageKey.steerAccepted: 'Steer #{sequence}: queued',
+  MessageKey.steerApprovalWait: 'Waiting for approval before applying',
+  MessageKey.steerStaged: 'Applying steer #{sequence}',
+  MessageKey.steerDelivered: 'Steer #{sequence} saved to history',
+  MessageKey.steerNotDelivered: 'The run ended before this steer was delivered',
+  MessageKey.steerOutcomeUnknown: 'Steer outcome unknown; check the receipt',
+  MessageKey.steerUnavailable:
+      'Steering is unavailable; refresh the run status',
+  MessageKey.steerOffline: 'Offline; steer has not been sent',
+  MessageKey.steerCheckReceipt: 'Check steer receipt',
+  MessageKey.steerRetrySame: 'Retry this steer',
+  MessageKey.steerCopyDraft: 'Copy steer text',
+  MessageKey.steerExpired: 'Steer receipt expired',
+  MessageKey.steerConflict: 'This steer ID was used for different content',
+  MessageKey.steerTooLarge: 'Steer exceeds the size limit',
+  MessageKey.steerQueueFull: 'The steer queue is full; try again later',
+  MessageKey.steerNotifyReady: 'Notify me when steering is available',
+  MessageKey.notificationEnableDesktop: 'Enable desktop browser notifications',
+  MessageKey.notificationHttps:
+      'Browser notifications require a secure connection',
+  MessageKey.notificationOpenHttps: 'Open secure entry',
+  MessageKey.notificationNtfyOwner:
+      'System notifications are delivered by ntfy',
+  MessageKey.notificationForegroundOnly:
+      'This browser receives notifications while in the foreground',
+  MessageKey.notificationUnsupported:
+      'This browser cannot show system notifications',
+  MessageKey.notificationDenied: 'Browser notifications are not allowed',
+  MessageKey.notificationRead: 'Mark as read',
+  MessageKey.notificationApproval: 'This run needs your approval',
+  MessageKey.notificationCompleted: 'Run completed',
+  MessageKey.notificationFailed: 'Run failed',
+  MessageKey.notificationSteerReady: 'Steering is now available',
+  MessageKey.notificationSettled: 'This request has already been handled',
+  MessageKey.notificationUnavailable:
+      "This notification's conversation is unavailable",
   MessageKey.chatStopRemoteChecking: 'Checking stop status',
-  MessageKey.chatStopRemoteUnavailable: 'This run is unavailable; refreshing status',
+  MessageKey.chatStopRemoteUnavailable:
+      'This run is unavailable; refreshing status',
   MessageKey.chatStopRemoteNoRunId:
       'The server provided no run ID; this run cannot be stopped here',
   MessageKey.chatStopRemoteRefreshRequired: 'Refresh run status first',
@@ -382,8 +424,7 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.approvalTimeoutPolicy:
       'This action will not run without a response',
   MessageKey.approvalChecking: 'Checking whether approval is still pending',
-  MessageKey.approvalUnavailable:
-      'Approval status is unconfirmed. Check again',
+  MessageKey.approvalUnavailable: 'Approval status is unconfirmed. Check again',
   MessageKey.approvalExpired: 'Approval timed out; this action did not run',
   MessageKey.approvalResolvedElsewhere:
       'This request was handled on another device',
@@ -526,8 +567,7 @@ const Map<MessageKey, String> catalogEn = {
       'When the app is visible and idle, delivered schedule reports trigger '
       'ONE short auto-read request (merged, rate-limited; never while you are '
       'typing or the app is in the background). Off by default.',
-  MessageKey.settingsWakeUnavailable:
-      'This server does not offer auto-wake.',
+  MessageKey.settingsWakeUnavailable: 'This server does not offer auto-wake.',
   MessageKey.chatWakeSessionOff: 'Pause auto-read in this session',
   MessageKey.chatWakeSessionOn: 'Resume auto-read in this session',
   MessageKey.wakePendingCount: 'Schedule reports waiting: {count}',
@@ -684,7 +724,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatStreamChecking: '暫未收到串流更新，{seconds} 秒後核對歷史；不會重送訊息。',
   MessageKey.chatStreamUnconfirmed: '尚無法確認這回合的結果。請使用「重新核對」確認。',
   MessageKey.chatDeliveredReplyLoading: '訊息已送達，回覆載入中。可使用「重新核對」更新。',
-  MessageKey.chatStreamUnavailable: '回覆串流不可用，且歷史未見這則訊息，可能未入庫；可重送，建議先「重新核對」避免重複。',
+  MessageKey.chatStreamUnavailable:
+      '回覆串流不可用，且歷史未見這則訊息，可能未入庫；可重送，建議先「重新核對」避免重複。',
 
   MessageKey.chatSteer: '插話',
   MessageKey.chatRemoteBusy: '其他裝置進行中',
@@ -697,6 +738,39 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatStopRemote: '停止伺服器運行',
   MessageKey.chatStopRemoteHelp: '停止其他裝置或來源啟動的此項運行',
   MessageKey.chatStopRemoteRequested: '已送出停止請求，正在核對狀態',
+  MessageKey.steerAction: '插話',
+  MessageKey.steerPickRun: '選擇要插話的執行',
+  MessageKey.steerNextBoundary: '將在下一個工具步驟處理；若先結束，插話會保留為未送達。',
+  MessageKey.steerAccepted: '插話 #{sequence}：待處理',
+  MessageKey.steerApprovalWait: '等待核准後處理',
+  MessageKey.steerStaged: '正在套用插話 #{sequence}',
+  MessageKey.steerDelivered: '插話 #{sequence} 已寫入歷史',
+  MessageKey.steerNotDelivered: '執行已結束，插話未送達',
+  MessageKey.steerOutcomeUnknown: '插話結果待確認，請查詢收據',
+  MessageKey.steerUnavailable: '目前無法插話，請重新確認執行狀態',
+  MessageKey.steerOffline: '目前離線，插話尚未送出',
+  MessageKey.steerCheckReceipt: '查詢插話收據',
+  MessageKey.steerRetrySame: '重試這筆插話',
+  MessageKey.steerCopyDraft: '複製插話文字',
+  MessageKey.steerExpired: '插話收據已過期',
+  MessageKey.steerConflict: '這筆插話識別碼已用於不同內容',
+  MessageKey.steerTooLarge: '插話超過長度限制',
+  MessageKey.steerQueueFull: '待處理插話已滿，請稍後重試',
+  MessageKey.steerNotifyReady: '可插話時提醒我',
+  MessageKey.notificationEnableDesktop: '啟用桌面瀏覽器通知',
+  MessageKey.notificationHttps: '瀏覽器通知需要安全入口',
+  MessageKey.notificationOpenHttps: '開啟安全入口',
+  MessageKey.notificationNtfyOwner: '系統通知已由 ntfy 傳送',
+  MessageKey.notificationForegroundOnly: '此瀏覽器只在前景接收通知',
+  MessageKey.notificationUnsupported: '此瀏覽器無法顯示系統通知',
+  MessageKey.notificationDenied: '瀏覽器通知未獲允許',
+  MessageKey.notificationRead: '標記已讀',
+  MessageKey.notificationApproval: '此執行需要你核准',
+  MessageKey.notificationCompleted: '執行已完成',
+  MessageKey.notificationFailed: '執行失敗',
+  MessageKey.notificationSteerReady: '現在可以插話',
+  MessageKey.notificationSettled: '這個請求已處理',
+  MessageKey.notificationUnavailable: '此通知的對話無法開啟',
   MessageKey.chatStopRemoteChecking: '正在核對停止狀態',
   MessageKey.chatStopRemoteUnavailable: '此運行已不可用，正在更新狀態',
   MessageKey.chatStopRemoteNoRunId: '伺服器未提供運行識別碼，無法從此處停止',

@@ -96,3 +96,7 @@ key.properties
 
 .approvalpush-evidence/
 scripts/watch-nudge.sh
+
+.steerweb-evidence/
+.approvalfix-evidence/
+.steerweb-evidence/

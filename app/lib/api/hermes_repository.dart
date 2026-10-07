@@ -125,7 +125,6 @@ class HermesRepository {
   DispatchObservation? _popChatObservation(String sid) =>
       _chatObservations.remove(sid);
 
-
   /// Close sid's live SSE without killing the server-side run.
   void cancelStream(String sid) {
     _streamCancels.remove(sid)?.complete();
@@ -395,11 +394,8 @@ class HermesRepository {
   // the idempotent ones (receipt GET/admit replay is ledger-keyed; release
   // is CAS on reserved rows). The dispatch POST itself is never replayed.
 
-  Future<Json> autoWakeCapability() => _json(
-        'GET',
-        '/v1/capabilities',
-        deadline: metadataTimeout,
-      );
+  Future<Json> autoWakeCapability() =>
+      _json('GET', '/v1/capabilities', deadline: metadataTimeout);
 
   /// The settings-page view of the same capability: null on ANY failure —
   /// a missing/unreachable feature never claims the toggle is available.
@@ -425,11 +421,11 @@ class HermesRepository {
   }
 
   Future<Json> wakeReceipt(String sid, String batchId) => _json(
-        'GET',
-        '/api/sessions/${Uri.encodeComponent(sid)}/auto-wake/receipt',
-        query: {'batch_id': batchId},
-        deadline: metadataTimeout,
-      );
+    'GET',
+    '/api/sessions/${Uri.encodeComponent(sid)}/auto-wake/receipt',
+    query: {'batch_id': batchId},
+    deadline: metadataTimeout,
+  );
 
   /// Fire-and-forget receipt advance (accepted with run id / terminal).
   Future<void> wakeAck(
@@ -692,8 +688,7 @@ class HermesRepository {
 
   /// Contract §2: status can finish as completed even after explicit stop.
   /// CROSSDEV-STOP R2 §5.2: the local path stays byte-for-byte unchanged.
-  Future<void> stop(String runId) =>
-      _stop(runId, deadline: null);
+  Future<void> stop(String runId) => _stop(runId, deadline: null);
 
   /// CROSSDEV-STOP R2 §5.2: the remote reconciliation stop POST with the
   /// bounded headers budget — the SAME POST / body / auth as [stop], but the
@@ -727,6 +722,100 @@ class HermesRepository {
       throw const ApiException.local(MessageKey.apiM027);
     }
   }
+
+  // ---- STEERWEB R2: durable steer inbox REST --------------------------------
+  // The inbox is additive while live; these never ride the legacy steer path.
+
+  /// Capability view (null on ANY failure; a missing feature never offers
+  /// cross-device steer).
+  Future<Map<String, dynamic>?> steerInboxFeature() async {
+    try {
+      final feats = (await _json(
+        'GET',
+        '/v1/capabilities',
+        deadline: metadataTimeout,
+      ))['features'];
+      final f = feats is Map ? feats['steer_inbox'] : null;
+      return f is Map ? Map<String, dynamic>.from(f) : null;
+    } on Object {
+      return null;
+    }
+  }
+
+  /// GET /v1/runs/{id}/steers — the server decides acceptance; seq cursor.
+  Future<Json> runSteers(String runId, {int afterSeq = 0}) => _json(
+    'GET',
+    '/v1/runs/${Uri.encodeComponent(runId)}/steers',
+    query: {'after_seq': '$afterSeq'},
+    deadline: metadataTimeout,
+  );
+
+  /// Durable receipt: answers after run/status TTL, still owner-checked.
+  Future<Json> steerReceipt(String runId, String steerId) => _json(
+    'GET',
+    '/v1/runs/${Uri.encodeComponent(runId)}/steers/${Uri.encodeComponent(steerId)}',
+    deadline: metadataTimeout,
+  );
+
+  /// v1 inbox admission. The decoded envelope is returned VERBATIM: the
+  /// caller maps accepted vs the typed error codes (409/410/429 envelopes
+  /// come back decoded; nothing here guesses the outcome).
+  Future<Json> submitSteer(
+    String runId, {
+    required String input,
+    required String clientRequestId,
+    String? sessionId,
+    String? serverEpoch,
+  }) => _json(
+    'POST',
+    '/v1/runs/${Uri.encodeComponent(runId)}/steer',
+    body: {
+      'input': input,
+      'client_request_id': clientRequestId,
+      'session_id': ?sessionId,
+      'server_epoch': ?serverEpoch,
+    },
+    deadline: metadataTimeout,
+  );
+
+  // ---- STEERWEB R7: notification events ledger REST ------------------------
+
+  Future<Map<String, dynamic>?> notificationEventsFeature() async {
+    try {
+      final feats = (await _json(
+        'GET',
+        '/v1/capabilities',
+        deadline: metadataTimeout,
+      ))['features'];
+      final f = feats is Map ? feats['notification_events'] : null;
+      return f is Map ? Map<String, dynamic>.from(f) : null;
+    } on Object {
+      return null;
+    }
+  }
+
+  /// Cursor page of MY events (server ledger dedups by exact event id).
+  Future<Json> notificationEvents({int after = 0}) => _json(
+    'GET',
+    '/api/notification-events',
+    query: {'after': '$after'},
+    deadline: metadataTimeout,
+  );
+
+  /// Account-scoped read ack; NEVER approves an approval (R7).
+  Future<Json> notificationRead(String eventId) => _json(
+    'POST',
+    '/api/notification-events/${Uri.encodeComponent(eventId)}/read',
+    body: const {},
+  );
+
+  /// steer.ready opt-in for a run the user explicitly picked (R7: no
+  /// per-message notifications).
+  Future<Json> notificationWatch(String runId, {required bool on}) => _json(
+    'POST',
+    '/api/notification-events/steer-ready-watch',
+    body: {'run_id': runId, 'watch': on},
+  );
 
   /// Contract §2: DELETE returns 200; subsequent GET is 404 (P0-verified).
   Future<void> deleteSession(String sid) async {

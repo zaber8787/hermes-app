@@ -15,8 +15,11 @@ an expired card never broadcasts "still approvable".
 """
 from __future__ import annotations
 
+import logging
 import threading
 import time
+
+log = logging.getLogger("hermes-app-compat.approval_push")
 
 TITLE = {"zh-TW": "Hermes 待核准｜{summary}｜{run}",
          "en": "Hermes approval | {summary} | {run}"}
@@ -109,7 +112,9 @@ def attach(inbox, *, ntfy=None, clock=time.monotonic, timers=None, settings=None
            queue_ids=None, timeout=None, status_ok=None):
     """Build the dispatcher and install it on the registry. Every dependency is
     injectable so the P-family tests run without core, sockets or a hub. In
-    production compat supplies the profile-aware real bindings."""
+    production compat supplies the profile-aware real bindings and a status_ok
+    that also honours the capability kill switch, so a disabled unit publishes
+    no in-flight reminders either."""
     if ntfy is None:
         try:
             from . import ntfy_notify as ntfy
@@ -143,20 +148,44 @@ def attach(inbox, *, ntfy=None, clock=time.monotonic, timers=None, settings=None
             m["send_fail"] = m.get("send_fail", 0) + 1
             m["send_fail_last"] = str(error_type or "error")  # sanitized; never the topic
 
-    def publish(entry, phase):
+    def publish(entry, phase, *, gate=True):
+        if gate:
+            # R6: while the notification ledger is live it OWNS the dedup of
+            # the semantic event (initial and reminder phases); (handled, ok).
+            hook = inbox.get("notify_gate")
+            if hook is not None:
+                handled, ok = hook(phase, {
+                    "entry": entry, "pending": entry.get("phase") == "pending",
+                    "publish": lambda: publish(entry, phase, gate=False)})
+                if handled:
+                    return ok
         cfg = settings()
         if not cfg:
             m = metrics()
             m["push_dropped"] = m.get("push_dropped", 0) + 1
+            m["push_dropped_config"] = m.get("push_dropped_config", 0) + 1
+            log.info("approval push dropped: stage=settings phase=%s run_id=%s request_id=%s",
+                     phase, entry["run_id"], entry["request_id"])
             return False
         locale = normalize_locale(cfg.get("locale"))
         title, body = compose(entry, locale=locale, phase=phase, clock=clock)
+        click = None
+        try:  # R7 deep link: exact run + this request, never key/topic
+            from .notification_events import run_link
+            click = run_link(sid=entry.get("session_id"), run_id=entry.get("run_id"),
+                             request_id=entry.get("request_id"))
+        except Exception:
+            click = None
         accepted = ntfy.publish_json(cfg["server"], cfg["topic"], title, body,
                                      priority="high", tags=["warning"],
-                                     on_result=on_result)
+                                     on_result=on_result, click=click)
         m = metrics()
         key = "push_enqueued" if accepted else "push_dropped"
         m[key] = m.get(key, 0) + 1
+        if not accepted:
+            m["push_dropped_queue"] = m.get("push_dropped_queue", 0) + 1
+            log.info("approval push dropped: stage=queue phase=%s run_id=%s request_id=%s",
+                     phase, entry["run_id"], entry["request_id"])
         return accepted
 
     def fire(entry):
@@ -183,8 +212,13 @@ def attach(inbox, *, ntfy=None, clock=time.monotonic, timers=None, settings=None
             delay = reminder_delay(timeout())
             if delay is not None:
                 entry["timer"] = timers(delay, lambda: fire(entry))
-        except Exception:
-            pass  # notifications never gate the native approval chain
+        except Exception as exc:
+            # notifications never gate the native approval chain, but the
+            # stage and error TYPE stay observable (never topic/credential).
+            m = metrics()
+            m["dispatch_error"] = m.get("dispatch_error", 0) + 1
+            log.info("approval push dispatch failed: stage=dispatch run_id=%s request_id=%s "
+                     "error=%s", entry["run_id"], entry["request_id"], type(exc).__name__)
 
     inbox["dispatch"] = dispatch
     return dispatch
