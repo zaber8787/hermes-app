@@ -340,8 +340,11 @@ def install(ctx):
                                 from hermes_constants import get_hermes_home
                                 self_wake.arm_loop(
                                     asyncio.get_running_loop(), get_hermes_home())
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                # silence here once hid "reload never re-arms"
+                                # for a full day (audit ticks dead 12h+)
+                                log.warning("selfwake re-arm failed: %s: %s",
+                                            type(exc).__name__, exc)
 
                         # The wiring table dedupes by qualname, so a force
                         # reload (NEW function objects, same plugin) must
@@ -637,23 +640,19 @@ def _install_history(tx):
     descriptor = inspect.getattr_static(cls, "_message_response")
     if not isinstance(descriptor, staticmethod):
         raise RuntimeError("_message_response is no longer static")
-    _require(api, "_resolve_media_to_data_urls")
     original = descriptor.__func__
-    warned = False
 
+    # OPENPERF P3 (定案2): history serves MEDIA REFERENCES, never whole-file
+    # base64. The old wrapper inlined every MEDIA tag — a real attachment
+    # session shipped 13.8 MB of JSON for 200 rows and every byte rode the
+    # list GET. Reference form is exactly the upstream projection: rows
+    # carry `MEDIA:<path>` and clients fetch images one file at a time via
+    # GET /v1/media/download (older clients keep the attachment-tile UX —
+    # functional, just not inline). The live SSE first frame keeps its
+    # data URL behaviour UNTOUCHED (contract.md pins it).
     @wraps(original)
     def message(row):
-        nonlocal warned
-        result = original(row)
-        if not isinstance(result.get("content"), str):
-            return result
-        try:
-            return {**result, "content": api._resolve_media_to_data_urls(result["content"])}
-        except Exception:
-            if not warned:
-                log.warning("history resolver failed; preserving projected content")
-                warned = True
-            return result
+        return original(row)
     message.__hermes_app_compat__ = VERSION
     tx.set(cls, "_message_response", staticmethod(message))
 

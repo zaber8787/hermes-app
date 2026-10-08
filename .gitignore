@@ -105,3 +105,10 @@ scripts/watch-nudge.sh
 .fix-scratch/
 .audit-scratch/
 .01412fix-evidence/
+.audit2-scratch/
+.01413fix-evidence/
+.openperf-evidence/
+.perf2-scratch/
+.fix2-scratch/
+.sw2-scratch/
+.selfwake2impl-evidence/

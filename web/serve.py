@@ -8,6 +8,7 @@ Bind 介面由部署者選定：未設定時只綁 loopback，绝不預設公開
 網路碰到本站，必須明確設定 HERMES_WEB_HOST（並自行負責入口信任與 TLS）。
 """
 import asyncio
+import json
 import logging
 import os
 import pathlib
@@ -189,10 +190,15 @@ async def _request_upload_then_headers(coro, prog: dict, done: asyncio.Event,
     waiter = asyncio.ensure_future(done.wait())
     overer = asyncio.ensure_future(over.wait())
     loop = asyncio.get_running_loop()
+    # 01413 M3: the idle clock STARTS at hand-over and only REAL bytes move
+    # it. `prog["last"] or loop.time()` re-armed a brand-new full window on
+    # every zero-byte wake, so an upload that never saw a byte could never
+    # expire the stopwatch.
+    started = loop.time() if prog["last"] is None else prog["last"]
     handed_off = False
     try:
         while not done.is_set() and not over.is_set():
-            last = prog["last"] or loop.time()
+            last = started if prog["last"] is None else max(started, prog["last"])
             timeout = last + UPLOAD_IDLE_TIMEOUT - loop.time()
             if timeout <= 0:
                 raise asyncio.TimeoutError()
@@ -312,7 +318,34 @@ async def api_proxy(request: web.Request) -> web.StreamResponse:
         if prog is not None and not sse:
             upstream = await _request_upload_then_headers(req_coro, prog, done, over)
         elif sse:
-            upstream = await req_coro
+            if prog is None:
+                upstream = await req_coro
+            else:
+                # 01413 m2: the SSE long-connection policy covers the
+                # RESPONSE (headers/read deadlines), never the REQUEST body:
+                # an undeclared upload crossing the cap must still land 413,
+                # not a truncated-body success. over.is_set() outranks the
+                # response task exactly like the non-SSE path does.
+                task = asyncio.ensure_future(req_coro)
+                overer = asyncio.ensure_future(over.wait())
+                handed_off = False
+                try:
+                    await asyncio.wait({task, overer},
+                                       return_when=asyncio.FIRST_COMPLETED)
+                    if over.is_set():
+                        raise _BodyTooLarge()
+                    upstream = task.result()
+                    handed_off = True
+                finally:
+                    overer.cancel()
+                    if not task.done():
+                        task.cancel()
+                    try:
+                        result = await task
+                    except (asyncio.CancelledError, Exception):
+                        result = None
+                    if not handed_off and isinstance(result, ClientResponse):
+                        result.release()
         else:
             upstream = await asyncio.wait_for(req_coro, _API_HEADER_TIMEOUT)
     except asyncio.TimeoutError:
@@ -412,6 +445,47 @@ def _memory_item(name: str) -> dict:
                 "content": None, "mtime": None}
 
 
+def _too_large() -> web.Response:
+    # AUDIT-18 gate, applied to the management endpoints too (01413 M2):
+    # the cap lands BEFORE the body is resident — declared length first,
+    # counting for unknown length. Connection: close so aiohttp never
+    # drains the refused upload either.
+    return web.Response(status=413, text="request body too large",
+                        headers={"Connection": "close"})
+
+
+async def _json_body(request: web.Request):
+    """01413 M2/m6: management JSON is small BY CONTRACT (memory content,
+    skill flags) — read it under the proxy's own MAX_BODY_BYTES instead of
+    request.json()'s unbounded read inside the client_max_size=0 app. The
+    MEMORY_FILES char limits stay a separate POLICY (force-save allowed);
+    this is the OOM guard. Returns (body, error_response)."""
+    declared = request.content_length
+    if declared is not None and declared > MAX_BODY_BYTES:
+        return None, _too_large()
+    if declared == 0:
+        return None, web.json_response(
+            {"error": {"message": "invalid JSON body"}}, status=400)
+    buf = bytearray()
+    try:
+        async for chunk in request.content.iter_any():
+            buf.extend(chunk)
+            if len(buf) > MAX_BODY_BYTES:
+                return None, _too_large()
+    except Exception:
+        return None, web.json_response(
+            {"error": {"message": "invalid JSON body"}}, status=400)
+    try:
+        body = json.loads(buf)
+    except Exception:
+        return None, web.json_response(
+            {"error": {"message": "invalid JSON body"}}, status=400)
+    if not isinstance(body, dict):  # 01413 m6: array/string bodies are 400
+        return None, web.json_response(
+            {"error": {"message": "JSON body must be an object"}}, status=400)
+    return body, None
+
+
 async def memories_get(request: web.Request) -> web.Response:
     if not _authorized(request):
         return _unauthorized()
@@ -429,11 +503,9 @@ async def memories_put(request: web.Request) -> web.Response:
     if name not in MEMORY_FILES:
         return web.json_response(
             {"error": {"message": "unknown memory file"}}, status=404)
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response(
-            {"error": {"message": "invalid JSON body"}}, status=400)
+    body, err = await _json_body(request)
+    if err is not None:
+        return err
     content = body.get("content")
     if not isinstance(content, str):  # "" is legal (clears the file)
         return web.json_response(
@@ -458,11 +530,9 @@ async def skills_patch(request: web.Request) -> web.Response:
     if not _authorized(request):
         return _unauthorized()
     name = request.match_info["name"]
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response(
-            {"error": {"message": "invalid JSON body"}}, status=400)
+    body, err = await _json_body(request)
+    if err is not None:
+        return err
     enabled = body.get("enabled")
     if not isinstance(enabled, bool):
         return web.json_response(
@@ -515,12 +585,16 @@ def _static_etag(target: pathlib.Path) -> str:
 
 async def static_handler(request: web.Request) -> web.StreamResponse:
     path = request.match_info.get("path") or "index.html"
+    root = ROOT.resolve()
     target = (ROOT / path).resolve()
-    if not str(target).startswith(str(ROOT.resolve())) or not target.is_file():
+    # 01413 M1: containment is a PATH-COMPONENT relation, not a string
+    # prefix — "/srv/public-private/canary" startswith("/srv/public") and
+    # escaped the root. The SPA fallback gets the same check.
+    if not target.is_relative_to(root) or not target.is_file():
         # SPA 路由回落同样是 index.html 的內容：快取政策必須與 index 一致
         # （WEBSYNC F6：回落分支曾漏掛 no-cache，舊 tab 可被它餵舊版）。
-        target = ROOT / "index.html"
-    if not target.is_file():
+        target = (ROOT / "index.html").resolve()
+    if not target.is_relative_to(root) or not target.is_file():
         return web.Response(status=404)
     etag = _static_etag(target)
     if request.headers.get("If-None-Match") == etag:

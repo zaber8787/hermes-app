@@ -2801,14 +2801,28 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// optional observation epoch is re-checked at the COMMIT point too — a
   /// late GET from a retired observation may not write rows even when the
   /// turn object still looks identical.
+  /// OPENPERF P2 (定案3): the latest-page reads of the cold path, the
+  /// activity revision pass and the pending-recovery observation SHARE one
+  /// in-flight GET — the 141 ms double 200-row read in the report log is
+  /// the regression this pins out.
+  Future<List<Message>>? _latestPageFlight;
+
+  Future<List<Message>> _readLatestPage() => _latestPageFlight ??= repo
+      .messages(sid)
+      .whenComplete(() => _latestPageFlight = null);
+
   Future<void> _latest([Object? token, int? epoch]) async {
-    final page = await repo.messages(sid);
+    // The revision the rows can be claimed CURRENT AS of is the one that
+    // was observable when the GET was ISSUED — reading the snapshot after
+    // the await would stamp writes that landed mid-flight as applied.
+    final revAtIssue = observedActivity?.historyRevision;
+    final page = await _readLatestPage();
     if (_disposed || !identical(_turnToken, token)) return;
     if (epoch != null && epoch != _recoveryEpoch) return;
     messages = mergeMessages([], page);
     _offset = page.length;
     hasOlder = page.length == 200;
-    _afterHistoryCommit(token);
+    _afterHistoryCommit(token, revAtIssue: revAtIssue);
   }
 
   /// The applied-revision bookkeeping every successful history GET shares.
@@ -2816,14 +2830,21 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// it becomes the applied baseline ONLY once the rows are on screen. If the
   /// snapshot moved during the GET, one follow-up activity tick (rate-limited
   /// by the tick itself, never a hot loop) closes the remaining window.
-  void _afterHistoryCommit(Object? token) {
+  void _afterHistoryCommit(Object? token, {HistoryRevision? revAtIssue}) {
     if (_disposed || !identical(_turnToken, token)) return;
-    if (_pendingHistoryRev != null) {
+    if (revAtIssue != null) {
+      _appliedHistoryRevision = revAtIssue;
+      if (_pendingHistoryRev != null &&
+          _pendingHistoryRev!.sameAs(revAtIssue)) {
+        _pendingHistoryRev = null;
+      }
+    } else if (_pendingHistoryRev != null) {
       _appliedHistoryRevision = _pendingHistoryRev;
       _pendingHistoryRev = null;
-    } else if (observedActivity != null) {
-      _appliedHistoryRevision = observedActivity!.historyRevision;
     }
+    // else: activity never resolved by issue time — applied stays unknown
+    // and the next snapshot converges with one background read (P2 made
+    // the two GETs parallel, so the snapshot may legitimately lag).
     _rebuildRemoteRows();
     final snap = observedActivity;
     if (snap != null &&
@@ -2873,7 +2894,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     }
     if (_disposed || busy || loading || _bootstrapping)
       return; // duplicate: no-op
-    loading = _bootstrapping = true; // AUDIT-09: no send until decided
+    // OPENPERF P2 (定案3): rows the reader already has stay on screen —
+    // a warm re-entry neither spins nor re-reads the page; the activity
+    // snapshot decides whether anything moved.
+    final warm = messages.isNotEmpty && !busy;
+    loading = !warm; // AUDIT-09: no send until decided (cold)
+    _bootstrapping = true;
     error = null;
     notifyListeners();
     final pending = store.loadPending(serverUrl, sid);
@@ -2881,16 +2907,28 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       await _adoptPending(pending);
       return;
     }
-    if (activityFreshness == ActivityFreshness.unknown) {
-      // WAVE4: settle the first snapshot BEFORE the history GET joins it —
-      // the attach-fired tick above is awaited here (same single-flight).
-      // A write between the two GETs trips the revision check in
-      // _afterHistoryCommit instead of a swallowed message_count delta.
-      await _activityTick().timeout(
-        const Duration(seconds: 2),
-        onTimeout: () {},
-      );
+    if (warm) {
+      await _activityTick(); // single-flight with the attach-fired tick
+      if (_disposed) return;
+      _bootstrapping = false;
+      loading = false;
+      // Revision drift the snapshot detected (rows older than the view)
+      // closes as a BACKGROUND read — never a blocking spinner re-fetch.
+      if (_pendingHistoryRev != null && !busy) {
+        unawaited(_latest().catchError((_) {}));
+      }
+      final appeared = store.loadPending(serverUrl, sid);
+      if (appeared != null) {
+        await _adoptPending(appeared);
+        return;
+      }
+      if (store.lostNotice(serverUrl, sid) != null) await _reconcileLost();
+      if (!_disposed) notifyListeners();
+      return;
     }
+    // COLD: history and the first activity snapshot ride IN PARALLEL —
+    // the attach-fired single-flight tick needs no await here; whatever
+    // revision it lands with closes (or refines) via _afterHistoryCommit.
     try {
       await _latest();
     } catch (e) {
@@ -3264,7 +3302,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           // the incomplete notice rides along.
           List<Message>? page;
           try {
-            page = await repo.messages(sid); // 對帳：final 由歷史取得。
+            // 對帳：final 由歷史取得。P2: shares the one page flight —
+            // a best-effort read already in flight IS this page.
+            page = await _readLatestPage();
           } catch (_) {}
           if (!_owns(token) || epoch != _recoveryEpoch) return;
           if (page != null) {
@@ -5763,7 +5803,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   void applyDeepLink(RunLink link) {
     _deepLinkFocus = link;
     final eventId = link.eventId;
-    if (eventId != null && eventId.isNotEmpty &&
+    if (eventId != null &&
+        eventId.isNotEmpty &&
         !_deepLinkReadSent.contains(eventId)) {
       _deepLinkReadSent.add(eventId);
       unawaited(markNotificationRead(eventId)); // idempotent; read != approve
@@ -5893,14 +5934,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
-  static MessageKey _notificationKey(NotificationKind kind) =>
-      switch (kind) {
-        NotificationKind.approvalRequest => MessageKey.notificationApproval,
-        NotificationKind.completed => MessageKey.notificationCompleted,
-        NotificationKind.failed => MessageKey.notificationFailed,
-        NotificationKind.steerReady => MessageKey.notificationSteerReady,
-        _ => MessageKey.notificationSettled,
-      };
+  static MessageKey _notificationKey(NotificationKind kind) => switch (kind) {
+    NotificationKind.approvalRequest => MessageKey.notificationApproval,
+    NotificationKind.completed => MessageKey.notificationCompleted,
+    NotificationKind.failed => MessageKey.notificationFailed,
+    NotificationKind.steerReady => MessageKey.notificationSteerReady,
+    _ => MessageKey.notificationSettled,
+  };
 
   Future<void> markNotificationRead(String eventId) async {
     try {

@@ -180,6 +180,7 @@ class AutoWakeObserver {
       }
       final body = reportBody(m.content);
       final stripped = body
+          // i18n-exempt: inbound protocol strip pattern — I18N-PLAN §5
           .replaceAll(RegExp(r'\n*請讀取新到的排程報告並簡短回覆。\s*$'), '')
           .replaceAll(RegExp(r'\n*To stop or manage this job, send me a new '
               r'message \(e\.g\. "stop reminder [^"]+"\)\.?\s*$'), '')

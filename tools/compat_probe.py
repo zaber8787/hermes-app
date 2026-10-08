@@ -158,6 +158,7 @@ def offline(args):
             if args.full_size:
                 cmd.append("--full-size")
             start = time.monotonic()
+            proc = None
             try:
                 proc = subprocess.run(cmd, cwd=home, env=env, capture_output=True, text=True, timeout=900)
                 if output.exists():
@@ -167,6 +168,10 @@ def offline(args):
                               "diagnostic": proc.stderr[-3500:]}
             except subprocess.TimeoutExpired:
                 result = {"id": case, "status": "ERROR", "detail": "worker timeout (900s)"}
+            if result["status"] not in ("PASS",) and not result.get("diagnostic"):
+                # a FAIL used to be un-debuggable from the runner: the worker's
+                # stderr was only kept when it crashed BEFORE reporting.
+                result["diagnostic"] = (proc.stderr if proc else "")[-3500:]
             result["seconds"] = round(time.monotonic()-start, 2)
             result["repair_file"] = "compat/compat.py"
             result["target"] = {

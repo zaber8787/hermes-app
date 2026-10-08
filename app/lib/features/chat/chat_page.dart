@@ -818,18 +818,331 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (!scroll.hasClients) return;
     final extent = scroll.position.maxScrollExtent;
     final offset = scroll.offset;
+    // The anchor row must be measured against a layout that reflects the
+    // CURRENT offset — a listener-fired call runs mid-notification, while
+    // the render tree still shows the previous frame.
+    await WidgetsBinding.instance.endOfFrame;
+    if (!mounted || !scroll.hasClients) return;
+    final anchor = _firstVisibleTimelineRow();
+
+    // Estimated row index of the anchor for placeholder-scale refinement —
+    // computed AFTER the prepend, in the new page's index space.
+    final anchorId = switch (anchor?.$1) {
+      final String k when k.startsWith('entry:') => k.split(':').last,
+      _ => null,
+    };
     await ref.read(chatProvider(widget.session.id)).loadOlder();
     if (!mounted) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (scroll.hasClients) {
+    final anchorIndex = anchorId == null
+        ? null
+        : ref
+              .read(chatProvider(widget.session.id))
+              .messages
+              .indexWhere((m) => m.id == anchorId);
+
+    // OPENPERF P1: with a lazily-built timeline the prepended extent is
+    // first an ESTIMATE. Anchor restore rides the anchored row's MEASURED
+    // position; the extent-delta formula stays only as the fallback, and
+    // the loop re-targets until the frame stops moving (bounded).
+    _refineOlderAnchor(anchor, extent, offset, 8, anchorIndex);
+  }
+
+  /// The key + screen dy of the topmost BUILT timeline row, so a prepend
+  /// can be undone against real measured geometry instead of the sliver's
+  /// extent estimate. Keys live on the delegate's children.
+  (Object?, double)? _firstVisibleTimelineRow() {
+    if (!scroll.hasClients) return null;
+    final viewport = scroll.position.context.storageContext.findRenderObject();
+    if (viewport == null) return null;
+    Element? listElement;
+    void locate(Element element) {
+      if (listElement != null) return;
+      if (element.widget is SliverList) {
+        listElement = element;
+        return;
+      }
+      element.visitChildren(locate);
+    }
+
+    context.visitChildElements(locate);
+    final list = listElement;
+    if (list == null) return null;
+    final visible = <(Object?, double)>[];
+    final above = <(Object?, double)>[];
+    list.visitChildren((child) {
+      final ro = child.renderObject;
+      if (ro is! RenderBox) return;
+      final dy = ro.getTransformTo(viewport).getTranslation().y;
+      if (!dy.isFinite) return;
+      final key = _rowKeyValueOf(child.widget.key);
+      (dy >= -1 ? visible : above).add((key, dy));
+    });
+    (Object?, double)? best;
+    for (final row in above) {
+      if (best == null || row.$2 > best.$2) best = row;
+    }
+    for (final row in visible) {
+      if (best == null || row.$2 < best.$2) best = row;
+    }
+    return best;
+  }
+
+  /// Measured screen dy of the row carrying [keyValue], or null while the
+  /// row is outside the built window.
+  double? _timelineRowDy(Object keyValue) {
+    if (!scroll.hasClients) return null;
+    final viewport = scroll.position.context.storageContext.findRenderObject();
+    if (viewport == null) return null;
+    Element? listElement;
+    void locate(Element element) {
+      if (listElement != null) return;
+      if (element.widget is SliverList) {
+        listElement = element;
+        return;
+      }
+      element.visitChildren(locate);
+    }
+
+    context.visitChildElements(locate);
+    final list = listElement;
+    if (list == null) return null;
+    double? dy;
+    list.visitChildren((child) {
+      if (dy != null) return;
+      if (_rowKeyValueOf(child.widget.key) != keyValue) return;
+      if (!_rowIsReal(child)) return;
+      final ro = child.renderObject;
+      if (ro is! RenderBox) return;
+      final y = ro.getTransformTo(viewport).getTranslation().y;
+      if (y.isFinite) dy = y;
+    });
+    return dy;
+  }
+
+  /// The adaptor wraps delegate children in `KeyedSubtree(ValueKey(key))`;
+  /// dig out the row's own key value through whatever wrapping remains.
+  Object? _rowKeyValueOf(Object? key) {
+    while (key is ValueKey<Object> && key.value is Key) {
+      key = (key.value as Key);
+    }
+    return key is ValueKey<Object> ? key.value : key;
+  }
+
+  /// A lazily-built row only lies about its geometry while it is still a
+  /// placeholder; measurement must skip rows that never realised.
+  bool _rowIsReal(Element row) {
+    var real = false;
+    void probe(Element e) {
+      if (real) return;
+      if (e.widget is EntryView) {
+        real = true;
+        return;
+      }
+      e.visitChildren(probe);
+    }
+
+    row.visitChildren(probe);
+    return real;
+  }
+
+  void _refineOlderAnchor(
+    (Object?, double)? anchor,
+    double baseExtent,
+    double baseOffset,
+    int refine, [
+    int? anchorIndex,
+  ]) {
+    if (!scroll.hasClients || !mounted || anchor == null) return;
+    final position = scroll.position;
+    final anchorKey = anchor.$1;
+    final now = anchorKey != null ? _timelineRowDy(anchorKey) : null;
+
+    if (now != null && _revealFocus != null) {
+      _revealFocus = null;
+      if (mounted) setState(() {});
+    }
+    if (now != null) {
+      // Measured: push the anchored row back to its recorded dy. Every
+      // refine pass measures what the previous jump revealed, so the
+      // unmeasured extent above the viewport shrinks frame by frame.
+      final diff = now - anchor.$2;
+      if (diff.abs() > 0.5) {
         scroll.jumpTo(
-          (offset + scroll.position.maxScrollExtent - extent).clamp(
-            0.0,
-            scroll.position.maxScrollExtent,
-          ),
+          (position.pixels + diff).clamp(0.0, position.maxScrollExtent),
         );
       }
-    });
+    } else if (anchorIndex != null && anchorIndex >= 0) {
+      // The anchor row is still a placeholder: centre its estimate in the
+      // viewport (pinned real) so its element gets built; the measured
+      // correctBy above lands it on the exact recorded dy next tick.
+      final total = position.maxScrollExtent + position.viewportDimension;
+      final rows = ref.read(chatProvider(widget.session.id)).messages.isEmpty
+          ? 1.0
+          : ref
+                .read(chatProvider(widget.session.id))
+                .messages
+                .length
+                .toDouble();
+      final target =
+          (anchorIndex * total / rows - position.viewportDimension / 2).clamp(
+            0.0,
+            position.maxScrollExtent,
+          );
+      if (mounted) setState(() => _revealFocus = anchorIndex);
+
+      scroll.jumpTo(target);
+    } else {
+      // Fallback (pre-change shape): estimate delta.
+      final target = (baseOffset + position.maxScrollExtent - baseExtent).clamp(
+        0.0,
+        position.maxScrollExtent,
+      );
+      if ((position.pixels - target).abs() > 0.5) scroll.jumpTo(target);
+    }
+    if (refine == 0 && _revealFocus != null) {
+      _revealFocus = null;
+      if (mounted) setState(() {});
+    }
+    if (refine > 0) {
+      // Reveal window follows the jump so placeholders near the landing
+      // zone realise; the tick also lets extent convergence exit.
+      if (mounted) setState(() => _revealRevision++);
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _refineOlderAnchor(
+          anchor,
+          baseExtent,
+          baseOffset,
+          refine - 1,
+          anchorIndex,
+        ),
+      );
+    }
+  }
+
+  /// OPENPERF P1: small histories stay a single box sliver — exactly the
+  /// pre-virtualization ListView item, onstage semantics included; the
+  /// lazy sliver only takes over where viewport culling pays off.
+  Widget _timelineSliver({
+    required List<Message> messages,
+    required List<RemoteMessageRow> remoteRows,
+    required Set<String> wakeRowIds,
+    required bool detailed,
+    required Map<String, ToolViewPayload> toolOverrides,
+    required String slotScope,
+    required int revealRevision,
+    required int? revealFocus,
+    int? realFrom,
+  }) {
+    if (messages.length <= 40) {
+      return SliverPadding(
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+        sliver: SliverToBoxAdapter(
+          child: MessageTimeline(
+            messages: messages,
+            remoteRows: remoteRows,
+            wakeRowIds: wakeRowIds,
+            detailed: detailed,
+            toolOverrides: toolOverrides,
+            slotScope: slotScope,
+          ),
+        ),
+      );
+    }
+    return SliverPadding(
+      padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+      sliver: MessageTimelineSliver(
+        messages: messages,
+        remoteRows: remoteRows,
+        wakeRowIds: wakeRowIds,
+        detailed: detailed,
+        toolOverrides: toolOverrides,
+        slotScope: slotScope,
+        reveal: TimelineReveal(
+          pixels: scroll.hasClients ? scroll.position.pixels : 0,
+          viewport: scroll.hasClients ? scroll.position.viewportDimension : 640,
+          revision: revealRevision,
+          focusIndex: revealFocus,
+          realFrom: realFrom,
+        ),
+      ),
+    );
+  }
+
+  /// OPENPERF P1: box widgets entering the sliver list keep the old
+  /// ListView's 16px horizontal content inset.
+  Widget _padded(Widget child) => SliverPadding(
+    padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
+    sliver: SliverToBoxAdapter(child: child),
+  );
+
+  /// OPENPERF P1: a lazy list's bottom is first an estimate; every jump
+  /// measures the tail it lands on. Re-target until the offset actually
+  /// sits at the (now measured) bottom, bounded so a pathological extent
+  /// can never spin frames forever.
+  int _revealRevision = 0;
+  int? _revealFocus;
+  int? _followRealFloor;
+
+  void _followBottom(int refine) {
+    if (!scroll.hasClients || !mounted) return;
+    final position = scroll.position;
+    // OPENPERF: an EMPTY page (max == 0, rows not committed yet) is not a
+    // settled position — do not let it consume the one-shot follow budget;
+    // the next build's postFrame tick rides when rows are real.
+    if (position.maxScrollExtent == 0) return;
+    // Settled at bottom: exactly, or — over a page whose extents above
+    // the landing band are still estimates — as close as the pinned real
+    // tail chunk guarantees (the band itself shows built content either
+    // way; placeholder slack above it never reaches into the viewport).
+    final tailPinned = _followRealFloor != null;
+    final gap = position.maxScrollExtent - position.pixels;
+    if (gap <= 0.5 || (tailPinned && gap <= position.viewportDimension / 2)) {
+      firstLoaded = true;
+      // Landing done: the sweep pin drops. Rows that went real KEEP real
+      // (element state latches — the delegate now always emits _LazyRow),
+      // and clearing restores the idle geometry rule for later scrolls.
+      if (_revealFocus != null || _followRealFloor != null) {
+        _revealFocus = null;
+        _followRealFloor = null;
+        if (mounted) setState(() {});
+      }
+      return;
+    }
+    // Cold-open follow over a placeholder-scaled page: stream the tail
+    // REAL from the bottom up, chunk by chunk, until the geometry stops
+    // moving under the jump — proximity mapping alone cannot be trusted
+    // while the extents are still estimates (P1 cold-open landing).
+    // The landing band must be real content: pin the bottom chunk real
+    // (row estimates are good to a few percent, so one chunk stabilises
+    // the bottom; probes stream the rest as their boxes get laid out).
+    final rows = ref.read(chatProvider(widget.session.id)).messages.length;
+    // Two-stage sweep. Stage 1 keeps the page PURE UNIFORM placeholders so
+    // the sliver's index×extent mapping is exact and one jump lands on the
+    // tail. Stage 2 streams the last chunk real under the landing band;
+    // the refine ticks then just close the residual gap.
+    if (rows > 40 && _followRealFloor == null) {
+      _followRealFloor = rows;
+      if (mounted) setState(() {});
+    } else if (_followRealFloor != null && _followRealFloor! > rows - 12) {
+      _followRealFloor = rows - 12;
+      if (mounted) setState(() {});
+    }
+    // Only ever CLOSE the gap to the bottom; never yank an established
+    // position upward. The cold-open sweep relies on the refine ticks to
+    // walk the landing window down as extents become real; a reader who
+    // is already parked higher up (small session, short page) stays put,
+    // matching the pre-virtualization behaviour.
+    scroll.jumpTo(
+      position.pixels + (position.maxScrollExtent - position.pixels),
+    );
+    firstLoaded = true;
+    if (refine > 0) {
+      // Placeholder rows re-check the reveal window on every refine tick.
+      if (mounted) setState(() => _revealRevision++);
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _followBottom(refine - 1),
+      );
+    }
   }
 
   // Enter 傳送、Shift+Enter 換行（桌面/網頁鍵盤慣例）；行動端 Enter 由下方
@@ -1099,12 +1412,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           ].take(8).toList()
         : const <_SlashItem>[];
     if (!c.loading && (!firstLoaded || follow) && !c.loadingOlder) {
-      WidgetsBinding.instance.addPostFrameCallback((_) {
-        if (scroll.hasClients && mounted) {
-          scroll.jumpTo(scroll.position.maxScrollExtent);
-          firstLoaded = true;
-        }
-      });
+      WidgetsBinding.instance.addPostFrameCallback((_) => _followBottom(6));
     }
     return Scaffold(
       appBar: AppBar(
@@ -1484,67 +1792,104 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                             ref.invalidate(skillsProvider);
                             await c.load();
                           },
-                          child: ListView(
+                          // OPENPERF P1 (定案1): slivers + a lazily-built
+                          // timeline sliver — 200-row pages mount viewport
+                          // rows only, never one eager Column.
+                          child: CustomScrollView(
+                            key: const ValueKey('chat.timelineScroll'),
                             controller: scroll,
                             physics: const AlwaysScrollableScrollPhysics(),
-                            padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-                            children: [
+                            // Small sessions stay fully built — lazy
+                            // culling only pays off once a history is
+                            // long, and full build keeps row identity
+                            // inspectable everywhere it used to be.
+
+                            slivers: [
+                              // OPENPERF P1: ListView-padding equivalence —
+                              // 8/24 ride the content edges, 16 per row.
+                              const SliverToBoxAdapter(
+                                child: SizedBox(height: 8),
+                              ),
                               if (c.hasOlder)
-                                Center(
-                                  child: TextButton(
-                                    onPressed: c.loadingOlder || c.busy
-                                        ? null
-                                        : older,
-                                    child: Text(
-                                      strings.resolve(
-                                        c.loadingOlder
-                                            ? MessageKey.chatM022
-                                            : MessageKey.chatM023,
+                                _padded(
+                                  Center(
+                                    child: TextButton(
+                                      onPressed: c.loadingOlder || c.busy
+                                          ? null
+                                          : older,
+                                      child: Text(
+                                        strings.resolve(
+                                          c.loadingOlder
+                                              ? MessageKey.chatM022
+                                              : MessageKey.chatM023,
+                                        ),
                                       ),
                                     ),
                                   ),
                                 ),
                               if (c.messages.isEmpty && c.live == null)
-                                Padding(
-                                  padding: const EdgeInsets.all(40),
-                                  child: Text(
-                                    strings.resolve(MessageKey.chatM024),
-                                    textAlign: TextAlign.center,
+                                _padded(
+                                  Padding(
+                                    padding: const EdgeInsets.all(40),
+                                    child: Text(
+                                      strings.resolve(MessageKey.chatM024),
+                                      textAlign: TextAlign.center,
+                                    ),
                                   ),
                                 ),
-                              MessageTimeline(
-                                messages: c.messages,
-                                remoteRows: c.remoteRows,
-                                wakeRowIds: c.wakeRowIds,
-                                detailed: c.detailed,
-                                toolOverrides: toolOverlap.durableOverrides,
-                                slotScope: toolOverlap.scope,
+                              SliverPadding(
+                                padding: const EdgeInsets.fromLTRB(
+                                  16,
+                                  0,
+                                  16,
+                                  0,
+                                ),
+                                sliver: _timelineSliver(
+                                  messages: c.messages,
+                                  remoteRows: c.remoteRows,
+                                  wakeRowIds: c.wakeRowIds,
+                                  detailed: c.detailed,
+                                  toolOverrides: toolOverlap.durableOverrides,
+                                  slotScope: toolOverlap.scope,
+                                  revealRevision: _revealRevision,
+                                  revealFocus: _revealFocus,
+                                  // Stage-1 default: a cold, big page is
+                                  // ALL placeholders from its first frame
+                                  // (uniform mapping for the sweep jump).
+                                  realFrom:
+                                      _followRealFloor ??
+                                      (!firstLoaded && c.messages.length > 40
+                                          ? c.messages.length
+                                          : null),
+                                ),
                               ),
                               // APPWAKE D: quiet status line while reports wait
                               // for their (rate-limited) auto-read.
                               if (c.wakeFeatureOffered &&
                                   _wakeHintText(strings, c) != null)
-                                Padding(
-                                  key: const ValueKey('chat.wakeHint'),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 20,
-                                    vertical: 2,
-                                  ),
-                                  child: Row(
-                                    children: [
-                                      Icon(
-                                        Icons.schedule,
-                                        size: 14,
-                                        color: Theme.of(
-                                          context,
-                                        ).colorScheme.outline,
-                                      ),
-                                      const SizedBox(width: 6),
-                                      Text(
-                                        _wakeHintText(strings, c)!,
-                                        style: const TextStyle(fontSize: 12),
-                                      ),
-                                    ],
+                                _padded(
+                                  Padding(
+                                    key: const ValueKey('chat.wakeHint'),
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 20,
+                                      vertical: 2,
+                                    ),
+                                    child: Row(
+                                      children: [
+                                        Icon(
+                                          Icons.schedule,
+                                          size: 14,
+                                          color: Theme.of(
+                                            context,
+                                          ).colorScheme.outline,
+                                        ),
+                                        const SizedBox(width: 6),
+                                        Text(
+                                          _wakeHintText(strings, c)!,
+                                          style: const TextStyle(fontSize: 12),
+                                        ),
+                                      ],
+                                    ),
                                   ),
                                 ),
                               // R2: every busy shape must look busy. The pending
@@ -1555,276 +1900,321 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                               // gap before the stream attaches, bootstrap
                               // recovering, and the detached poll pass.
                               if (c.pendingBubbleText != null)
-                                EntryView(
-                                  entry: DisplayEntry(
-                                    EntryKind.user,
-                                    Message(
-                                      id: 'pending',
-                                      role: 'user',
-                                      content: c.pendingBubbleText!,
+                                _padded(
+                                  EntryView(
+                                    entry: DisplayEntry(
+                                      EntryKind.user,
+                                      Message(
+                                        id: 'pending',
+                                        role: 'user',
+                                        content: c.pendingBubbleText!,
+                                      ),
                                     ),
                                   ),
                                 ),
                               if (c.busy && c.live == null)
-                                Padding(
-                                  padding: const EdgeInsets.only(
-                                    right: 20,
-                                    bottom: 4,
-                                  ),
-                                  child: Row(
-                                    mainAxisAlignment: MainAxisAlignment.end,
-                                    children: [
-                                      // STUCK-BUSY B4 / OFFLINE-SEND R1 (A5) /
-                                      // R3 §5.3: the controller derives ONE
-                                      // presentation state; this row only
-                                      // renders it. `dispatching` says「正在送出
-                                      // 訊息…」with NO dots (never 發言中);
-                                      // `activeConfirmed` keeps the existing
-                                      // 發言中 row; `countdown` shows the
-                                      // persisted recovery countdown; `silent`
-                                      // (uncertain / evidence-less) shows and
-                                      // animates nothing.
-                                      if (c.livePresentation ==
-                                          LivePresentation.countdown)
-                                        Text(
-                                          strings.render(
-                                            UiMessage.local(
-                                              MessageKey.chatRecoveryCountdown,
-                                              args: {
-                                                'seconds':
-                                                    c.recoverySecondsRemaining!,
-                                              },
+                                _padded(
+                                  Padding(
+                                    padding: const EdgeInsets.only(
+                                      right: 20,
+                                      bottom: 4,
+                                    ),
+                                    child: Row(
+                                      mainAxisAlignment: MainAxisAlignment.end,
+                                      children: [
+                                        // STUCK-BUSY B4 / OFFLINE-SEND R1 (A5) /
+                                        // R3 §5.3: the controller derives ONE
+                                        // presentation state; this row only
+                                        // renders it. `dispatching` says「正在送出
+                                        // 訊息…」with NO dots (never 發言中);
+                                        // `activeConfirmed` keeps the existing
+                                        // 發言中 row; `countdown` shows the
+                                        // persisted recovery countdown; `silent`
+                                        // (uncertain / evidence-less) shows and
+                                        // animates nothing.
+                                        if (c.livePresentation ==
+                                            LivePresentation.countdown)
+                                          Text(
+                                            strings.render(
+                                              UiMessage.local(
+                                                MessageKey
+                                                    .chatRecoveryCountdown,
+                                                args: {
+                                                  'seconds': c
+                                                      .recoverySecondsRemaining!,
+                                                },
+                                              ),
+                                            ),
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Theme.of(
+                                                context,
+                                              ).colorScheme.onSurfaceVariant,
+                                            ),
+                                          )
+                                        else if (c.livePresentation ==
+                                            LivePresentation.dispatching)
+                                          Text(
+                                            strings.resolve(
+                                              MessageKey.chatSendDispatching,
+                                            ),
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Theme.of(
+                                                context,
+                                              ).colorScheme.onSurfaceVariant,
+                                            ),
+                                          )
+                                        else if (c.livePresentation ==
+                                            LivePresentation
+                                                .activeConfirmed) ...[
+                                          Text(
+                                            strings.resolve(
+                                              MessageKey.chatM025,
+                                            ),
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color: Theme.of(
+                                                context,
+                                              ).colorScheme.onSurfaceVariant,
                                             ),
                                           ),
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Theme.of(
-                                              context,
-                                            ).colorScheme.onSurfaceVariant,
-                                          ),
-                                        )
-                                      else if (c.livePresentation ==
-                                          LivePresentation.dispatching)
-                                        Text(
-                                          strings.resolve(
-                                            MessageKey.chatSendDispatching,
-                                          ),
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Theme.of(
-                                              context,
-                                            ).colorScheme.onSurfaceVariant,
-                                          ),
-                                        )
-                                      else if (c.livePresentation ==
-                                          LivePresentation.activeConfirmed) ...[
-                                        Text(
-                                          strings.resolve(MessageKey.chatM025),
-                                          style: TextStyle(
-                                            fontSize: 12,
-                                            color: Theme.of(
-                                              context,
-                                            ).colorScheme.onSurfaceVariant,
-                                          ),
-                                        ),
-                                        const SizedBox(width: 8),
-                                        const TypingDots(),
+                                          const SizedBox(width: 8),
+                                          const TypingDots(),
+                                        ],
                                       ],
-                                    ],
+                                    ),
                                   ),
                                 ),
                               // APPROVALPUSH B3 (R6): exact-request cards for
                               // every pending approval in this session (local OR
                               // remote — never a fake turn row).
                               if (c.approvalInboxSupported)
-                                PendingApprovalsPanel(
-                                  requests: c.pendingApprovals(),
-                                  unconfirmedRuns: c.approvalUnconfirmedRuns,
-                                  onResolve: c.resolveApprovalExact,
-                                  onReconfirm: c.reconfirmApprovals,
-                                  focusRequestId: c.approvalFocus,
+                                _padded(
+                                  PendingApprovalsPanel(
+                                    requests: c.pendingApprovals(),
+                                    unconfirmedRuns: c.approvalUnconfirmedRuns,
+                                    onResolve: c.resolveApprovalExact,
+                                    onReconfirm: c.reconfirmApprovals,
+                                    focusRequestId: c.approvalFocus,
+                                  ),
                                 ),
                               if (c.approvalLegacyNotice)
-                                Padding(
-                                  key: const ValueKey('approval-legacy-notice'),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 4,
-                                  ),
-                                  child: Text(
-                                    strings.resolve(
-                                      MessageKey.approvalCrossDeviceUnavailable,
+                                _padded(
+                                  Padding(
+                                    key: const ValueKey(
+                                      'approval-legacy-notice',
                                     ),
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Theme.of(
-                                        context,
-                                      ).colorScheme.onSurfaceVariant,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 4,
+                                    ),
+                                    child: Text(
+                                      strings.resolve(
+                                        MessageKey
+                                            .approvalCrossDeviceUnavailable,
+                                      ),
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Theme.of(
+                                          context,
+                                        ).colorScheme.onSurfaceVariant,
+                                      ),
                                     ),
                                   ),
                                 ),
                               // STEERWEB R4: durable steer receipt cards — their
                               // OWN surface; never message rows, never a turn.
-                              if (c.steerInboxEnabled &&
-                                  c.steerReceipts.isNotEmpty)
-                                Padding(
-                                  key: const ValueKey('steer-receipts-panel'),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 4,
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      for (final r in c.steerReceipts)
-                                        Row(
-                                          key: ValueKey(
-                                            'steer-receipt-${r.steerId}',
-                                          ),
-                                          mainAxisSize: MainAxisSize.min,
-                                          children: [
-                                            const Icon(Icons.outbox, size: 16),
-                                            const SizedBox(width: 6),
-                                            Flexible(
-                                              child: Text(
-                                                strings.resolve(
-                                                  steerStateKey(r),
-                                                  args: {
-                                                    'sequence': r.sequence,
-                                                  },
-                                                ),
-                                                style: const TextStyle(
-                                                  fontSize: 12,
-                                                ),
-                                              ),
-                                            ),
-                                          ],
+                              // OPENPERF P1: the tail widgets stay eager box
+                              // children — ONE adapter, original order kept.
+                              _padded(
+                                Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    if (c.steerInboxEnabled &&
+                                        c.steerReceipts.isNotEmpty)
+                                      Padding(
+                                        key: const ValueKey(
+                                          'steer-receipts-panel',
                                         ),
-                                      for (final runId in {
-                                        for (final r in c.steerReceipts)
-                                          r.runId,
-                                      })
-                                        if (c.steerDraftFor(runId) != null)
-                                          TextButton.icon(
-                                            key: ValueKey('steer-retry-$runId'),
-                                            onPressed: () => unawaited(
-                                              c.retrySteerDraft(runId),
-                                            ),
-                                            icon: const Icon(
-                                              Icons.refresh,
-                                              size: 16,
-                                            ),
-                                            label: Text(
-                                              strings.resolve(
-                                                MessageKey.steerRetrySame,
-                                              ),
-                                            ),
-                                          ),
-                                    ],
-                                  ),
-                                ),
-                              // STEERWEB R7: the account notification ledger —
-                              // exact-event cards with read acks; NEVER text-
-                              // derived, NEVER an approval action disguised.
-                              if (c.notificationEventsEnabled &&
-                                  c.notifications.hasUnread)
-                                Padding(
-                                  key: const ValueKey('notification-panel'),
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 16,
-                                    vertical: 4,
-                                  ),
-                                  child: Column(
-                                    crossAxisAlignment:
-                                        CrossAxisAlignment.start,
-                                    children: [
-                                      for (final e in c.notifications.unread)
-                                        Row(
-                                          key: ValueKey(
-                                            'notification-${e.eventId}',
-                                          ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 4,
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
                                           children: [
-                                            Expanded(
-                                              child: InkWell(
+                                            for (final r in c.steerReceipts)
+                                              Row(
                                                 key: ValueKey(
-                                                  'notification-open-${e.eventId}',
+                                                  'steer-receipt-${r.steerId}',
                                                 ),
-                                                onTap: () =>
-                                                    _openNotification(e.link),
-                                                child: Text(
-                                                  strings.resolve(switch (e
-                                                      .kind) {
-                                                    NotificationKind
-                                                        .approvalRequest =>
-                                                      MessageKey
-                                                          .notificationApproval,
-                                                    NotificationKind
-                                                        .completed =>
-                                                      MessageKey
-                                                          .notificationCompleted,
-                                                    NotificationKind.failed =>
-                                                      MessageKey
-                                                          .notificationFailed,
-                                                    NotificationKind
-                                                        .steerReady =>
-                                                      MessageKey
-                                                          .notificationSteerReady,
-                                                    _ =>
-                                                      MessageKey
-                                                          .notificationSettled,
-                                                  }),
-                                                  style: const TextStyle(
-                                                    fontSize: 12,
+                                                mainAxisSize: MainAxisSize.min,
+                                                children: [
+                                                  const Icon(
+                                                    Icons.outbox,
+                                                    size: 16,
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Flexible(
+                                                    child: Text(
+                                                      strings.resolve(
+                                                        steerStateKey(r),
+                                                        args: {
+                                                          'sequence':
+                                                              r.sequence,
+                                                        },
+                                                      ),
+                                                      style: const TextStyle(
+                                                        fontSize: 12,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                            for (final runId in {
+                                              for (final r in c.steerReceipts)
+                                                r.runId,
+                                            })
+                                              if (c.steerDraftFor(runId) !=
+                                                  null)
+                                                TextButton.icon(
+                                                  key: ValueKey(
+                                                    'steer-retry-$runId',
+                                                  ),
+                                                  onPressed: () => unawaited(
+                                                    c.retrySteerDraft(runId),
+                                                  ),
+                                                  icon: const Icon(
+                                                    Icons.refresh,
+                                                    size: 16,
+                                                  ),
+                                                  label: Text(
+                                                    strings.resolve(
+                                                      MessageKey.steerRetrySame,
+                                                    ),
                                                   ),
                                                 ),
-                                              ),
-                                            ),
-                                            TextButton(
-                                              key: ValueKey(
-                                                'notification-read-${e.eventId}',
-                                              ),
-                                              onPressed: () => unawaited(
-                                                c.markNotificationRead(
-                                                  e.eventId,
-                                                ),
-                                              ),
-                                              child: Text(
-                                                strings.resolve(
-                                                  MessageKey.notificationRead,
-                                                ),
-                                              ),
-                                            ),
                                           ],
                                         ),
-                                    ],
-                                  ),
+                                      ),
+                                    // STEERWEB R7: the account notification ledger —
+                                    // exact-event cards with read acks; NEVER text-
+                                    // derived, NEVER an approval action disguised.
+                                    if (c.notificationEventsEnabled &&
+                                        c.notifications.hasUnread)
+                                      Padding(
+                                        key: const ValueKey(
+                                          'notification-panel',
+                                        ),
+                                        padding: const EdgeInsets.symmetric(
+                                          horizontal: 16,
+                                          vertical: 4,
+                                        ),
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            for (final e
+                                                in c.notifications.unread)
+                                              Row(
+                                                key: ValueKey(
+                                                  'notification-${e.eventId}',
+                                                ),
+                                                children: [
+                                                  Expanded(
+                                                    child: InkWell(
+                                                      key: ValueKey(
+                                                        'notification-open-${e.eventId}',
+                                                      ),
+                                                      onTap: () =>
+                                                          _openNotification(
+                                                            e.link,
+                                                          ),
+                                                      child: Text(
+                                                        strings.resolve(switch (e
+                                                            .kind) {
+                                                          NotificationKind
+                                                              .approvalRequest =>
+                                                            MessageKey
+                                                                .notificationApproval,
+                                                          NotificationKind
+                                                              .completed =>
+                                                            MessageKey
+                                                                .notificationCompleted,
+                                                          NotificationKind
+                                                              .failed =>
+                                                            MessageKey
+                                                                .notificationFailed,
+                                                          NotificationKind
+                                                              .steerReady =>
+                                                            MessageKey
+                                                                .notificationSteerReady,
+                                                          _ =>
+                                                            MessageKey
+                                                                .notificationSettled,
+                                                        }),
+                                                        style: const TextStyle(
+                                                          fontSize: 12,
+                                                        ),
+                                                      ),
+                                                    ),
+                                                  ),
+                                                  TextButton(
+                                                    key: ValueKey(
+                                                      'notification-read-${e.eventId}',
+                                                    ),
+                                                    onPressed: () => unawaited(
+                                                      c.markNotificationRead(
+                                                        e.eventId,
+                                                      ),
+                                                    ),
+                                                    child: Text(
+                                                      strings.resolve(
+                                                        MessageKey
+                                                            .notificationRead,
+                                                      ),
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                    if (c.live != null)
+                                      LiveTurnView(
+                                        turn: c.live!,
+                                        detailed: c.detailed,
+                                        onResolve: c.resolveApproval,
+                                        // R1 (A5): the transcript owns its dots on the
+                                        // SAME phase rule as before — uncertain never
+                                        // "types". (R3 §5.3 changes the WORDING of an
+                                        // unacknowledged send, not this animation.)
+                                        showTyping: switch (c.phase) {
+                                          ChatPhase.sending => true,
+                                          ChatPhase.recovering =>
+                                            c.recoveryActiveConfirmed,
+                                          _ => false,
+                                        },
+                                        // GHOST-DUP B4 (legacy) + R3 §5.4: attempt-
+                                        // backed turns exclude transcript rows by
+                                        // durable ID ONLY — never on text.
+                                        transcriptUserAnchor: c.pendingInput,
+                                        identityOnlyExclusion:
+                                            c.turnIsAttemptBacked,
+                                        representedUserIds: {
+                                          for (final m in c.messages) m.id,
+                                        },
+                                        toolProjection: toolOverlap,
+                                      ),
+                                  ],
                                 ),
-                              if (c.live != null)
-                                LiveTurnView(
-                                  turn: c.live!,
-                                  detailed: c.detailed,
-                                  onResolve: c.resolveApproval,
-                                  // R1 (A5): the transcript owns its dots on the
-                                  // SAME phase rule as before — uncertain never
-                                  // "types". (R3 §5.3 changes the WORDING of an
-                                  // unacknowledged send, not this animation.)
-                                  showTyping: switch (c.phase) {
-                                    ChatPhase.sending => true,
-                                    ChatPhase.recovering =>
-                                      c.recoveryActiveConfirmed,
-                                    _ => false,
-                                  },
-                                  // GHOST-DUP B4 (legacy) + R3 §5.4: attempt-
-                                  // backed turns exclude transcript rows by
-                                  // durable ID ONLY — never on text.
-                                  transcriptUserAnchor: c.pendingInput,
-                                  identityOnlyExclusion: c.turnIsAttemptBacked,
-                                  representedUserIds: {
-                                    for (final m in c.messages) m.id,
-                                  },
-                                  toolProjection: toolOverlap,
-                                ),
+                              ),
+                              const SliverToBoxAdapter(
+                                child: SizedBox(height: 24),
+                              ),
                             ],
                           ),
                         ),

@@ -62,6 +62,56 @@ bool isImageReference(String source) {
       ).hasMatch(uri.path);
 }
 
+final RegExp _serverImagePath = RegExp(
+  r'\.(png|jpe?g|gif|webp|bmp)$',
+  caseSensitive: false,
+);
+
+/// OPENPERF P3: inline view of a history MEDIA reference — pixels ride
+/// GET /v1/media/download, fetched once when the row enters the viewport.
+class ServerPathImage extends ConsumerWidget {
+  const ServerPathImage(this.path, {super.key, this.filename});
+  final String path;
+  final String? filename;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FutureBuilder<Uint8List>(
+      future: ref.read(repositoryProvider).downloadServerFile(path),
+      builder: (context, snapshot) {
+        if (snapshot.hasError) {
+          return AttachmentTile(path, filename: filename);
+        }
+        if (!snapshot.hasData) {
+          return const SizedBox(
+            height: 120,
+            child: Center(child: CircularProgressIndicator()),
+          );
+        }
+        return MessageImageMemory(snapshot.data!);
+      },
+    );
+  }
+}
+
+/// Bytes-from-download rendering sharing MessageImage's chrome is overkill
+/// here: the tile-level tap-to-zoom lives in AttachmentTile; inline is
+/// contain-fit like every other image in the timeline.
+class MessageImageMemory extends StatelessWidget {
+  const MessageImageMemory(this.bytes, {super.key});
+  final Uint8List bytes;
+  @override
+  Widget build(BuildContext context) => Padding(
+    padding: const EdgeInsets.symmetric(vertical: 4),
+    child: Image.memory(
+      bytes,
+      fit: BoxFit.contain,
+      errorBuilder: (c, e, s) =>
+          LocalizedText(UiMessage.local(MessageKey.contentM005)),
+    ),
+  );
+}
+
 class ContentPart {
   const ContentPart(this.value, {this.media = false, this.filename});
   final String value;
@@ -130,6 +180,14 @@ class MessageContent extends StatelessWidget {
       children: splitMessageContent(text).map((part) {
       if (part.media) {
         if (isImageReference(part.value)) return MessageImage(part.value);
+        // OPENPERF P3 (定案2): history ships MEDIA REFERENCES. An image
+        // reference renders inline through the download endpoint (one
+        // file per view — never 13 MB of JSON on the list GET); a miss
+        // (old gateway 404, deleted file) degrades to the download tile.
+        if (looksLikeServerPath(part.value) &&
+            _serverImagePath.hasMatch(part.value)) {
+          return ServerPathImage(part.value, filename: part.filename);
+        }
         return AttachmentTile(part.value, filename: part.filename);
       }
       final value = part.value.trim();

@@ -37,6 +37,10 @@ class Session {
       count: (json['message_count'] as num?)?.toInt() ?? 0,
       startedAt: start,
       activity:
+          (json['last_active'] as num?)?.toDouble() ??
+          // OPENPERF P3: the row carries the LAST MESSAGE timestamp —
+          // ordering must ride it, never a per-session messages GET that
+          // drags full text and inline images along for a number.
           (json['last_activity'] as num?)?.toDouble() ??
           (json['updated_at'] as num?)?.toDouble() ??
           start,

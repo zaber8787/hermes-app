@@ -81,7 +81,11 @@ def _send_json(fields: tuple) -> None:
     click = fields[7] if len(fields) > 7 else None
     try:
         body = {"topic": topic, "title": title, "message": message,
-                "priority": PRIORITY.get(priority, PRIORITY["default"]),
+                # JSON API wants an INTEGER priority; the header transport's
+                # string form is rejected 400 by the hub (misleading
+                # "body must be valid JSON" error). One bug hid every
+                # ledger publish for a full release cycle.
+                "priority": int(PRIORITY.get(priority, PRIORITY["default"])),
                 "tags": tags or []}
         if click:
             body["click"] = str(click)[:1024]

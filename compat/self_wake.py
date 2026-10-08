@@ -162,6 +162,23 @@ def bump_generation(conn, now: float):
     return gen + 1, now
 
 
+RECONCILE_MAX_PAGES = 25  # bounded sweep: 25 x limit rows, next run continues
+
+
+def _reconcile_seek(conn, gen: int, cutoff: float) -> tuple[float, int]:
+    """Persisted crash-gap seek (01413 M5); re-based on a new generation or
+    whenever policy pushes the cutoff forward."""
+    raw = _meta(conn, "selfwake_reconcile_seek")
+    if raw:
+        try:
+            g, ts, mid = str(raw).split("|", 2)
+            if int(g) == gen and float(ts) >= cutoff:
+                return float(ts), int(mid)
+        except (ValueError, TypeError):
+            pass
+    return cutoff, 0
+
+
 def bump_generation_standalone(home, now: float):
     """Worker-side bump on its OWN connection: must commit or the shared
     bridge handle stays inside a write transaction and starves everything
@@ -227,7 +244,12 @@ def drainer_drained(home: Path, summary: dict):
 def reconcile(home: Path, *, db=None, limit=200):
     """Add intents for reports committed after the cutoff that the bridge
     never finalized (crash between SessionDB commit and receipt commit).
-    Dedup is by delivery_key (compression copies share the key)."""
+    Dedup is by delivery_key (compression copies share the key).
+
+    01413 M5: the scan PERSISTS a (timestamp, id) seek instead of re-reading
+    the oldest page every sweep — a gap behind the first `limit` rows used to
+    be invisible forever. The seek re-bases on a new generation/cutoff, pages
+    are bounded, and the generation cutoff keeps its enable-policy job."""
     from . import auto_wake_store
     if not auto_wake_store.bindings_ready():
         return {"skipped": "unbound"}
@@ -246,49 +268,76 @@ def reconcile(home: Path, *, db=None, limit=200):
     try:
         conn = _bridge(home)
         gen, cutoff = generation_cutoff(conn, time.time())
-        rows = db._read_all(
-            "SELECT m.id AS id, m.session_id AS session_id, m.timestamp AS timestamp,"
-            " json_extract(m.display_metadata, '$.hermes_app_cron.delivery_key') AS key,"
-            " json_extract(m.display_metadata, '$.hermes_app_cron.digest') AS digest"
-            " FROM messages m WHERE m.role = 'user'"
-            " AND m.display_kind = 'internal_notification'"
-            " AND json_extract(m.display_metadata, '$.hermes_app_cron.schema') = 1"
-            " AND m.timestamp > ? ORDER BY m.timestamp, m.id LIMIT ?", (cutoff, limit))
+        seek_ts, seek_id = _reconcile_seek(conn, gen, cutoff)
+        pages = 0
         with _bridge_lock():
-            for row in rows:
-                key = row["key"]
-                if not key:
-                    continue
-                have = conn.execute(
-                    "SELECT 1 FROM selfwake_intents WHERE delivery_key = ?", (key,)).fetchone()
-                if have is not None:
-                    continue
-                # The crash gap has NO receipt; a delivered receipt means the
-                # report arrived while self-wake was off (or shadow recorded
-                # it): history, never woken retroactively.
-                recv = conn.execute(
-                    "SELECT status FROM receipts WHERE delivery_key = ?", (key,)).fetchone()
-                if recv is not None:
-                    continue
-                state = "shadow" if mode == "shadow" else "pending"
-                now = time.time()
-                conn.execute(
-                    "INSERT OR IGNORE INTO selfwake_intents(delivery_key, home,"
-                    " session_id, row_id, generation, cutoff, reason, state,"
-                    " next_attempt_at, created_at, updated_at) VALUES(?,?,?,?,?,?, ?,?,?,?,?)",
-                    (key, str(home), row["session_id"], row["id"], gen, cutoff,
-                     "reconciled", state, now, now, now))
-                if not conn.execute("SELECT 1 FROM receipts WHERE delivery_key = ? AND"
-                                    " status = 'delivered'", (key,)).fetchone():
-                    conn.execute("INSERT OR IGNORE INTO receipts(delivery_key, home,"
-                                 " execution_id, status, row_id, error, digest, session_id,"
-                                 " created_at, updated_at) VALUES(?,?, 'reconciled','delivered',?,"
-                                 " NULL,?, ?, ?,?)",
-                                 (key, str(home), row["id"], row["digest"],
-                                  row["session_id"], now, now))
-                    added += 1
-                else:
-                    consumed_free += 1
+            while True:
+                rows = db._read_all(
+                    "SELECT m.id AS id, m.session_id AS session_id,"
+                    " m.timestamp AS timestamp,"
+                    " json_extract(m.display_metadata,"
+                    " '$.hermes_app_cron.delivery_key') AS key,"
+                    " json_extract(m.display_metadata,"
+                    " '$.hermes_app_cron.digest') AS digest"
+                    " FROM messages m WHERE m.role = 'user'"
+                    " AND m.display_kind = 'internal_notification'"
+                    " AND json_extract(m.display_metadata,"
+                    " '$.hermes_app_cron.schema') = 1"
+                    " AND m.timestamp > ?"
+                    " AND (m.timestamp > ? OR (m.timestamp = ? AND m.id > ?))"
+                    " ORDER BY m.timestamp, m.id LIMIT ?",
+                    (cutoff, seek_ts, seek_ts, seek_id, limit))
+                for row in rows:
+                    key = row["key"]
+                    if not key:
+                        continue
+                    have = conn.execute(
+                        "SELECT 1 FROM selfwake_intents WHERE delivery_key = ?",
+                        (key,)).fetchone()
+                    if have is not None:
+                        continue
+                    # The crash gap has NO receipt; a delivered receipt means
+                    # the report arrived while self-wake was off (or shadow
+                    # recorded it): history, never woken retroactively. The
+                    # 01413 m1 tag is the exception the receipts themselves
+                    # cannot distinguish — a DELIVERED report whose intent
+                    # write threw is a compensable gap, not off-era history.
+                    recv = conn.execute(
+                        "SELECT status, error FROM receipts WHERE delivery_key = ?",
+                        (key,)).fetchone()
+                    if recv is not None and not (
+                            recv["status"] == "delivered"
+                            and recv["error"] == "intent-failed"):
+                        continue
+                    state = "shadow" if mode == "shadow" else "pending"
+                    now = time.time()
+                    conn.execute(
+                        "INSERT OR IGNORE INTO selfwake_intents(delivery_key,"
+                        " home, session_id, row_id, generation, cutoff, reason,"
+                        " state, next_attempt_at, created_at, updated_at)"
+                        " VALUES(?,?,?,?,?,?, ?,?,?,?,?)",
+                        (key, str(home), row["session_id"], row["id"], gen,
+                         cutoff, "reconciled", state, now, now, now))
+                    if not conn.execute("SELECT 1 FROM receipts WHERE"
+                                        " delivery_key = ? AND status = 'delivered'",
+                                        (key,)).fetchone():
+                        conn.execute("INSERT OR IGNORE INTO receipts(delivery_key,"
+                                     " home, execution_id, status, row_id, error,"
+                                     " digest, session_id, created_at, updated_at)"
+                                     " VALUES(?,?, 'reconciled','delivered',?,"
+                                     " NULL,?, ?, ?,?)",
+                                     (key, str(home), row["id"], row["digest"],
+                                      row["session_id"], now, now))
+                        added += 1
+                    else:
+                        consumed_free += 1
+                if rows:
+                    seek_ts = float(rows[-1]["timestamp"])
+                    seek_id = int(rows[-1]["id"])
+                pages += 1
+                if len(rows) < limit or pages >= RECONCILE_MAX_PAGES:
+                    break
+            _meta(conn, "selfwake_reconcile_seek", f"{gen}|{seek_ts}|{seek_id}")
             conn.commit()
     finally:
         if own:
@@ -441,6 +490,8 @@ def endpoint(home: Path):
     # env-enabled listener is not misjudged as absent (production burn of
     # "listener disabled" decisions, 2026-10).
     import os
+    _file_env_cache = {}
+
     def _env(name: str) -> str:
         val = os.getenv(name, "")
         if val:
@@ -448,17 +499,20 @@ def endpoint(home: Path):
         # The gateway main process does NOT import .env into os.environ
         # (secrets are loaded per-adapter via secret scope). The worker
         # runs on the gateway loop, so os.getenv alone is always empty
-        # for API_SERVER_*; read the file the adapter's own loader reads.
+        # for API_SERVER_*; read the file with the SAME dotenv semantics
+        # the upstream loader uses (export, spaces around '=', quotes,
+        # '#' comments) — 01413 m7: a hand-rolled startswith("NAME=")
+        # scan silently missed every valid-but-spaced assignment.
+        env_path = os.path.join(str(home), ".env")
         try:
-            env_path = os.path.join(str(home), ".env")
-            with open(env_path, "r", encoding="utf-8") as fh:
-                for line in fh:
-                    line = line.strip()
-                    if line.startswith(name + "="):
-                        return line.split("=", 1)[1].strip().strip('"').strip("'")
+            vals = _file_env_cache.get(env_path)
+            if vals is None:
+                from dotenv import dotenv_values
+                vals = {k: (v or "") for k, v in dotenv_values(env_path).items()}
+                _file_env_cache[env_path] = vals
+            return vals.get(name, "")
         except Exception:
-            pass
-        return ""
+            return ""
     enabled = api.get("enabled")
     if not enabled:
         enabled = _env("API_SERVER_ENABLED").lower() in ("1", "true", "yes", "on")
@@ -484,7 +538,10 @@ def endpoint(home: Path):
         return None, "listener port missing"
     if not isinstance(key, str) or not key.strip():
         return None, "listener auth unavailable"
-    return (f"http://{host}:{port}",
+    # 01413 m8: an IPv6 literal needs its bracket form — "http://::1:8642"
+    # parses nowhere. _is_own_host already admits "::1", so build it right.
+    netloc = f"[{host}]" if ":" in host else host
+    return (f"http://{netloc}:{port}",
             {"Authorization": "Bearer " + key.strip()})
 
 
@@ -938,15 +995,53 @@ class SelfWakeWorker:
                             detail="retry-after-close")
         else:
             # dispatching/accepted with an unfinished view: never re-POST.
-            if state == "dispatching":
+            # 01413 M4: the LEDGER settles FIRST, then the intent closes.
+            # Marking the intent done while the batch stays 'accepted'
+            # left a zombie: it never re-enters _due, yet reports keep
+            # landing causal_suspect and the receipts disagree with the
+            # intent. An accepted batch with a run gets ONE status check
+            # (terminal if provable); everything else closes conservatively
+            # as uncertain-consumed — consumed without a re-send.
+            settled = None
+            if state == "accepted" and run_id:
+                settled = await self._run_terminal_once(run_id)
+            if settled is not None:
+                await asyncio.to_thread(auto_wake_store.report, self.home,
+                                        batch_id=batch_id, resolved=resolved,
+                                        state="terminal")
+                self._set_items(items, "done", detail=settled)
+                audit(self.home, phase="terminal", resolved=resolved,
+                      batch_id=batch_id, run_id=run_id, to_state="terminal",
+                      reason="stream-unseen-status", trigger="self")
+            else:
                 await asyncio.to_thread(auto_wake_store.report, self.home,
                                         batch_id=batch_id, resolved=resolved,
                                         state="uncertain")
-            self._set_items(items, "done", detail="uncertain-consumed")
-            await self._fail_note(resolved, "stream-unseen-terminal")
-            audit(self.home, phase="terminal", resolved=resolved, batch_id=batch_id,
-                  run_id=run_id, to_state="uncertain", reason="stream-unseen-terminal",
-                  trigger="self")
+                self._set_items(items, "done", detail="uncertain-consumed")
+                await self._fail_note(resolved, "stream-unseen-terminal")
+                audit(self.home, phase="terminal", resolved=resolved,
+                      batch_id=batch_id, run_id=run_id, to_state="uncertain",
+                      reason="stream-unseen-terminal", trigger="self")
+
+    async def _run_terminal_once(self, run_id):
+        """ONE pollable-status look, no retry loop (the caller must settle
+        now); returns the terminal status only when the run store proves it."""
+        result = endpoint(self.home)
+        if result[0] is None:
+            return None
+        base, headers = result
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as sess:
+                async with sess.get(f"{base}/v1/runs/{run_id}",
+                                    headers=headers) as resp:
+                    if resp.status != 200:
+                        return None
+                    payload = await resp.json()
+            status = payload.get("status")
+            return status if status in {"completed", "failed", "cancelled"} else None
+        except Exception:
+            return None
 
     async def _poll_run(self, batch_id, resolved):
         """Accepted batch whose SSE died: ask the run store; terminal → close

@@ -290,6 +290,7 @@ class HermesRepository {
   /// Contract §2: fetch EVERY session page and de-duplicate by id.
   Future<List<Session>> sessions() async {
     final all = <String, Session>{};
+    final rows = <Map>[];
     var offset = 0;
     while (true) {
       final json = await _json(
@@ -299,6 +300,7 @@ class HermesRepository {
         deadline: metadataTimeout,
       );
       final page = (json['data'] as List).cast<Map>();
+      rows.addAll(page);
       for (final row in page) {
         final s = Session.fromJson(Map<String, dynamic>.from(row));
         all[s.id] = s;
@@ -306,10 +308,21 @@ class HermesRepository {
       offset += page.length;
       if (page.length < 500) break;
     }
-    // Contract only guarantees started_at on session rows. Obtain the last
-    // message timestamp (also contract §3) for actual recent-activity order.
-    // Four readers bound load; unchanged counts reuse this repository cache.
-    final pending = all.values.where((s) => s.count > 0).toList();
+    // Contract only guarantees started_at on session rows. OPENPERF P3:
+    // a row that carries its own last-activity needs NO per-session
+    // messages read — the old unconditional probe fetched full last
+    // messages (inline images included) just to sort a timestamp.
+    // Legacy rows without the field still ride the cached four-reader path.
+    final serverStamped = <String>{
+      for (final row in rows)
+        if (row['last_active'] != null ||
+            row['last_activity'] != null ||
+            row['updated_at'] != null)
+          textOf(row['id']),
+    };
+    final pending = all.values
+        .where((s) => s.count > 0 && !serverStamped.contains(s.id))
+        .toList();
     var cursor = 0;
     await Future.wait(
       List.generate(4, (_) async {

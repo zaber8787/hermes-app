@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart' show SliverMultiBoxAdaptorParentData;
 import '../../l10n/app_strings.dart';
 import '../../l10n/localized_text.dart';
 import '../../l10n/message_key.dart';
@@ -46,10 +47,10 @@ class MessageTimeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hints = {for (final r in remoteRows) r.message.id: r.hint};
-    var entries = projectMessages(
-      [...messages, ...remoteRows.map((r) => r.message)],
-      wakeRowIds: wakeRowIds,
-    );
+    var entries = projectMessages([
+      ...messages,
+      ...remoteRows.map((r) => r.message),
+    ], wakeRowIds: wakeRowIds);
     if (toolExclusions.isNotEmpty) {
       entries = entries
           .where(
@@ -59,64 +60,370 @@ class MessageTimeline extends StatelessWidget {
           )
           .toList();
     }
-    final seenKeys = <String>{};
-    Widget view(DisplayEntry e) {
-      if (e.kind != EntryKind.tool) {
-        return EntryView(entry: e, hint: hints[e.message.id] ?? RemoteHint.none);
-      }
-      final key = toolSlotKeyFor(e, slotScope);
-      return EntryView(
+    final rows = _timelineRows(
+      entries,
+      hints: hints,
+      detailed: detailed,
+      toolOverrides: toolOverrides,
+      slotScope: slotScope,
+    );
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [for (final row in rows) row.build(context, null)],
+    );
+  }
+}
+
+/// OPENPERF P1 (定案1): the projection flattened into stable ROWS so the
+/// chat page can render it through a lazily-built sliver — one build
+/// projects, but only viewport rows ever construct their EntryViews.
+/// Grouping, tool-overlap exclusions and the §3.8 slot-key rules are
+/// SHARED with the box form above; the sliver must never present a
+/// different timeline than the Column does.
+class TimelineRow {
+  const TimelineRow({
+    required this.keyValue,
+    required this.build,
+    this.isGroup = false,
+    this.estimate = 120,
+  });
+
+  /// Stable mapping identity for the sliver delegate's child lookup
+  /// (null = positional fallback, same rule as a duplicated tool slot).
+  final Object? keyValue;
+  final bool isGroup;
+
+  /// Cheap height guess (px) used while the row is a placeholder — the
+  /// sliver arithmetic (reveal targets, extent estimates) rides on it.
+  final double estimate;
+
+  /// Builds the row widget; [outerKey] is the delegate's mapping key
+  /// (null in the box form — where tool rows keep their own slot keys).
+  final Widget Function(BuildContext context, Key? outerKey) build;
+}
+
+/// OPENPERF P1: the page's current reveal target, published to the lazy
+/// sliver. During the cold-open jump-to-bottom the delegate must NOT pay
+/// full markdown layout for all 200 swept rows — rows far from the target
+/// build as cheap estimated-height placeholders; only the window that the
+/// refined jumps settle on becomes real.
+class TimelineReveal {
+  const TimelineReveal({
+    required this.pixels,
+    required this.viewport,
+    required this.revision,
+    this.focusIndex,
+    this.realFrom,
+  });
+  final double pixels;
+  final double viewport;
+  final int revision;
+
+  /// During an anchor restore the target row must be real even when its
+  /// placeholder-scale estimate is outside the scroll window — the page
+  /// pins its neighbourhood until the measured correction lands.
+  final int? focusIndex;
+
+  /// Cold-open bottom follow: every row at or above this index builds real
+  /// content while the page streams its tail into existence (chunk by
+  /// chunk, bottom up). Null = proximity rules only.
+  final int? realFrom;
+}
+
+List<TimelineRow> _timelineRows(
+  List<DisplayEntry> entries, {
+  required Map<String, RemoteHint> hints,
+  required bool detailed,
+  required Map<String, ToolViewPayload> toolOverrides,
+  required String slotScope,
+}) {
+  final seenKeys = <String>{};
+  // One line of laid-out markdown ≈ 24px plus the bubble/time chrome;
+  // deliberately rough — placeholder arithmetic only, real rows
+  // self-correct.
+  double estimateOf(DisplayEntry e) =>
+      e.kind == EntryKind.tool ? 96.0 : 120.0 + e.message.content.length * 0.62;
+  TimelineRow view(DisplayEntry e) {
+    if (e.kind != EntryKind.tool) {
+      final hint = hints[e.message.id] ?? RemoteHint.none;
+      return TimelineRow(
+        keyValue: 'entry:${e.kind}:${e.message.id}',
+        estimate: estimateOf(e),
+        build: (context, outerKey) =>
+            EntryView(key: outerKey, entry: e, hint: hint),
+      );
+    }
+    final key = toolSlotKeyFor(e, slotScope);
+    final unique = seenKeys.add(key);
+    final hint = hints[e.message.id] ?? RemoteHint.none;
+    final toolOverride = toolOverrides[key];
+    return TimelineRow(
+      keyValue: unique ? key : null,
+      estimate: 96.0,
+      build: (context, outerKey) => EntryView(
         // Stable slot key (plan §3.8): expanding step 3 must survive a new
         // step arriving or the winning payload swapping sources. A
         // duplicated key would break the widget tree — fall back to
         // positional identity instead of crashing the page.
-        key: seenKeys.add(key) ? ValueKey(key) : null,
+        key: unique ? ValueKey(key) : null,
         entry: e,
-        hint: hints[e.message.id] ?? RemoteHint.none,
-        toolOverride: toolOverrides[key],
-      );
-    }
-
-    if (detailed) {
-      return Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: entries.map(view).toList(),
-      );
-    }
-    final widgets = <Widget>[];
-    final details = <DisplayEntry>[];
-    void flush() {
-      if (details.isEmpty) return;
-      final frozen = List<DisplayEntry>.of(details);
-      final steps = frozen.where((e) => e.kind == EntryKind.tool).length;
-      widgets.add(
-        ExpansionTile(
-          title: Text(
-            steps > 0
-                ? AppStrings.of(
-                    context,
-                  ).resolve(MessageKey.timelineM001, count: steps)
-                : AppStrings.of(context).resolve(MessageKey.timelineM002),
-          ),
-          children: frozen.map(view).toList(),
-        ),
-      );
-      details.clear();
-    }
-
-    for (final e in entries) {
-      if (e.kind == EntryKind.user || e.kind == EntryKind.finalReply) {
-        flush();
-        widgets.add(view(e));
-      } else {
-        details.add(e);
-      }
-    }
-    flush();
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: widgets,
+        hint: hint,
+        toolOverride: toolOverride,
+      ),
     );
+  }
+
+  if (detailed) return entries.map(view).toList();
+  final rows = <TimelineRow>[];
+  var details = <DisplayEntry>[];
+  void flush() {
+    if (details.isEmpty) return;
+    final frozen = List<DisplayEntry>.of(details);
+    details = [];
+    rows.add(
+      TimelineRow(
+        keyValue: 'group:${frozen.first.message.id}',
+        isGroup: true,
+        estimate: 56.0,
+        build: (context, outerKey) => Builder(
+          // The title strings resolve at build; Builder keeps the closure
+          // honest about needing a live BuildContext.
+          builder: (context) {
+            final steps = frozen.where((e) => e.kind == EntryKind.tool).length;
+            return ExpansionTile(
+              key: outerKey,
+              title: Text(
+                steps > 0
+                    ? AppStrings.of(
+                        context,
+                      ).resolve(MessageKey.timelineM001, count: steps)
+                    : AppStrings.of(context).resolve(MessageKey.timelineM002),
+              ),
+              children: [for (final e in frozen) view(e).build(context, null)],
+            );
+          },
+        ),
+      ),
+    );
+  }
+
+  for (final e in entries) {
+    if (e.kind == EntryKind.user || e.kind == EntryKind.finalReply) {
+      flush();
+      rows.add(view(e));
+    } else {
+      details.add(e);
+    }
+  }
+  flush();
+  return rows;
+}
+
+/// OPENPERF P1: the sliver form of [MessageTimeline] for the chat page's
+/// scroll view. Identical projection, but rows materialize only near the
+/// viewport (ListView.builder / SliverList semantics) instead of one eager
+/// Column of every message in the page.
+const int _lazyThreshold = 40;
+
+class MessageTimelineSliver extends StatelessWidget {
+  const MessageTimelineSliver({
+    super.key,
+    required this.messages,
+    required this.detailed,
+    this.remoteRows = const [],
+    this.wakeRowIds = const {},
+    this.toolOverrides = const {},
+    this.toolExclusions = const {},
+    this.slotScope = '',
+    this.reveal,
+  });
+  final List<Message> messages;
+  final bool detailed;
+  final Set<String> wakeRowIds;
+  final List<RemoteMessageRow> remoteRows;
+  final Map<String, ToolViewPayload> toolOverrides;
+  final Set<String> toolExclusions;
+  final String slotScope;
+
+  /// OPENPERF P1: the chat page's reveal target — with it the cold-open
+  /// jump sweeps placeholders instead of full markdown rows. Null keeps
+  /// every row real (probes, LiveTurn embeds, tests).
+  final TimelineReveal? reveal;
+  TimelineReveal? get _reveal => reveal;
+
+  @override
+  Widget build(BuildContext context) {
+    final hints = {for (final r in remoteRows) r.message.id: r.hint};
+    var entries = projectMessages([
+      ...messages,
+      ...remoteRows.map((r) => r.message),
+    ], wakeRowIds: wakeRowIds);
+    if (toolExclusions.isNotEmpty) {
+      entries = entries
+          .where(
+            (e) =>
+                e.kind != EntryKind.tool ||
+                !toolExclusions.contains(toolSlotKeyFor(e, slotScope)),
+          )
+          .toList();
+    }
+    final rows = _timelineRows(
+      entries,
+      hints: hints,
+      detailed: detailed,
+      toolOverrides: toolOverrides,
+      slotScope: slotScope,
+    );
+    // UNIFORM placeholder height = the rows' average estimate. Uniformity
+    // is what makes the sliver's own cold-seek mapping (index × laid-out
+    // average) land jumps on the right row; per-row estimates would make
+    // the page non-uniform and degrade the seek to a sequential crawl.
+    final estimateTotal = rows.fold<double>(
+      0,
+      (sum, row) => sum + row.estimate,
+    );
+    final averageExtent = rows.isEmpty ? 120.0 : estimateTotal / rows.length;
+    final indexByKey = <Object, int>{
+      for (var i = 0; i < rows.length; i++)
+        if (rows[i].keyValue != null) rows[i].keyValue!: i,
+    };
+    return SliverList(
+      // Keyed children + the child-index callback keep expansion state and
+      // scroll anchoring across rebuilds, exactly where Column's keyed
+      // children used to (a new page simply maps to new indices).
+      delegate: SliverChildBuilderDelegate(
+        (context, index) {
+          final key = rows[index].keyValue;
+          final rowKey = ValueKey(key ?? 'row#$index');
+          final reveal = _reveal;
+          if (reveal == null || rows.length <= _lazyThreshold) {
+            return rows[index].build(context, rowKey);
+          }
+          return _LazyRow(
+            key: rowKey,
+            index: index,
+            offset: index * averageExtent,
+            extent: averageExtent,
+            reveal: reveal,
+            builder: rows[index].build,
+          );
+        },
+        childCount: rows.length,
+        findChildIndexCallback: (key) {
+          var inner = key;
+          while (inner is ValueKey<Object> && inner.value is Key) {
+            inner = inner.value as Key;
+          }
+          return inner is ValueKey<Object> ? indexByKey[inner.value] : null;
+        },
+      ),
+    );
+  }
+}
+
+/// OPENPERF P1: placeholder row. Rows far from the viewport (or the reveal
+/// jump's landing window) lay out as a uniform-average spacer; the row
+/// realises when the viewport comes near. Uniform placeholder geometry
+/// keeps the sliver's cold-seek mapping (index × average) self-consistent,
+/// so the reveal jump lands on the right row before refining.
+class _LazyRow extends StatefulWidget {
+  const _LazyRow({
+    super.key,
+    required this.index,
+    required this.offset,
+    required this.extent,
+    required this.reveal,
+    required this.builder,
+  });
+
+  final int index;
+  final double offset;
+  final double extent;
+  final TimelineReveal reveal;
+  final Widget Function(BuildContext, Key?) builder;
+
+  @override
+  State<_LazyRow> createState() => _LazyRowState();
+}
+
+class _LazyRowState extends State<_LazyRow> {
+  bool _real = false;
+  ScrollPosition? _position;
+
+  bool _near() {
+    final reveal = widget.reveal;
+    final focus = reveal.focusIndex;
+    if (focus != null && (widget.index - focus).abs() <= 12) return true;
+    final realFrom = reveal.realFrom;
+    if (realFrom != null) {
+      // Cold-open sweep: ONLY the real tail may materialise. A stray real
+      // row in the middle poisons the sliver's laid-out-average mapping
+      // and the sweep stalls on it.
+      return widget.index >= realFrom;
+    }
+    final position = _position;
+    final viewport = position == null
+        ? reveal.viewport
+        : position.viewportDimension;
+    // Where this row's box is ACTUALLY laid out beats every estimate: the
+    // sliver's own index→offset mapping (laid-out average, not our prefix
+    // sums) decides which rows it places around the viewport — a row that
+    // got laid out anywhere near the reader must go real, or the page
+    // lands on a frozen placeholder band while the estimate-scale bottom
+    // says it is done.
+    final box = context.findRenderObject();
+    final data = box is RenderBox ? box.parentData : null;
+    if (position != null &&
+        box is RenderBox &&
+        data is SliverMultiBoxAdaptorParentData &&
+        data.layoutOffset != null) {
+      final top = data.layoutOffset!;
+      return top < position.pixels + viewport * 2 &&
+          top + box.size.height > position.pixels - viewport;
+    }
+    // Never laid out yet: judge in the placeholder estimate scale.
+    final pixels = position == null
+        ? reveal.pixels
+        : position.pixels.clamp(0.0, position.maxScrollExtent);
+    final window = viewport * 2;
+    return widget.offset < pixels + viewport + window &&
+        widget.offset + widget.extent > pixels - window;
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    final position = Scrollable.maybeOf(context)?.position;
+    if (!identical(_position, position)) {
+      _position?.removeListener(_onScroll);
+      _position = position;
+      _position?.addListener(_onScroll);
+    }
+  }
+
+  @override
+  void didUpdateWidget(_LazyRow oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!_real && _near()) _real = true;
+  }
+
+  @override
+  void dispose() {
+    _position?.removeListener(_onScroll);
+    super.dispose();
+  }
+
+  void _onScroll() {
+    if (mounted && !_real && _near()) setState(() => _real = true);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // Children created by a jump (or first layout) never receive a scroll
+    // notification of their own — decide at build time as well.
+    if (!_real && _near()) _real = true;
+    if (_real) return widget.builder(context, widget.key);
+    return SizedBox(height: widget.extent);
   }
 }
 
@@ -383,16 +690,14 @@ class LiveTurnView extends StatelessWidget {
     final strings = AppStrings.of(context);
     if (turn.transcript != null && turn.transcript!.isNotEmpty) {
       final anchor = transcriptUserAnchor?.trim();
-      final rows = turn.transcript!
-          .where((m) {
-            if (!m.isUserTurn) return true;
-            if (representedUserIds.contains(m.id)) return false;
-            if (identityOnlyExclusion) return true;
-            return !(anchor != null &&
-                anchor.isNotEmpty &&
-                foldedTurnTextEquals(m.content, anchor));
-          })
-          .toList();
+      final rows = turn.transcript!.where((m) {
+        if (!m.isUserTurn) return true;
+        if (representedUserIds.contains(m.id)) return false;
+        if (identityOnlyExclusion) return true;
+        return !(anchor != null &&
+            anchor.isNotEmpty &&
+            foldedTurnTextEquals(m.content, anchor));
+      }).toList();
       // The non-empty-transcript branch NEVER falls through to turn.tools,
       // even when every transcript tool entry is excluded below (a
       // re-materialized raw list would resurrect the second card).
@@ -421,7 +726,9 @@ class LiveTurnView extends StatelessWidget {
               // catalog keys.
               strings.resolve(
                 MessageKey.timelineM009,
-                args: {'choice': _approvalChoiceLabel(strings, turn.approvalChoice!)},
+                args: {
+                  'choice': _approvalChoiceLabel(strings, turn.approvalChoice!),
+                },
               ),
               style: TextStyle(
                 fontSize: 12,
@@ -454,7 +761,9 @@ class LiveTurnView extends StatelessWidget {
                     title: Text(turn.tools[i].name),
                     children: [
                       ExpansionTile(
-                        title: Text(strings.resolve(MessageKey.timelineArguments)),
+                        title: Text(
+                          strings.resolve(MessageKey.timelineArguments),
+                        ),
                         children: [FoldedText(turn.tools[i].arguments)],
                       ),
                       if (turn.tools[i].result.isNotEmpty)
@@ -493,10 +802,7 @@ class LiveTurnView extends StatelessWidget {
             children: [FoldedText(turn.reasoning)],
           ),
         if (!turn.completed && turn.approval == null && showTyping)
-          const Padding(
-            padding: EdgeInsets.all(12),
-            child: TypingDots(),
-          ),
+          const Padding(padding: EdgeInsets.all(12), child: TypingDots()),
       ],
     );
   }
@@ -574,8 +880,7 @@ class ApprovalCard extends StatelessWidget {
                 ),
                 child: SelectableText(
                   data['command'].toString(),
-                  style: const TextStyle(
-                      fontFamily: 'monospace', fontSize: 12),
+                  style: const TextStyle(fontFamily: 'monospace', fontSize: 12),
                 ),
               ),
             ],

@@ -71,6 +71,16 @@ def open_ledger(home: Path) -> sqlite3.Connection:
     key = str(Path(home).resolve())
     with LEDGER_LOCK:
         conn = _LEDGERS.get(key)
+        if conn is not None:
+            try:
+                conn.execute("SELECT 1").fetchone()
+            except sqlite3.ProgrammingError:
+                # 01413 m3: a cached handle closed out of band (test fixtures,
+                # operator tooling) must be replaced, never handed back dead.
+                _LEDGERS.pop(key, None)
+                conn = None
+            except Exception:
+                pass  # busy/locked: same as HEAD — the CALLER sees the error
         if conn is None:
             Path(key).mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(Path(key) / "wake_ledger.db",
@@ -113,6 +123,10 @@ def open_ledger(home: Path) -> sqlite3.Connection:
                 phase TEXT NOT NULL, from_state TEXT, to_state TEXT, reason TEXT,
                 quota_used INTEGER, chain_count INTEGER, latency REAL)""")
             conn.commit()
+            # 01413 m3: the managed handle goes INTO the cache — an opener
+            # that builds a fresh connection per call defeats reset() (which
+            # closes what the cache holds) and leaks handles.
+            _LEDGERS[key] = conn
         return conn
 
 

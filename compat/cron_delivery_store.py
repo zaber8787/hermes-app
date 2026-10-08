@@ -86,6 +86,16 @@ def open_bridge(home: Path) -> sqlite3.Connection:
     key = str(Path(home).resolve())
     with _bridge_lock:
         conn = _bridges.get(key)
+        if conn is not None:
+            try:
+                conn.execute("SELECT 1").fetchone()
+            except sqlite3.ProgrammingError:
+                # 01413 m3: a cached handle closed out of band (test fixtures,
+                # operator tooling) must be replaced, never handed back dead.
+                _bridges.pop(key, None)
+                conn = None
+            except Exception:
+                pass  # busy/locked: same as HEAD — the CALLER sees the error
         if conn is None:
             Path(key).mkdir(parents=True, exist_ok=True)
             conn = sqlite3.connect(bridge_file(Path(key)), check_same_thread=False, timeout=10.0)
@@ -108,6 +118,10 @@ def open_bridge(home: Path) -> sqlite3.Connection:
             from . import self_wake
             self_wake.ensure_bridge_schema(conn)
             conn.commit()
+            # 01413 m3: the managed handle goes INTO the cache — an opener
+            # that builds a fresh connection per call defeats reset() (which
+            # closes what the cache holds) and leaks handles.
+            _bridges[key] = conn
         return conn
 
 
@@ -120,8 +134,16 @@ def _self_wake_intent(conn, home, session_id, key, row_id, reason):
                                        delivery_key=key, row_id=row_id, reason=reason)
     except Exception as exc:
         # An intent is a TODO row, never delivery: the receipt still commits.
-        # Reconciliation recovers the gap (plan §1 crash-gap).
+        # 01413 m1: the receipt alone would tell reconciliation "this arrived
+        # while self-wake was off" (history — correctly never replayed) and
+        # the self-described crash-gap compensation would skip the one row it
+        # CAN fix. Tag the failure inside the same transaction; reconcile
+        # compensates only tagged rows, while the policy is active.
         log.warning("selfwake intent skipped: %s", type(exc).__name__)
+        with suppress(Exception):
+            conn.execute(
+                "UPDATE receipts SET error = COALESCE(error, 'intent-failed'),"
+                " updated_at = ? WHERE delivery_key = ?", (time.time(), key))
         return None
 
 
@@ -383,11 +405,26 @@ def drain_home(home: Path, *, now: float | None = None):
                 failed += 1
             else:
                 attempts = row["attempts"] + 1
-                delay = min(DRAIN_BACKOFF_CAP, DRAIN_BACKOFF_BASE * (2 ** min(attempts, 5)))
-                conn.execute("UPDATE pending SET attempts = ?, next_retry_at = ?, updated_at = ?"
-                             " WHERE delivery_key = ?", (attempts, time.time() + delay,
-                                                          time.time(), row["delivery_key"]))
-                queued += 1
+                if attempts >= DRAIN_MAX_ATTEMPTS:
+                    # 01413 m5: exhaustion must END LOUDLY. A row at the
+                    # attempt cap is never selected again — leaving it in
+                    # the spool with a "queued" receipt is an orphan that
+                    # holds the full report text with no reader and no
+                    # restart path. Close it as a readable dead-letter.
+                    conn.execute("DELETE FROM pending WHERE delivery_key = ?",
+                                 (row["delivery_key"],))
+                    _receipt(conn, row["delivery_key"], row["home"],
+                             identity["execution_id"], row["session_id"],
+                             "failed", error="retry_exhausted")
+                    failed += 1
+                else:
+                    delay = min(DRAIN_BACKOFF_CAP,
+                                DRAIN_BACKOFF_BASE * (2 ** min(attempts, 5)))
+                    conn.execute("UPDATE pending SET attempts = ?, next_retry_at = ?,"
+                                 " updated_at = ? WHERE delivery_key = ?",
+                                 (attempts, time.time() + delay,
+                                  time.time(), row["delivery_key"]))
+                    queued += 1
             conn.commit()
     for home_path in fresh_keys:
         from . import self_wake

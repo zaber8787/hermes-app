@@ -218,6 +218,15 @@ async def case_selfwake(args, server, check):
     from .offline import server as fixture_server
     Worker = getattr(sw, "SelfWakeWorker")
     async with fixture_server() as (api_adapter, client):
+        # Determinism contract for the manual Worker ticks below: the server
+        # startup armed the gateway-owned singleton worker, whose periodic
+        # sweep would otherwise race (and sometimes STEAL) these dispatches —
+        # the "accepted at check time" flake the 01413 audit hit. The manual
+        # Worker instances run the identical code paths; only the background
+        # stopwatch is silenced.
+        _bg = sw._module_state.get("worker")
+        if _bg is not None:
+            _bg.stop()
         port = api_adapter._site._server.sockets[0].getsockname()[1]
 
         def listener(on=True, host="127.0.0.1", with_key=True):

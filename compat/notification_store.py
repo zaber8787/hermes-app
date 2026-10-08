@@ -50,7 +50,8 @@ CREATE TABLE IF NOT EXISTS events(
   read_at REAL
 );
 CREATE INDEX IF NOT EXISTS events_order ON events(owner_scope, created_seq);
-CREATE INDEX IF NOT EXISTS events_change ON events(owner_scope, change_seq);
+-- events_change is created AFTER migration (below): on a v1/v2 database the
+-- column does not exist yet when _SCHEMA runs, and CREATE INDEX would raise.
 CREATE TABLE IF NOT EXISTS deliveries(
   delivery_id TEXT PRIMARY KEY,
   event_id TEXT NOT NULL,
@@ -107,6 +108,10 @@ def _conn_for(home_or_conn) -> sqlite3.Connection:
                     conn.execute("CREATE INDEX IF NOT EXISTS events_change"
                                  " ON events(owner_scope, change_seq)")
                 conn.execute("UPDATE meta SET version=?", (SCHEMA_VERSION,))
+            # index creation is unconditional and post-migration: fresh v3 DBs
+            # skip the branch, migrated DBs need the column to exist first.
+            conn.execute("CREATE INDEX IF NOT EXISTS events_change"
+                         " ON events(owner_scope, change_seq)")
             conn.commit()
             _STORES[path] = conn
         return conn

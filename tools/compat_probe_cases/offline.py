@@ -212,8 +212,12 @@ async def case_history(args):
                 result = await r.json()
                 check(r.status == 200, "history HTTP200")
                 content = result["data"][0]["content"]
-                encoded = content.split("base64,",1)[1].split(")",1)[0]
-                check(base64.b64decode(encoded) == PNG, "history/reload data URL roundtrip")
+                # OPENPERF P3 (定案2): history is the REFERENCE form — the
+                # MEDIA tag survives verbatim, no inlined base64 payload.
+                # Pixels ride GET /v1/media/download (case_media pins it).
+                check(content == text, "history keeps the MEDIA reference")
+                check("base64," not in content and "data:" not in content,
+                      "history never inlines image bytes")
         check(db.get_messages(sid)[0]["content"] == text, "stored history unmodified")
         for content in (None, [], [{"type":"text","text":"hello"}]):
             row={"role":"assistant","content":content}

@@ -21,6 +21,26 @@ try:
 except ImportError:  # flat import context (unit tests)
     import notification_store
 
+def _public_origin(value: str) -> str:
+    """01413 m9: click_base composes links that land on shared devices —
+    only a verified HTTPS origin (+path) is public-safe. userinfo and any
+    query/fragment (where mispasted tokens and topics live) are dropped;
+    an unparseable or non-HTTPS base falls back to the placeholder, never
+    a secret-bearing URL."""
+    from urllib.parse import urlsplit, urlunsplit
+    placeholder = "https://hermes.invalid"
+    try:
+        parts = urlsplit(value)
+        if parts.scheme != "https" or not parts.netloc:
+            return placeholder
+        if parts.username or parts.password:  # a credential-bearing base
+            return placeholder                # is REFUSED, not laundered
+        return urlunsplit(("https", parts.netloc, parts.path.rstrip("/"),
+                           "", ""))
+    except ValueError:
+        return placeholder
+
+
 def _click_base() -> str:
     # Config-owned public entry (app_compat.notification_events.click_base):
     # the server deployment's tailnet/host never belongs in a shared build.
@@ -32,7 +52,7 @@ def _click_base() -> str:
         block = (((raw or {}).get("app_compat") or {}).get("notification_events") or {})
         value = str(block.get("click_base") or "").strip()
         if value:
-            return value.rstrip("/")
+            return _public_origin(value)
     except Exception:
         pass
     return "https://hermes.invalid"
