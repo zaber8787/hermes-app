@@ -431,6 +431,12 @@ async def run(args):
         elif args.worker == "selfwake":
             from .selfwake import case_selfwake
             outcome = await case_selfwake(args, server, check)
+        elif args.worker == "selfwake_reload":
+            from .selfwake_reload import case_selfwake_reload
+            outcome = await case_selfwake_reload(args, server, check)
+        elif args.worker == "selfwake_batch":
+            from .selfwake_batch import case_selfwake_batch
+            outcome = await case_selfwake_batch(args, server, check)
         else:
             outcome = await globals()["case_"+args.worker](args)
         status, detail = outcome or ("PASS", f"{len(DETAILS)} assertions")

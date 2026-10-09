@@ -5,6 +5,8 @@ import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'features/chat/deep_link.dart';
+import 'features/chat/deep_link_ingress.dart';
+import 'features/chat/deep_link_source.dart';
 import 'features/settings/local_store.dart';
 import 'features/settings/notification_locale.dart';
 import 'features/settings/settings_page.dart';
@@ -28,6 +30,10 @@ Future<void> main() async {
   if (launchLink != null) {
     await store.stashDeepLink(launchLink);
   }
+  // NOTIF2 B2: the platform ingress starts HERE, before any widget — on
+  // native the app_links stream carries the cold intent (and every warm
+  // one); links that arrive before a router exists wait in the stash.
+  deepLinkIngress.start(incomingLinks(), store);
   // Language loads FIRST and outside the credential try/catch: a vault
   // failure must never discard an existing saved language (I18N-PLAN §4.2).
   final locale = store.loadLocale();

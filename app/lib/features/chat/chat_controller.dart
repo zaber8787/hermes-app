@@ -5882,10 +5882,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// True once the browser granted OS alerts (false = panel-only, honest).
   bool get browserAlertsGranted => _notifyPermissionGranted;
 
+  /// NOTIF2 B1: the browser surface runs IN PARALLEL with the server's system
+  /// channel (ntfy or not). Permission decides, never the channel; the
+  /// per-event claim keeps exactly one device/tab alerting.
   Future<void> _convergeBrowserAlerts() async {
-    if (!notificationEventsEnabled ||
-        notificationServerChannel != 'browser' ||
-        _disposed) {
+    if (!notificationEventsEnabled || _disposed) {
       return;
     }
     if (!_notifyPermissionAsked) {

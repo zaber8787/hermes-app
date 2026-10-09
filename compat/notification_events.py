@@ -1,11 +1,12 @@
 """Notification events policy layer (STEERWEB R6): ONE OS-notification exit.
 
 Rules encoded here:
-* the same semantic event gets ONE ntfy publish (ledger-claimed before the
-  output is called; reconnects/restarts never re-derive a different id);
-* configured ntfy owns the system channel; browser delivery is the explicit
-  desktop fallback ONLY when no ntfy is configured, gated by a one-time server
-  claim so two tabs/devices cannot both alert;
+* the same semantic event gets ONE delivery PER CHANNEL (ledger-claimed
+  before the output is called; reconnects/restarts never re-derive a
+  different id);
+* configured ntfy owns the system channel; the browser delivery surface runs
+  IN PARALLEL with it (NOTIF2 B1: a granted browser alerts beside ntfy), with
+  the one-time server claim keeping two tabs/devices to ONE browser alert;
 * a READ event stops later reminders and other devices' browser alerts, but
   read never means approve and never touches an approval deadline;
 * cancelled/interrupted terminals are recorded and never pushed;
@@ -123,6 +124,12 @@ def _delivery_id(event_id: str, phase: str, channel: str) -> str:
     return hashlib.sha256(f"{event_id}\0{phase}\0{channel}".encode()).hexdigest()[:24]
 
 
+# NOTIF2 B1: the two delivery surfaces that coexist by design. A claimed row
+# on either never re-routes or blocks the OTHER one; inside a channel the
+# one-delivery-per-phase rule is untouched.
+_PARALLEL_SURFACES = frozenset({"browser", "ntfy"})
+
+
 def deliver(reg, *, owner_scope, run_id, sid, kind, source_id, payload,
             phase="initial", publish=None, channel=None):
     """Record the event, claim the transport delivery BEFORE the output, and
@@ -146,12 +153,16 @@ def deliver(reg, *, owner_scope, run_id, sid, kind, source_id, payload,
     if existing is not None and existing != "pending":
         return event_id, "already_" + existing
     if any(channel_seen not in ("none", channel)
+           and {channel_seen, channel} != _PARALLEL_SURFACES
            for _phase, channel_seen, _s
            in notification_store.sent_phases(store, event_id)):
         # a config change must never re-route an already-claimed delivery to
         # a different channel (R6: claims survive reconfiguration). A DIFFERENT
         # phase on the SAME channel is a legitimate later stage (initial ->
-        # reminder), not a re-route (01412 audit M4).
+        # reminder), not a re-route (01412 audit M4). NOTIF2 B1 is the one
+        # sanctioned exception: browser and ntfy are PARALLEL surfaces, each
+        # owning its own single delivery row per phase — one side having
+        # claimed must never swallow the other's publish, in either order.
         return event_id, "already_claimed_other_channel"
     delivery_id = _delivery_id(event_id, phase, channel)
     if channel == "browser" and publish is None:

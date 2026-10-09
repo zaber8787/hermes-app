@@ -189,15 +189,47 @@ void main() {
     repo.close();
   });
 
-  test('ntfy accounts never touch the browser claim path', () async {
-    hub.channel = 'ntfy';
-    final repo = FakeNotifyRepo(hub);
-    final surface = FakeSurface();
-    final c = ChatController(repo, store, 's')..notifySurfaceForTest = surface;
-    await tick(c);
-    expect(hub.claimCalls, 0);
-    expect(surface.shown, isEmpty);
-    c.dispose();
-    repo.close();
-  });
+  // NOTIF2 B1: the browser surface runs IN PARALLEL with the server's system
+  // channel. An ntfy-configured account still alerts the browser when the
+  // browser granted permission (the cross-device claim race keeps the
+  // dedup); a denied browser stays panel-only and must never throw.
+  test('ntfy channel + granted permission: claim, show, report shown once',
+      () async {
+        hub.channel = 'ntfy';
+        final repo = FakeNotifyRepo(hub);
+        final surface = FakeSurface();
+        final c = ChatController(repo, store, 's')
+          ..notifySurfaceForTest = surface;
+        await tick(c);
+        expect(c.browserAlertsGranted, isTrue); // permission IS asked
+        expect(hub.claimCalls, 2); // the claim path runs beside ntfy
+        expect(surface.shown.length, 2);
+        expect(
+          hub.reports,
+          containsAll(['e-1:shown:tok-e-1', 'e-2:shown:tok-e-2']),
+        );
+        expect(hub.reads, isEmpty); // show is STILL not a server read
+        expect(c.notifications.hasUnread, isTrue);
+
+        await tick(c); // settled events are never re-claimed
+        expect(hub.claimCalls, 2);
+        c.dispose();
+        repo.close();
+      });
+
+  test('ntfy channel + denied permission: no show, no claim, no throw',
+      () async {
+        hub.channel = 'ntfy';
+        final repo = FakeNotifyRepo(hub);
+        final surface = FakeSurface(grant: false);
+        final c = ChatController(repo, store, 's')
+          ..notifySurfaceForTest = surface;
+        await tick(c);
+        expect(c.browserAlertsGranted, isFalse);
+        expect(hub.claimCalls, 0); // ungranted: nothing is claimed
+        expect(surface.shown, isEmpty);
+        expect(c.notifications.hasUnread, isTrue); // panel keeps the truth
+        c.dispose();
+        repo.close();
+      });
 }

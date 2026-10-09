@@ -4,6 +4,11 @@
 `CHANGELOG-PRIVATE.md`（不入版本庫）。`<SERVER_ORIGIN>` 代表部署者自設的
 伺服器位址。
 
+## 2026-10-09 — 通知雙通道與深鏈進 App
+
+- 瀏覽器通知與 ntfy 改為併行通道：設了 ntfy 不再把瀏覽器路徑整條封死；同一事件由 claim 協定挑一個裝置/分頁響鈴，但瀏覽器與 ntfy 兩個 surface 互不吞投遞。
+- 手機通知點開直接進 App（HTTPS App Link）：AndroidManifest 走 build 期 placeholder（`-Pdeeplink.host/path`，公版不 bake 任何部署地址），冷啟暫存、熱啟走與網頁版同一條深鏈路由；個人版 APK 缺 `HERMES_APP_DEEPLINK_URL` 時 fail-fast。Android 12+ 網域驗證與手動關聯步驟見 `docs/DEEP-LINK-DEPLOY.md`。
+
 ## 2026-10-08 — 開對話效能：時間軸虛擬化、開頁並行化、歷史圖片改引用
 
 - 訊息時間軸改逐列虛擬化（viewport 外不再建立元件）：實測 200 則訊息首次渲染從 web ~4.9s / native ~1.9s 降到只建可見列；長對話捲動同步重建（fix 前每次捲動重建數百顆氣泡）。

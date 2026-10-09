@@ -27,6 +27,18 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+
+        // NOTIF2 B2: the App Link host/path come from -Pdeeplink.host /
+        // -Pdeeplink.path (scripts/build_app.py personal APK builds).
+        // Nothing personal is ever baked in: a public build (or a plain
+        // `flutter run`) gets the inert placeholder host, which matches
+        // nothing — never a deployment's tailnet address.
+        manifestPlaceholders["deepLinkHost"] =
+            (project.findProperty("deeplink.host") as String?)
+                ?.takeIf { it.isNotBlank() } ?: "hermes.invalid"
+        manifestPlaceholders["deepLinkPath"] =
+            (project.findProperty("deeplink.path") as String?)
+                ?.takeIf { it.isNotBlank() } ?: "/"
     }
 
     buildTypes {

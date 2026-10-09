@@ -7,10 +7,13 @@
   masquerade as a successful personal build.
 * personal APK: reads ONLY HERMES_APP_DEFAULT_URL/HERMES_APP_LEGACY_URL from
   the canonical env file (fail-fast when the default is missing/invalid),
-  passes them as two single --dart-define argv entries.
+  passes them as two single --dart-define argv entries. NOTIF2 B2 adds
+  HERMES_APP_DEEPLINK_URL (the public entry of the deep links): personal APK
+  builds fail fast without it and pass it to Gradle as -Pdeeplink.host/path.
 * public: opens NO env file, ignores same-named process env, passes both
   URL defines empty. Web builds are always the public shape (the browser
-  learns its own origin at runtime; nothing personal is compiled in).
+  learns its own origin at runtime; nothing personal is compiled in). The
+  APK gets the inert App Link placeholder host — never a deployment address.
 * API_SERVER_KEY (or any unknown define) is NEVER passed or inherited: the
   build child gets a scrubbed environment and the command line is logged
   without values.
@@ -28,6 +31,12 @@ import runtime_config  # noqa: E402
 
 URL_DEFINE = "HERMES_APP_DEFAULT_URL"
 LEGACY_DEFINE = "HERMES_APP_LEGACY_URL"
+# NOTIF2 B2: the PUBLIC ENTRY the deep links land on — usually NOT the same
+# host as API_SERVER_URL (that's the API origin; the link host is the server
+# deployment's click_base). Non-secret; becomes the AndroidManifest App Link
+# placeholder through a gradle property. Missing/invalid is fail-fast for a
+# personal APK; a public APK never reads it and gets the inert placeholder.
+LINK_DEFINE = "HERMES_APP_DEEPLINK_URL"
 
 
 def flutter_exe() -> str:
@@ -67,6 +76,30 @@ def personal_defines() -> list[str]:
             f"--dart-define={LEGACY_DEFINE}={legacy}"]
 
 
+def deeplink_gradle_args() -> list[str]:
+    """NOTIF2 B2: personal APK only. The public entry link origin splits
+    into the AndroidManifest App Link placeholder host/path; missing or
+    invalid config fails the build instead of shipping an APK whose
+    notifications fall off to the browser."""
+    from urllib.parse import urlsplit
+    try:
+        resolver = runtime_config.Resolver()
+        value = runtime_config.validate_url(
+            resolver.resolve(LINK_DEFINE, required=True),
+            name=LINK_DEFINE, allow_path=True)
+    except runtime_config.ConfigError as exc:
+        raise SystemExit(
+            f"personal APK builds need {LINK_DEFINE} in the env file: {exc}")
+    parts = urlsplit(value)
+    if parts.port:
+        raise SystemExit(
+            f"{LINK_DEFINE}: a non-standard port cannot ride an intent-filter "
+            "placeholder pipeline (android:port would need its own build-time "
+            "placeholder); serve the entry on the standard HTTPS port")
+    path = parts.path.rstrip("/") or "/"
+    return [f"-Pdeeplink.host={parts.hostname}", f"-Pdeeplink.path={path}"]
+
+
 def clean_if_switched(app: pathlib.Path, marker_name: str) -> None:
     """Controlled intermediates hygiene (§4.2): when the define shape changed
     in this checkout, drop the cached web/app intermediates first."""
@@ -99,9 +132,14 @@ def main() -> int:
     if args.profile == "public":
         defines = [f"--dart-define={URL_DEFINE}=",
                    f"--dart-define={LEGACY_DEFINE}="]
+        gradle_props: list[str] = []  # public: inert placeholder host, no env
         source = "empty defines, env file NOT opened"
     else:
         defines = personal_defines()
+        # NOTIF2 B2: only an APK has a manifest to place; web learns its own
+        # origin at runtime and stays public.
+        gradle_props = (deeplink_gradle_args() if args.target == "apk"
+                        else [])
         source = "personal defines from the canonical env file"
 
     clean_if_switched(app, f"{args.target}-{args.mode}-{args.profile}")
@@ -114,15 +152,19 @@ def main() -> int:
     # (apk: APP_VERSION keeps its existing source — the web bundle is the
     #  version-stamped artifact; do not introduce a new apk define here.)
     cmd += defines
+    if gradle_props:
+        # Flutter passes unknown -P flags straight to Gradle; a bare `--`
+        # separator is parsed as a target file and fails the build.
+        cmd += gradle_props
     # Values may be deployment addresses; never echo defines with values,
     # never forward the API key to the child.
     print("build:", " ".join(
-        c if not c.startswith("--dart-define=")
+        c if not (c.startswith("--dart-define=") or c.startswith("-Pdeeplink."))
         else c.split("=", 1)[0] + "=<set>"
         for c in cmd[1:]), f"({source})")
     child_env = dict(os.environ)
     child_env.pop("API_SERVER_KEY", None)
-    for name in (URL_DEFINE, LEGACY_DEFINE):
+    for name in (URL_DEFINE, LEGACY_DEFINE, LINK_DEFINE):
         child_env.pop(name, None)  # defines come from the file, not ambient env
     subprocess.run(cmd, cwd=app, env=child_env, check=True)
     return 0

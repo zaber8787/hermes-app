@@ -32,9 +32,39 @@
               android:name="io.flutter.embedding.android.NormalTheme"
               android:resource="@style/NormalTheme"
               />
+            <!-- NOTIF2 B2: app_links owns the intent; the engine must not
+                 consume the launch link in parallel. -->
+            <meta-data
+                android:name="flutter_deeplinking_enabled"
+                android:value="false" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+            <!-- NOTIF2 B2: HTTPS App Links for the canonical run deep link
+                 (https://<entry>/#/chat?session=..). host/pathPrefix are
+                 build-time placeholders — the deployment host is NEVER
+                 baked in (scripts/build_app.py + -Pdeeplink.*); see the
+                 README deploy note for assetlinks.json and the Android 12+
+                 manual-association fallback. -->
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"
+                    android:host="${deepLinkHost}"
+                    android:pathPrefix="${deepLinkPath}"/>
+            </intent-filter>
+            <!-- Same filter WITHOUT autoVerify: the honest fallback for a
+                 deployment whose domain cannot be verified (tailnet-only
+                 hosts) — used only once the user associates the domain. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"
+                    android:host="${deepLinkHost}"
+                    android:pathPrefix="${deepLinkPath}"/>
             </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.

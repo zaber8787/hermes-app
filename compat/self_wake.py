@@ -62,6 +62,11 @@ def reset():
     _module_state["generation_guard"] = {}
     _module_state["thread"] = None
     _module_state["thread_loop"] = None
+    try:
+        from . import compat
+        compat.selfwake_liveness("stopped", "module-reset")
+    except Exception:
+        pass
 
 
 # --------------------------------------------------------------------------
@@ -586,6 +591,8 @@ class SelfWakeWorker:
         self._next_reconcile = 0.0
         self._mode_seen = None
         self._audit_throttle = {}
+        self._sweep_state = None
+        self._sweep_at = None
 
     # -- lifecycle ----------------------------------------------------------
     def arm(self, loop):
@@ -593,6 +600,26 @@ class SelfWakeWorker:
         if self._task is None or self._task.done():
             self._wake = asyncio.Event()
             self._task = loop.create_task(self._run(), name="hermes-app-selfwake")
+            self._task.add_done_callback(self._task_finished)
+
+    def _task_finished(self, task):
+        """S3: classify every unexpected ending instead of letting asyncio
+        report it late or silently. NEVER restarts here — arming (connect /
+        reload / explicit re-arm) is the only restart surface, so a faulted
+        wait section can never spin a hot restart loop."""
+        if task.cancelled():
+            log.info("selfwake sweep task cancelled (stop/shutdown path)")
+            return
+        exc = task.exception()
+        if exc is None:
+            log.warning("selfwake sweep task returned without cancel")
+            return
+        log.error("selfwake sweep task died: %s: %s", type(exc).__name__, exc)
+        try:
+            from . import compat
+            compat.selfwake_liveness("dead", "sweep-task-died")
+        except Exception:
+            pass
 
     def stop(self):
         task = self._task
@@ -614,12 +641,18 @@ class SelfWakeWorker:
             except asyncio.TimeoutError:
                 pass
             self._wake.clear()
+            # S3: sweep boundaries are observable without guessing from audit
+            # throttling gaps (audit is >=300s per tag BY DESIGN).
+            self._sweep_state = "start"
+            log.debug("selfwake sweep start")
             try:
                 await self.tick()
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
                 log.warning("selfwake tick failed: %s", type(exc).__name__)
+            self._sweep_state = "end"
+            self._sweep_at = time.time()
 
     # -- one pass -----------------------------------------------------------
     async def tick(self):
@@ -1103,6 +1136,25 @@ def arm_stop():
     _module_state["loop"] = None
     if worker is not None:
         worker.stop()
+    try:
+        from . import compat
+        compat.selfwake_liveness("stopped", "platform-disconnect")
+    except Exception:
+        pass
+
+
+def liveness():
+    """Live worker truth for diagnostics — the manifest liveness field is
+    install-path bookkeeping; this is the direct answer to 'is the sweep
+    actually running?'"""
+    worker = _module_state.get("worker")
+    task = worker._task if worker is not None else None
+    return {"worker": worker is not None,
+            "task_done": (task.done() if task is not None else None),
+            "loop": _module_state.get("loop") is not None,
+            "sweep_state": (worker._sweep_state if worker is not None else None),
+            "sweep_at": (round(worker._sweep_at, 3) if worker is not None
+                         and worker._sweep_at else None)}
 
 
 def lineage_root(db, resolved):

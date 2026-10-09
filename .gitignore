@@ -112,3 +112,7 @@ scripts/watch-nudge.sh
 .fix2-scratch/
 .sw2-scratch/
 .selfwake2impl-evidence/
+
+# TASK-NOTIF2-IMPL evidence/scratch (never commit)
+.notif2-evidence/
+.n2-scratch/

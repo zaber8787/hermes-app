@@ -64,7 +64,10 @@ class ReminderPhaseTests(unittest.TestCase):
                                                  run_id="r9", request_id="q",
                                                  pending=True))
 
-    def test_other_channel_is_still_refused_for_a_new_phase(self):
+    def test_parallel_browser_after_ntfy_is_not_a_re_route(self):
+        """NOTIF2 B1: browser and ntfy are PARALLEL surfaces, so the old
+        ntfy->browser 're-route' refusal is replaced by independent rows;
+        only a FOREIGN channel may never take over a claimed delivery."""
         calls = []
         eid, _ = events.deliver(self.reg, owner_scope="me", run_id="r7", sid="s",
                                 kind="approval_request", source_id="req-7",
@@ -75,8 +78,17 @@ class ReminderPhaseTests(unittest.TestCase):
                                        source_id="req-7", payload={},
                                        phase="reminder", channel="browser",
                                        publish=lambda: calls.append(2) or True)
-        self.assertEqual(verdict, "already_claimed_other_channel")
-        self.assertEqual(calls, [1], "a config change never re-routes to another channel")
+        self.assertNotEqual(verdict, "already_claimed_other_channel",
+                            "browser runs parallel to ntfy (NOTIF2 B1)")
+        self.assertIn(2, calls)
+        _eid, refused = events.deliver(self.reg, owner_scope="me", run_id="r7",
+                                       sid="s", kind="approval_request",
+                                       source_id="req-7", payload={},
+                                       phase="later", channel="carrier-pigeon",
+                                       publish=lambda: calls.append(3) or True)
+        self.assertEqual(refused, "already_claimed_other_channel")
+        self.assertNotIn(3, calls, "a config change never re-routes to a "
+                                   "foreign channel")
 
     def test_gate_reports_the_reminder_as_delivered(self):
         gate = events.approval_initial_hook(self.reg)

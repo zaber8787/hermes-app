@@ -115,7 +115,7 @@ class AppDeliveryAdapter:
     supports_async_delivery = True
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
-        from . import cron_delivery_store, self_wake
+        from . import cron_delivery_store
         from hermes_constants import get_hermes_home
         self._stopping = asyncio.Event()
         home = get_hermes_home()
@@ -124,7 +124,10 @@ class AppDeliveryAdapter:
                                            name="hermes-app-cron-drainer")
         # SELFWAKE: the gateway owns the worker; arming is mode-agnostic and
         # cheap — wake.selfwake decides inside every tick (fail closed off).
-        self_wake.arm_loop(asyncio.get_running_loop(), home)
+        # Rides compat's guarded lifecycle helper so connect, factory replay
+        # and the install-time scan share one bookkeeping path (SELFWAKE2).
+        from . import compat as _compat
+        _compat.selfwake_connect_arm(asyncio.get_running_loop(), home)
         log.info("app platform connected; cron drainer armed for %s", home)
         return True
 
@@ -132,7 +135,7 @@ class AppDeliveryAdapter:
         from . import self_wake
         if getattr(self, "_stopping", None) is not None:
             self._stopping.set()
-        self_wake.arm_stop()
+        self_wake.arm_stop()  # stamps liveness "stopped"
         drainer = getattr(self, "_drainer", None)
         if drainer is not None:
             self._drainer = None

@@ -410,17 +410,38 @@ async def case_notification_events(args, server, check):
                 check(replayV[1].startswith("already"),
                       f"a settled delivery replays as already_* ({replayV[1]})")
 
-                configure(push="hub")  # config change must NOT re-route the claim
+                # NOTIF2 B1: ntfy is a PARALLEL surface, not a re-route —
+                # switching config to ntfy gives this event its own ONE
+                # ntfy delivery while the claimed browser row stays exactly
+                # 'shown', and a replay of the ntfy row never re-publishes.
+                configure(push="hub")
+
+                def _publish_once():
+                    hub.posts.append({"title": "Hermes: run failed", "message": "",
+                                      "priority": "", "tags": [], "json": True})
+                    return True
+
                 outcome = events.deliver(events.registry(), owner_scope=scope,
                                          run_id="run-browser", sid=sid, kind="failed",
                                          source_id="terminal", payload={},
-                                         publish=lambda: hub.posts.append(
-                                             {"title": "MUST NOT HAPPEN", "message": "",
-                                              "priority": "", "tags": [], "json": True}))
-                check(outcome[1].startswith("already"),
-                      "an already-claimed delivery is never re-routed to ntfy")
-                check(not [p for p in hub.posts if "run failed" in p["title"]],
-                      "no ntfy publish happened for the browser-claimed event")
+                                         publish=_publish_once)
+                check(outcome[1] == "enqueued",
+                      f"the browser claim never swallows the ntfy surface "
+                      f"({outcome[1]})")
+                check(len([p for p in hub.posts if "run failed" in p["title"]]) == 1,
+                      "the config change publishes ntfy exactly once beside the "
+                      "browser row")
+                check(store.delivery_state(events.home_of(reg), event_id,
+                                           "initial", "browser") == "shown",
+                      "the ntfy publish leaves the claimed browser row untouched")
+                replayN = events.deliver(events.registry(), owner_scope=scope,
+                                         run_id="run-browser", sid=sid,
+                                         kind="failed", source_id="terminal",
+                                         payload={}, publish=_publish_once)
+                check(replayN[1].startswith("already"),
+                      f"the settled ntfy row replays as already_* ({replayN[1]})")
+                check(len([p for p in hub.posts if "run failed" in p["title"]]) == 1,
+                      "the replay publishes ntfy no second time")
                 hub.posts.clear()
 
                 # ---- kill switch: old policy, routes closed -------------------------

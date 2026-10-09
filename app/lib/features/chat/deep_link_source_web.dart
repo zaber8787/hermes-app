@@ -16,3 +16,7 @@ Stream<String> locationChanges() {
   };
   return controller.stream;
 }
+
+/// Web keeps the address bar as its live source (app_links only supplies
+/// an initial link here, which the launch stash already captures in main).
+Stream<String> incomingLinks() => locationChanges();

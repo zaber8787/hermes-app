@@ -22,6 +22,7 @@ All non-secret settings and build defines come from one dotenv file: `~/.hermes/
 |---|---|---|
 | `HERMES_APP_DEFAULT_URL` | factory URL of the personal APK (build define) | personal build fails outright; public build stays empty |
 | `HERMES_APP_LEGACY_URL` | exact legacy-URL migration (personal only) | no migration |
+| `HERMES_APP_DEEPLINK_URL` | public entry the mobile deep links land on; personal APK App Link host/path (build time) | personal APK build fails outright; public APK ships an inert placeholder host |
 | `HERMES_LIVE_BASE_URL` | gateway address for live tools/probes | live tools fail before any network request |
 | `HERMES_WEB_API` / `HERMES_WEB_HOST` / `HERMES_WEB_PORT` | reverse proxy upstream / bind / port | loopback `127.0.0.1:8700` → `http://127.0.0.1:8642`; no public interface by default |
 | `HERMES_WEB_ROOT` / `HERMES_WEB_HOME` | static root / memories home | `web/current` in the repo / `~/.hermes` |
@@ -47,7 +48,7 @@ flutter analyze
 flutter test                             # single files / debugging; use the script above for full sweeps
 ```
 
-`--profile` is required, no default. `--profile public` never opens the env file, same-named variables from the outer environment are ignored, and both URL defines are explicitly empty — a fresh install lands on the Settings page and makes zero requests until you enter your own server. Bare `flutter build` still works but behaves like a public empty build; it does not count as personal acceptance.
+`--profile` is required, no default. `--profile public` never opens the env file, same-named variables from the outer environment are ignored, and both URL defines are explicitly empty — a fresh install lands on the Settings page and makes zero requests until you enter your own server. Bare `flutter build` still works but behaves like a public empty build; it does not count as personal acceptance. For the APK to receive `https://` run deep links (notification taps opening the app instead of a browser), a personal build also needs `HERMES_APP_DEEPLINK_URL`; see [docs/DEEP-LINK-DEPLOY.md](docs/DEEP-LINK-DEPLOY.md) for the App Link host, `assetlinks.json` and the Android 12+ manual-association fallback.
 
 The whole toolchain lives in `toolchain/` (never in Git): the installer checks free disk space, downloads with timeouts and retries, verifies checksums for Flutter and the command-line tools, and unpacks a JDK from the distro repo into `toolchain/jdk/` when the system has none, without touching system packages. Gradle heap and concurrency are capped; Gradle may still fetch required components itself. The APK lands in `app/build/app/outputs/flutter-apk/`, installable on a test device via `adb install -r`. First launch (or any invalid setting) stops at the Settings page: enter your server URL and API key; the key is not in the source, the APK or build flags. If your server sits on a private network, join that network first.
 

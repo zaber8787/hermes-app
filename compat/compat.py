@@ -326,20 +326,33 @@ def install(ctx):
                         seq = int(state.get("route_sync_seq", 0)) + 1
                         state["route_sync_seq"] = seq
 
-                        def sync(native, adapter, _seq=seq):
+                        # SELFWAKE2: factories keep the loop/adapter pairing
+                        # that the install-time GC scan re-arms from.
+                        swst = state.get("selfwake") or {}
+
+                        def sync(native, adapter, _seq=seq,
+                                 _loops=swst.get("loops"),
+                                 _module=swst.get("module"),
+                                 _gen=swst.get("generation")):
                             _sync_routes(native, adapter)
-                            # SELFWAKE RE-ARM: connect() only runs once per
-                            # gateway boot, but this factory replays on EVERY
-                            # plugin-loaded rewire — including the rewire a
-                            # force reload fires after selfwake.reset stopped
-                            # the worker. Arm here (idempotent singleton) so a
-                            # reload never leaves the worker permanently off
-                            # (2026-10 audit: ticks went silent after reload).
+                            # SELFWAKE re-arm: this factory runs at connect
+                            # AND at every loaded-driven rewire, so liveness
+                            # from it stays correct wherever notifications DO
+                            # arrive; the install-time live-adapter scan
+                            # covers the same-name-reload gap where they do
+                            # not (TASK/SELFWAKE2.md). arm_loop stays the
+                            # idempotent singleton; the module+generation
+                            # guard retires stale factories, so a reload can
+                            # never stack workers or resurrect an old load.
                             try:
-                                from . import self_wake
-                                from hermes_constants import get_hermes_home
-                                self_wake.arm_loop(
-                                    asyncio.get_running_loop(), get_hermes_home())
+                                loop = asyncio.get_running_loop()
+                                if adapter is not None and _loops is not None:
+                                    try:
+                                        _loops[adapter] = loop
+                                    except TypeError:
+                                        pass
+                                if _module is not None:
+                                    _selfwake_rearm(loop, _module, _gen, "factory-replay")
                             except Exception as exc:
                                 # silence here once hid "reload never re-arms"
                                 # for a full day (audit ticks dead 12h+)
@@ -447,6 +460,115 @@ def _sync_routes(native, adapter):
                  swapped, added)
 
 
+def _selfwake_liveness(state_name, reason=None):
+    """Manifest-visible worker state (never keys, URLs or bodies): the one
+    field to read when asking "why didn't it wake" (T3)."""
+    state = getattr(api, _STATE, None) or {}
+    swst = state.get("selfwake") or {}
+    unit = (state.get("manifest") or {}).get("selfwake")
+    stamp = {"state": state_name, "at": round(time.time(), 3)}
+    if reason:
+        stamp["reason"] = reason
+    if swst.get("generation") is not None:
+        stamp["generation"] = swst["generation"]
+    if isinstance(unit, dict):
+        unit["liveness"] = stamp
+    return stamp
+
+
+def _selfwake_arm_guarded(loop, module, generation, source):
+    """Runs ON `loop`: arm the CURRENT install's worker and nothing else.
+    Stale loads, unloaded units and closed loops fail CLOSED with a reason —
+    an old load's late callback can never resurrect a replaced worker."""
+    state = getattr(api, _STATE, None) or {}
+    swst = state.get("selfwake") or {}
+    if swst.get("module") is not module or swst.get("generation") != generation:
+        _selfwake_liveness("skipped", "stale-load")
+        return
+    status = ((state.get("manifest") or {}).get("selfwake") or {}).get("status")
+    if status != "applied":
+        _selfwake_liveness("skipped", f"unit-{status}")
+        return
+    if loop is None or loop.is_closed():
+        _selfwake_liveness("skipped", "no-owning-loop")
+        return
+    try:
+        from hermes_constants import get_hermes_home
+        module.arm_loop(loop, get_hermes_home())
+    except Exception as exc:
+        _selfwake_liveness("dead", f"arm-failed:{type(exc).__name__}")
+        log.warning("selfwake re-arm failed: %s: %s", type(exc).__name__, exc)
+        return
+    _selfwake_liveness("armed", source)
+
+
+def _selfwake_rearm(loop, module, generation, source):
+    """Schedule the guarded arm on the ADAPTER's owning loop; safe to call
+    from loader/executor threads. Never creates a loop of its own."""
+    if loop is None:
+        _selfwake_liveness("skipped", "no-owning-loop")
+        return
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is loop:
+        _selfwake_arm_guarded(loop, module, generation, source)
+        return
+    try:
+        loop.call_soon_threadsafe(_selfwake_arm_guarded, loop, module, generation, source)
+    except (RuntimeError, OSError):
+        _selfwake_liveness("skipped", "loop-unreachable")
+
+
+def selfwake_connect_arm(loop, home):
+    """App-platform connect seam: same guarded entry as every other arm so
+    liveness bookkeeping cannot diverge between paths."""
+    swst = (getattr(api, _STATE, None) or {}).get("selfwake") or {}
+    if swst.get("module") is None:
+        return  # unit not applied (skipped/abandoned): fail CLOSED
+    _selfwake_rearm(loop, swst["module"], swst.get("generation"), "connect")
+
+
+def selfwake_liveness(state_name, reason):
+    """Public stamp surface for lifecycle transitions (armed / skipped /
+    dead / stopped, plus reason) so every state change lands on the ONE
+    manifest field — including self_wake's own arm_stop/reset/task-death."""
+    _selfwake_liveness(state_name, reason)
+
+
+def _selfwake_scan_rearm(swst, adapters):
+    """SELFWAKE2 liveness repair for the LIVE adapters of THIS install.
+    Upstream on_plugin_loaded only fires for NEWLY loaded plugin keys, so a
+    same-name force reload runs this scan (routes "succeed") while no
+    notification-driven factory ever re-arms the worker (TASK/SELFWAKE2.md).
+    The owning loop is the adapter's live gateway loop, falling back to the
+    loop recorded for that very adapter when its factory last ran; with
+    neither, the unit fails CLOSED with a reason instead of claiming armed.
+    arm_loop stays the idempotent singleton — repeated scans+factories can
+    never stack workers."""
+    module, generation = swst.get("module"), swst.get("generation")
+    if module is None:
+        return
+    loops = {}
+    recorded = swst.get("loops") or {}
+    for ref in adapters:
+        runner = getattr(ref, "gateway_runner", None)
+        loop = getattr(runner, "_gateway_loop", None)
+        if loop is None:
+            try:
+                loop = recorded.get(ref)
+            except Exception:
+                loop = None
+        if loop is not None:
+            loops[id(loop)] = loop
+    if loops:
+        for loop in loops.values():
+            _selfwake_rearm(loop, module, generation, "install-live-adapters")
+    else:
+        _selfwake_liveness("skipped", "no-owning-loop")
+
+
 def _sync_live_adapters():
     """Reload-time repair for ALREADY-RUNNING adapters. The platform-handler
     factory covers connects and well-armed rewires, but an adapter whose
@@ -462,6 +584,7 @@ def _sync_live_adapters():
     except Exception:
         return
     found = 0
+    live = []
     for ref in gc.get_objects():
         try:
             if type(ref) is not APIServerAdapter:
@@ -470,10 +593,12 @@ def _sync_live_adapters():
             if app is not None and getattr(app, "router", None) is not None:
                 _sync_routes(app, ref)
                 found += 1
+                live.append(ref)
         except Exception:
             continue
     if found:
         log.info("route sync replayed on %d live api_server adapter(s)", found)
+        _selfwake_scan_rearm((getattr(api, _STATE, None) or {}).get("selfwake") or {}, live)
 
 
 def _install_limits(tx):
@@ -2295,10 +2420,33 @@ def _install_selfwake(tx):
     state = getattr(api, _STATE, None)
     if state is None:
         raise RuntimeError("compat state missing")
-    tx.cleanups.append(self_wake.reset)
-    state["selfwake"] = {"module": self_wake, "backend": _BACKEND}
+    # SELFWAKE2 lifecycle state lives on the SHARED compat state (not the
+    # module) so it survives the very reload that swaps the module: the
+    # generation invalidates queued arms from older loads, and the adapter→
+    # loop registry lets the install-time scan find each adapter's owning
+    # loop even where no loaded notification ever arrives.
+    prev = state.get("selfwake") or {}
+    loops = prev.get("loops")
+    if loops is None:
+        import weakref
+        loops = weakref.WeakKeyDictionary()
+    state["selfwake"] = {"module": self_wake, "backend": _BACKEND,
+                         "generation": int(prev.get("generation", 0)) + 1,
+                         "loops": loops}
     if "wake" in state:
         state["wake"]["selfwake"] = self_wake
+
+    def _unload_liveness(_mod=self_wake, _gen=state["selfwake"]["generation"]):
+        # Bump the generation BEFORE reset so this load's already-queued
+        # callbacks fail their identity guard; other loads carry their own
+        # (module, generation) pair and are equally retired by their reset.
+        cur = (getattr(api, _STATE, None) or {}).get("selfwake") or {}
+        if cur.get("module") is _mod:
+            cur["generation"] = int(cur.get("generation", _gen)) + 1
+        _selfwake_liveness("stopped", "unload-reset")
+        _mod.reset()
+
+    tx.cleanups.append(_unload_liveness)
 
 
 class _Bridge:
@@ -3922,9 +4070,11 @@ def _install_notification_events(tx):
         event = notification_store.get_event(store, scope, event_id)
         if event is None:
             return api._error_response("Event not found.", 404, code="event_not_found")
-        if notification_events.system_channel(reg) != "browser":
-            return api._error_response("The system channel is not browser.", 409,
-                                       code="channel_not_browser")
+        # NOTIF2 B1: the browser surface is a PERMANENT parallel channel, not
+        # a no-ntfy fallback — the system channel never refuses a claim.
+        # This endpoint stays browser-only by construction (the channel is
+        # fixed here); owner/event/read validation and the durable show
+        # token are unchanged.
         if event.get("read_at"):
             return api._error_response("Event already read.", 409, code="already_read")
         token = api.uuid.uuid4().hex  # minted BEFORE the claim, persisted BY it

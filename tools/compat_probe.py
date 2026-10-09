@@ -18,7 +18,8 @@ import time
 
 CASES = ("upload", "limits", "media", "history", "approval", "skills", "activity", "push",
          "approval_inbox", "approval_push", "approval_central", "cron_bridge", "wake",
-         "wakecap", "selfwake", "steer_inbox", "notification_events")
+         "wakecap", "selfwake", "selfwake_reload", "selfwake_batch", "steer_inbox",
+         "notification_events")
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -190,6 +191,8 @@ def offline(args):
                 "wake": "messages provenance / auto-wake admission ledger, quota, receipts, dispatch CAS",
                 "wakecap": "hot-reload route sync: live/frozen routers resolve compat route rows to the current handlers",
                 "selfwake": "server self-wake: durable intents in the receipt transaction, generation/cutoff, reconciliation, shadow/off gates, chain fuse, audit",
+                "selfwake_reload": "selfwake liveness survives same-name force reloads: install-path re-arm, notification contract, stop semantics",
+                "selfwake_batch": "zombie wake_batches: done intents never due, reconcile never reopens, pending sibling still progresses, ledger untouched",
                 "steer_inbox": "durable run-scoped steer inbox: auth/epoch gates, idempotent admission, receipts, seal, capability fail-closed",
                 "notification_events": "notification ledger: stable event ids, single publish, read-gated reminders, browser claim, terminals never replayed",
                 "control": "clean HEAD without plugin", "lifecycle": "register/on_unload transactions",
