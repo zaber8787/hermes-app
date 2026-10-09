@@ -589,6 +589,7 @@ class SelfWakeWorker:
         self._loop = None
         self._busy = False
         self._next_reconcile = 0.0
+        self._batch_cursor = ''
         self._mode_seen = None
         self._audit_throttle = {}
         self._sweep_state = None
@@ -678,8 +679,11 @@ class SelfWakeWorker:
                     await asyncio.to_thread(reconcile, self.home)
                     self._next_reconcile = now + RECONCILE_INTERVAL_S
                 return  # shadow NEVER admits or dispatches
+            self._throttled_audit('sweep-heartbeat', phase='sweep',
+                                  reason='worker-alive', trigger='self')
             if now >= self._next_reconcile:
                 await asyncio.to_thread(reconcile, self.home)
+                await self._reconcile_batches()
                 self._next_reconcile = now + RECONCILE_INTERVAL_S
             rows = await asyncio.to_thread(self._due, now)
             session = rows[0]["session_id"] if rows else None
@@ -689,6 +693,41 @@ class SelfWakeWorker:
             await self._process(session, items, params, now)
         finally:
             self._busy = False
+
+    async def _reconcile_batches(self):
+        # Independent of _due: a historically done intent cannot hide an
+        # unclosed batch. Four bounded GETs per page, never a new POST.
+        from . import wake_reconcile
+        page = await asyncio.to_thread(wake_reconcile.batch_candidates, self.home,
+                                       after=self._batch_cursor, limit=4)
+        snapshots = {}
+        eligible = []
+        for batch in page:
+            # Active watching intents retain their normal chain/poll path.
+            # Only a completed bookkeeping association is historical work.
+            closed = await asyncio.to_thread(wake_reconcile.done_intent_evidence,
+                                             self.home, batch)
+            if closed and batch['run_id']:
+                eligible.append(batch['batch_id'])
+                snapshots[batch['batch_id']] = await self._run_snapshot_once(batch['run_id'])
+        await asyncio.to_thread(
+            wake_reconcile.reconcile_batches, self.home,
+            lambda batch: snapshots.get(batch['batch_id']), dry_run=False,
+            batch_ids=eligible, limit=4)
+        self._batch_cursor = page[-1]['batch_id'] if len(page) == 4 else ''
+
+    async def _run_snapshot_once(self, run_id):
+        result = endpoint(self.home)
+        if result[0] is None:
+            return None
+        base, headers = result
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2)) as sess:
+                async with sess.get(f'{base}/v1/runs/{run_id}', headers=headers) as resp:
+                    return await resp.json() if resp.status == 200 else None
+        except Exception:
+            return None
 
     def _due(self, now):
         conn = _bridge(self.home)
@@ -719,6 +758,35 @@ class SelfWakeWorker:
                      next_at if next_at is not None else item["next_attempt_at"],
                      now, item["delivery_key"]))
             conn.commit()
+
+    def _quarantine_settlement(self, items, resolved, batch_id, run_id=None):
+        self._set_items(items, 'watching', batch=batch_id,
+                        detail='ledger-settlement-conflict', next_at=time.time() + 300)
+        self._throttled_audit(f'settlement:{batch_id}', phase='decision',
+                              resolved=resolved, batch_id=batch_id, run_id=run_id,
+                              reason='ledger-settlement-conflict', trigger='self')
+
+    async def _record_batch(self, items, resolved, batch_id, state, run_id=None):
+        from . import auto_wake_store
+        try:
+            result = await asyncio.to_thread(auto_wake_store.report, self.home,
+                                             batch_id=batch_id, resolved=resolved,
+                                             state=state, run_id=run_id)
+            if result.get('status') == 'ok':
+                return True
+            # Another observer may already have performed the same close.
+            view = await asyncio.to_thread(auto_wake_store.receipt, self.home,
+                                           batch_id=batch_id, resolved=resolved)
+            receipt = view.get('receipt', {})
+            valid = {'terminal'} if state == 'terminal' else (
+                {'terminal','uncertain-consumed'} if state == 'uncertain' else {'accepted'})
+            if (receipt.get('state') in valid and
+                    (state != 'accepted' or receipt.get('run_id') == run_id)):
+                return True
+        except Exception:
+            pass
+        self._quarantine_settlement(items, resolved, batch_id, run_id)
+        return False
 
     def _throttled_audit(self, tag, **fields):
         last = self._audit_throttle.get(tag)
@@ -773,6 +841,18 @@ class SelfWakeWorker:
             # 2. OUR batch already exists (dispatch retry / crash recovery):
             # NEVER admit a second batch for these keys.
             if own_batch:
+                if any(i.get('detail') == 'ledger-settlement-conflict' for i in linked):
+                    # An observed launch/terminal with a conflicting ledger
+                    # must never be retried as an undispatched reservation.
+                    state_now = await asyncio.to_thread(self._batch_state, own_batch)
+                    if state_now in ('terminal','uncertain-consumed'):
+                        self._set_items(linked, 'done', detail=state_now)
+                        return
+                    if state_now not in ('dispatching', 'accepted'):
+                        self._quarantine_settlement(linked, resolved, own_batch)
+                        return
+                    # Launched batches can retry observation and settlement
+                    # below; this branch cannot issue another POST.
                 state_now = await asyncio.to_thread(self._batch_state, own_batch)
                 if state_now == "reserved":
                     await self._dispatch(linked, resolved, own_batch)
@@ -800,9 +880,8 @@ class SelfWakeWorker:
                             else:
                                 await self._fail_note(resolved, f"run-{done}")
                             return
-                    await asyncio.to_thread(auto_wake_store.report, self.home,
-                                           batch_id=own_batch, resolved=resolved,
-                                           state="uncertain")
+                    if not await self._record_batch(linked, resolved, own_batch, 'uncertain'):
+                        return
                     self._set_items(linked, "done", detail="uncertain-consumed")
                     await self._fail_note(resolved, "crash-recovery-settled")
                     audit(self.home, phase="terminal", original=session,
@@ -923,7 +1002,9 @@ class SelfWakeWorker:
 
     async def _dispatch(self, items, resolved, batch_id):
         from . import auto_wake
-        from .auto_wake_store import report
+        if any(i.get('detail') == 'ledger-settlement-conflict' for i in items):
+            self._quarantine_settlement(items, resolved, batch_id)
+            return
         result = endpoint(self.home)
         if result[0] is None:
             self._throttled_audit(f"endpoint:{result[1]}", phase="decision",
@@ -951,15 +1032,14 @@ class SelfWakeWorker:
                                             next_at=time.time() + 15,
                                             detail=f"retry:{resp.status}")
                             return
-                        self._set_items(items, "done", detail=f"http:{resp.status}:{state}")
-                        await self._fail_note(resolved, f"http-{resp.status}")
-                        audit(self.home, phase="terminal", resolved=resolved,
-                              batch_id=batch_id, to_state=state,
-                              reason=f"http-{resp.status}", trigger="self",
-                              latency=time.time() - t0)
+                        await self._settle_unseen(items, resolved, batch_id, run_id)
                         return
                     event = None
                     async for raw in resp.content:
+                        # A long healthy SSE turn still proves worker liveness;
+                        # use the same five-minute throttle as idle sweeps.
+                        self._throttled_audit('sweep-heartbeat', phase='sweep',
+                                              reason='worker-alive', trigger='self')
                         line = raw.decode("utf-8", "replace").rstrip("\r\n")
                         if line.startswith("event: "):
                             event = line[7:]
@@ -979,12 +1059,12 @@ class SelfWakeWorker:
                             run_id = payload.get("run_id")
                             if run_id and not started:
                                 started = True
-                                await asyncio.to_thread(
-                                    report, self.home, batch_id=batch_id,
-                                    resolved=resolved, state="accepted", run_id=run_id)
+                                if not await self._record_batch(items, resolved, batch_id,
+                                                                'accepted', run_id):
+                                    return
             if terminal is not None:
-                await asyncio.to_thread(report, self.home, batch_id=batch_id,
-                                        resolved=resolved, state="terminal")
+                if not await self._record_batch(items, resolved, batch_id, 'terminal', run_id):
+                    return
                 self._set_items(items, "done", detail=terminal)
                 lineage = None
                 try:
@@ -1024,8 +1104,11 @@ class SelfWakeWorker:
         if state in ("terminal", "uncertain-consumed"):
             self._set_items(items, "done", detail=state)
         elif state == "reserved":
-            self._set_items(items, "pending", next_at=time.time() + 15,
-                            detail="retry-after-close")
+            if run_id or any(i.get('detail') == 'ledger-settlement-conflict' for i in items):
+                self._quarantine_settlement(items, resolved, batch_id, run_id)
+            else:
+                self._set_items(items, "pending", next_at=time.time() + 15,
+                                detail="retry-after-close")
         else:
             # dispatching/accepted with an unfinished view: never re-POST.
             # 01413 M4: the LEDGER settles FIRST, then the intent closes.
@@ -1039,17 +1122,15 @@ class SelfWakeWorker:
             if state == "accepted" and run_id:
                 settled = await self._run_terminal_once(run_id)
             if settled is not None:
-                await asyncio.to_thread(auto_wake_store.report, self.home,
-                                        batch_id=batch_id, resolved=resolved,
-                                        state="terminal")
+                if not await self._record_batch(items, resolved, batch_id, 'terminal', run_id):
+                    return
                 self._set_items(items, "done", detail=settled)
                 audit(self.home, phase="terminal", resolved=resolved,
                       batch_id=batch_id, run_id=run_id, to_state="terminal",
                       reason="stream-unseen-status", trigger="self")
             else:
-                await asyncio.to_thread(auto_wake_store.report, self.home,
-                                        batch_id=batch_id, resolved=resolved,
-                                        state="uncertain")
+                if not await self._record_batch(items, resolved, batch_id, 'uncertain', run_id):
+                    return
                 self._set_items(items, "done", detail="uncertain-consumed")
                 await self._fail_note(resolved, "stream-unseen-terminal")
                 audit(self.home, phase="terminal", resolved=resolved,
@@ -1059,22 +1140,9 @@ class SelfWakeWorker:
     async def _run_terminal_once(self, run_id):
         """ONE pollable-status look, no retry loop (the caller must settle
         now); returns the terminal status only when the run store proves it."""
-        result = endpoint(self.home)
-        if result[0] is None:
-            return None
-        base, headers = result
-        import aiohttp
-        try:
-            async with aiohttp.ClientSession() as sess:
-                async with sess.get(f"{base}/v1/runs/{run_id}",
-                                    headers=headers) as resp:
-                    if resp.status != 200:
-                        return None
-                    payload = await resp.json()
-            status = payload.get("status")
-            return status if status in {"completed", "failed", "cancelled"} else None
-        except Exception:
-            return None
+        payload = await self._run_snapshot_once(run_id)
+        status = payload.get('status') if isinstance(payload, dict) else None
+        return status if status in {'completed', 'failed', 'cancelled'} else None
 
     async def _poll_run(self, batch_id, resolved):
         """Accepted batch whose SSE died: ask the run store; terminal → close
@@ -1085,7 +1153,7 @@ class SelfWakeWorker:
         base, headers = result
         import aiohttp
         try:
-            async with aiohttp.ClientSession() as sess:
+            async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=2)) as sess:
                 for _ in range(12):
                     async with sess.get(f"{base}/v1/runs/{batch_run(batch_id, self.home)}",
                                         headers=headers) as resp:
@@ -1094,10 +1162,9 @@ class SelfWakeWorker:
                         payload = await resp.json()
                     if payload.get("status") in {"completed", "failed", "cancelled"}:
                         from . import auto_wake_store
-                        await asyncio.to_thread(auto_wake_store.report, self.home,
-                                                batch_id=batch_id, resolved=resolved,
-                                                state="terminal")
-                        return payload["status"]
+                        if await self._record_batch([], resolved, batch_id, 'terminal'):
+                            return payload["status"]
+                        return False
                     await asyncio.sleep(5)
         except Exception:
             return False

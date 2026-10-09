@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import suppress
 from functools import wraps
@@ -32,7 +33,7 @@ EXTRA_MIMES = frozenset({
 })
 UNITS = ("limits", "upload", "media", "history", "approval", "skills", "activity", "push",
          "approval_inbox", "cron_bridge", "wake", "selfwake", "steer_inbox",
-         "notification_events")
+         "notification_events", "messages_timing")
 log = logging.getLogger("hermes-app-compat")
 _STATE = "_hermes_app_compat_state_v1"
 _MISSING = object()
@@ -775,11 +776,151 @@ def _install_history(tx):
     # GET /v1/media/download (older clients keep the attachment-tile UX —
     # functional, just not inline). The live SSE first frame keeps its
     # data URL behaviour UNTOUCHED (contract.md pins it).
+    # IMGPERF A3: inside an active messages request (sql already recorded)
+    # the wrapper also accumulates the per-row projection time and the MEDIA
+    # marker scan into the request's stage box — numbers only, and only
+    # inside that box; every other call site runs the plain original.
     @wraps(original)
     def message(row):
-        return original(row)
+        box = _MSG_BOX.get()
+        if box is None or "decode_ms" not in box:
+            return original(row)
+        started = time.monotonic()
+        projected = original(row)
+        box["decode_ms"] += (time.monotonic() - started) * 1000.0
+        content = projected.get("content") if isinstance(projected, dict) else None
+        if isinstance(content, str) and "MEDIA:" in content:
+            scanned = time.monotonic()
+            box["media_count"] += content.count("MEDIA:")
+            box["media_ms"] += (time.monotonic() - scanned) * 1000.0
+        return projected
     message.__hermes_app_compat__ = VERSION
     tx.set(cls, "_message_response", staticmethod(message))
+
+
+# ---- messages timing unit (IMGPERF A3: bounded stage diagnostics) -----------
+# One ContextVar box per request, opened in TASK context where the messages
+# handler first awaits _ensure_session_db_async; asyncio.to_thread copies the
+# context, so the thread-side get_messages wrapper mutates the SAME dict
+# object the task can see. The JSON step (end of the handler) finalizes:
+# cold/warm classification of the exact (resolved session, limit, offset,
+# latest) page key, manifest aggregates, and one debug line. Numbers only —
+# never content, paths of conversation data, or keys. No index, no schema,
+# no core change: this unit only watches, and any fault inside it degrades
+# to the untouched request.
+
+_MSG_BOX = contextvars.ContextVar("hermes_app_messages_stage", default=None)
+_MSG_SEEN: "OrderedDict[tuple, bool]" = OrderedDict()
+_MSG_SEEN_MAX = 4096
+_MSG_LOCK = threading.Lock()
+_MSG_STATS = {
+    bucket: {stage: {"n": 0, "min": 0.0, "max": 0.0, "sum": 0.0}
+             for stage in ("sql_ms", "decode_ms", "media_ms", "json_ms", "total_ms")}
+    | {"rows": 0, "media_count": 0}
+    for bucket in ("cold", "warm")
+}
+
+
+def _messages_stage_finalize(box, json_end):
+    total_ms = (json_end - box["t0"]) * 1000.0
+    session_id, limit, offset, latest = box["page"]
+    page = (session_id, limit, int(offset or 0), bool(latest))
+    order = "latest" if latest else "oldest"
+    with _MSG_LOCK:
+        cold = page not in _MSG_SEEN
+        if cold:
+            _MSG_SEEN[page] = True
+            while len(_MSG_SEEN) > _MSG_SEEN_MAX:
+                _MSG_SEEN.popitem(last=False)
+        else:
+            _MSG_SEEN.move_to_end(page)
+        bucket = _MSG_STATS["cold" if cold else "warm"]
+        for stage, value in (("sql_ms", box["sql_ms"]), ("decode_ms", box["decode_ms"]),
+                             ("media_ms", box["media_ms"]), ("json_ms", box["json_ms"]),
+                             ("total_ms", total_ms)):
+            entry = bucket[stage]
+            entry["n"] += 1
+            entry["min"] = value if entry["n"] == 1 else min(entry["min"], value)
+            entry["max"] = max(entry["max"], value)
+            entry["sum"] += value
+        bucket["rows"] += max(int(box["rows"]), 0)
+        bucket["media_count"] += int(box["media_count"])
+        stats = json.loads(json.dumps(_MSG_STATS))
+    state = getattr(api, _STATE, None)
+    if state is not None:
+        try:
+            with state["lock"]:
+                manifest_entry = state["manifest"].setdefault("messages_timing", {})
+                manifest_entry["messages_timing_stats"] = stats
+                manifest_entry["seen_pages"] = len(_MSG_SEEN)
+        except Exception:
+            pass
+    log.debug("messages-stage cold=%d sql_ms=%.3f decode_ms=%.3f media_ms=%.3f "
+              "json_ms=%.3f total_ms=%.3f rows=%d media_count=%d limit=%s offset=%d "
+              "order=%s sid=%s",
+              1 if cold else 0, box["sql_ms"], box["decode_ms"], box["media_ms"],
+              box["json_ms"], total_ms, box["rows"], box["media_count"],
+              limit, offset, order, session_id)
+
+
+def _install_messages_timing(tx):
+    from aiohttp import web as aio_web
+    from hermes_state import SessionDB
+
+    cls = api.APIServerAdapter
+    ensure = cls._ensure_session_db_async
+    if not inspect.iscoroutinefunction(ensure):
+        raise RuntimeError("_ensure_session_db_async is not a coroutine method")
+
+    @wraps(ensure)
+    async def ensure_timed(self):
+        box = {"t0": time.monotonic()}
+        _MSG_BOX.set(box)
+        return await ensure(self)
+    ensure_timed.__hermes_app_compat__ = VERSION
+    tx.set(cls, "_ensure_session_db_async", ensure_timed)
+
+    get_messages = SessionDB.get_messages
+
+    @wraps(get_messages)
+    def get_messages_timed(self, *args, **kwargs):
+        box = _MSG_BOX.get()
+        if box is None or "sql_ms" in box:
+            return get_messages(self, *args, **kwargs)
+        started = time.monotonic()
+        rows = get_messages(self, *args, **kwargs)
+        box["sql_ms"] = (time.monotonic() - started) * 1000.0
+        box["rows"] = len(rows) if isinstance(rows, list) else -1
+        box["page"] = (args[0] if args else kwargs.get("session_id"),
+                       kwargs.get("limit"), kwargs.get("offset", 0),
+                       bool(kwargs.get("latest")))
+        box["decode_ms"] = 0.0
+        box["media_ms"] = 0.0
+        box["media_count"] = 0
+        return rows
+    get_messages_timed.__hermes_app_compat__ = VERSION
+    tx.set(SessionDB, "get_messages", get_messages_timed)
+
+    json_response = aio_web.json_response
+
+    @wraps(json_response)
+    def json_response_timed(*args, **kwargs):
+        box = _MSG_BOX.get()
+        if box is None or "sql_ms" not in box:
+            return json_response(*args, **kwargs)
+        started = time.monotonic()
+        response = json_response(*args, **kwargs)
+        finished = time.monotonic()
+        box["json_ms"] = (finished - started) * 1000.0
+        if not box.get("done"):
+            box["done"] = True
+            try:
+                _messages_stage_finalize(box, finished)
+            except Exception as exc:
+                log.debug("messages-stage finalize failed: %s", type(exc).__name__)
+        return response
+    json_response_timed.__hermes_app_compat__ = VERSION
+    tx.set(aio_web, "json_response", json_response_timed)
 
 
 
@@ -2227,6 +2368,9 @@ def _install_wake(tx):
                            "profile_per_hour": auto_wake.PROFILE_WAKE_LIMIT,
                            "window_seconds": int(auto_wake.QUOTA_WINDOW_SECONDS)},
                 "ledger": "durable-delivery-key",
+                "selfwake": {key: ((getattr(api, _STATE, {}) or {}).get('manifest', {})
+                                   .get('selfwake', {})).get(key)
+                             for key in ('status', 'liveness')},
             }
             return api.web.json_response(payload, status=response.status)
         except Exception as exc:

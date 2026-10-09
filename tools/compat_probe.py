@@ -18,8 +18,8 @@ import time
 
 CASES = ("upload", "limits", "media", "history", "approval", "skills", "activity", "push",
          "approval_inbox", "approval_push", "approval_central", "cron_bridge", "wake",
-         "wakecap", "selfwake", "selfwake_reload", "selfwake_batch", "steer_inbox",
-         "notification_events")
+         "wakecap", "selfwake", "selfwake_reload", "selfwake_batch", "wakelatch", "steer_inbox",
+         "notification_events", "messages_timing")
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -138,7 +138,10 @@ def offline(args):
             plugin = hermes/"plugins/hermes-app-compat"
             shutil.copytree(args.plugin_root, plugin, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
             enabled = [] if case == "control" else ["hermes-app-compat"]
-            config = {"plugins": {"enabled": enabled}, "model": "compat-fixture",
+            # Cold archived dependencies can exceed the default 10s on a busy
+            # host. Keep a bounded loader deadline in disposable homes; never
+            # alter production config or abandonment/rollback assertions.
+            config = {"plugins": {"enabled": enabled, "load_timeout_seconds": 60}, "model": "compat-fixture",
                       "browser": {"extension_control": {"enabled": True}},
                       "approvals": {"mode": "manual", "unattended_mode": "deny", "cron_mode": "deny",
                                     "single_query_mode": "deny", "timeout": 3},
@@ -193,8 +196,10 @@ def offline(args):
                 "selfwake": "server self-wake: durable intents in the receipt transaction, generation/cutoff, reconciliation, shadow/off gates, chain fuse, audit",
                 "selfwake_reload": "selfwake liveness survives same-name force reloads: install-path re-arm, notification contract, stop semantics",
                 "selfwake_batch": "zombie wake_batches: done intents never due, reconcile never reopens, pending sibling still progresses, ledger untouched",
+                "wakelatch": "same-session causal latch: historical proofs, mirror provenance, real due/POST/terminal and conserved claims",
                 "steer_inbox": "durable run-scoped steer inbox: auth/epoch gates, idempotent admission, receipts, seal, capability fail-closed",
                 "notification_events": "notification ledger: stable event ids, single publish, read-gated reminders, browser claim, terminals never replayed",
+                "messages_timing": "messages page stage timing: SQL/decode/MEDIA/JSON segments, cold/warm, debug line + manifest stats (numbers only)",
                 "control": "clean HEAD without plugin", "lifecycle": "register/on_unload transactions",
             }[case]
             result["expected"] = "all selected behavior assertions pass"

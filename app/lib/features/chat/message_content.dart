@@ -1,5 +1,7 @@
+import 'dart:collection';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -69,18 +71,55 @@ final RegExp _serverImagePath = RegExp(
 
 /// OPENPERF P3: inline view of a history MEDIA reference — pixels ride
 /// GET /v1/media/download, fetched once when the row enters the viewport.
-class ServerPathImage extends ConsumerWidget {
+/// IMGPERF A1: the download Future lives on the State, keyed by
+/// (repository instance, path) identity — a rebuild never re-fetches, only a
+/// new path or a new repository (profile/account switch) starts a new
+/// download; swapping the Future also fences late results of a retired
+/// identity out of the newer image. A failure keeps the actionable
+/// AttachmentTile so an explicit retry can refetch.
+class ServerPathImage extends ConsumerStatefulWidget {
   const ServerPathImage(this.path, {super.key, this.filename});
   final String path;
   final String? filename;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<ServerPathImage> createState() => _ServerPathImageState();
+}
+
+class _ServerPathImageState extends ConsumerState<ServerPathImage> {
+  HermesRepository? _repo;
+  String? _path;
+  Future<Uint8List>? _future;
+
+  void _track(HermesRepository repo) {
+    if (_future != null && identical(_repo, repo) && _path == widget.path) {
+      return;
+    }
+    _repo = repo;
+    _path = widget.path;
+    _future = repo.downloadServerFile(widget.path);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _track(ref.read(repositoryProvider));
+  }
+
+  @override
+  void didUpdateWidget(ServerPathImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    _track(ref.read(repositoryProvider));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    _track(ref.read(repositoryProvider));
     return FutureBuilder<Uint8List>(
-      future: ref.read(repositoryProvider).downloadServerFile(path),
+      future: _future,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
-          return AttachmentTile(path, filename: filename);
+          return AttachmentTile(widget.path, filename: widget.filename);
         }
         if (!snapshot.hasData) {
           return const SizedBox(
@@ -236,6 +275,57 @@ class MessageContent extends StatelessWidget {
   );
 }
 
+// IMGPERF A2: an inline data URL's base64→bytes conversion is pure CPU on the
+// build isolate (debug ~14ms/1MiB). Memoize it by source string so one source
+// decodes once no matter how many rebuilds touch it. The cache is bounded both
+// by entry count and by decoded bytes, LRU on touch; failures are not cached
+// (a source that throws is deterministic, but not caching keeps the map of
+// huge malformed strings from pinning memory).
+@visibleForTesting
+int get dataUrlDecodeCount => _dataUrlDecodes;
+
+@visibleForTesting
+void resetDataUrlCache() {
+  _dataUrlCache.clear();
+  _dataUrlCacheBytes = 0;
+  _dataUrlDecodes = 0;
+}
+
+@visibleForTesting
+int debugDataUrlCacheSize() => _dataUrlCache.length;
+
+const int _dataUrlCacheMaxEntries = 32;
+const int _dataUrlCacheMaxBytes = 32 << 20;
+final LinkedHashMap<String, ({Uint8List bytes, String mimeType})>
+_dataUrlCache = LinkedHashMap();
+int _dataUrlCacheBytes = 0;
+int _dataUrlDecodes = 0;
+
+({Uint8List bytes, String mimeType})? _decodeDataUrl(String source) {
+  final hit = _dataUrlCache.remove(source);
+  if (hit != null) {
+    _dataUrlCache[source] = hit;
+    return hit;
+  }
+  try {
+    final data = UriData.parse(source);
+    final bytes = data.contentAsBytes();
+    _dataUrlDecodes++;
+    final entry = (bytes: bytes, mimeType: data.mimeType);
+    _dataUrlCache[source] = entry;
+    _dataUrlCacheBytes += bytes.length;
+    while (_dataUrlCache.length > _dataUrlCacheMaxEntries ||
+        _dataUrlCacheBytes > _dataUrlCacheMaxBytes) {
+      _dataUrlCacheBytes -= _dataUrlCache.remove(_dataUrlCache.keys.first)!
+          .bytes
+          .length;
+    }
+    return entry;
+  } catch (_) {
+    return null;
+  }
+}
+
 class MessageImage extends ConsumerStatefulWidget {
   const MessageImage(this.source, {super.key});
   final String source;
@@ -250,18 +340,15 @@ class _MessageImageState extends ConsumerState<MessageImage> {
   bool get _isDataUrl => widget.source.startsWith('data:image/');
 
   ({Uint8List bytes, String name})? _decode() {
-    try {
-      final data = UriData.parse(widget.source);
-      final slash = data.mimeType.indexOf('/');
-      final subtype = (slash >= 0
-              ? data.mimeType.substring(slash + 1)
-              : 'png')
-          .split(RegExp(r'[+.]'))
-          .first;
-      return (bytes: data.contentAsBytes(), name: 'hermes-image.$subtype');
-    } catch (_) {
-      return null;
-    }
+    final decoded = _decodeDataUrl(widget.source);
+    if (decoded == null) return null;
+    final slash = decoded.mimeType.indexOf('/');
+    final subtype = (slash >= 0
+            ? decoded.mimeType.substring(slash + 1)
+            : 'png')
+        .split(RegExp(r'[+.]'))
+        .first;
+    return (bytes: decoded.bytes, name: 'hermes-image.$subtype');
   }
 
   Future<void> _save() async {

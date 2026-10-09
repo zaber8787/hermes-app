@@ -231,6 +231,69 @@ async def case_history(args):
     db.close()
 
 
+async def case_messages_timing(args):
+    # IMGPERF A3: every messages page GET must produce one debug stage line
+    # (SQL fetch / row decode / MEDIA parse / JSON) aligned with total_ms,
+    # cold/warm marked, counted into the compat manifest — numbers only.
+    from hermes_state import SessionDB
+    from gateway.platforms import api_server as api
+    db = SessionDB(Path("timing.db"))
+    sid = db.create_session("compat-timing", "api_server")
+    canary = "CANARY-content-must-never-reach-logs"
+    for i in range(50):
+        db.append_message(sid, "assistant", canary if i == 7 else f"text row {i} carries nothing notable")
+    db.append_message(sid, "assistant", "a picture MEDIA:/fixture/one.png")
+    logger = logging.getLogger("hermes-app-compat")
+    lines = []
+
+    class Captor(logging.Handler):
+        def emit(self, record):
+            lines.append(record.getMessage())
+
+    captor, old_level, old_propagate = Captor(), logger.level, logger.propagate
+    logger.addHandler(captor)
+    logger.setLevel(logging.DEBUG)
+    logger.propagate = False
+    try:
+        async with server() as (adapter, client):
+            adapter._session_db = db
+
+            async def page(**params):
+                async with client.get(f"/api/sessions/{sid}/messages", params=params, headers=AUTH) as r:
+                    check(r.status == 200, f"timing page {params} HTTP200")
+                    return await r.json()
+
+            await page()
+            await page()
+            await page(limit=10, offset=0)
+            await page(limit=10, offset=10)
+            await page(limit=10, offset=0)
+    finally:
+        logger.removeHandler(captor)
+        logger.setLevel(old_level)
+        logger.propagate = old_propagate
+    stages = [line for line in lines if line.startswith("messages-stage")]
+    check(len(stages) == 5, f"one stage line per messages page, got {len(stages)}")
+    for line in stages:
+        fields = dict(token.split("=", 1) for token in line.split()[1:])
+        for stage in ("sql_ms", "decode_ms", "media_ms", "json_ms", "total_ms"):
+            check(stage in fields and float(fields[stage]) >= 0.0, f"stage {stage} recorded in: {line}")
+        summed = sum(float(fields[s]) for s in ("sql_ms", "decode_ms", "media_ms", "json_ms"))
+        check(summed <= float(fields["total_ms"]) + 0.5, f"stage sum aligns with total in: {line}")
+        check(int(fields["rows"]) > 0, f"rows counted in: {line}")
+    check("cold=1" in stages[0] and "cold=0" in stages[1], "first fetch of a page is cold, repeat is warm")
+    check("cold=1" in stages[2] and "cold=1" in stages[3] and "cold=0" in stages[4],
+          "cold/warm follows the exact (limit,offset,order) page identity")
+    check("media_count=1" in stages[0], "the MEDIA reference on the page is counted")
+    check(canary not in "".join(lines), "stage log never carries row content")
+    state = getattr(api, "_hermes_app_compat_state_v1")
+    check(state["manifest"]["messages_timing"]["status"] == "applied", "messages_timing unit applied")
+    stats = state["manifest"]["messages_timing"]["messages_timing_stats"]
+    check(stats["cold"]["sql_ms"]["n"] >= 3 and stats["warm"]["sql_ms"]["n"] >= 2,
+          f"manifest stats counted: {stats}")
+    db.close()
+
+
 async def case_skills(args):
     from tools import skills_tool
     root = Path(os.environ["HERMES_HOME"])/"skills/compat-fixture"
@@ -387,14 +450,17 @@ async def run(args):
     guard_network()
     api = None
     try:
-        manager = load_plugins()
+        # The real gateway imports its server before installing/reloading
+        # plugins. Cold server imports belong outside the plugin's 10s
+        # registration deadline; keep that deadline and abandonment tests.
         from gateway.platforms import api_server as api
+        manager = load_plugins()
         manifest = json.loads(json.dumps(getattr(api, "_hermes_app_compat_state_v1", {}).get("manifest", {})))
         # The ten-applied assertion is a GATE, evaluated after behavior: each
         # case's own assertions show what the installed subset actually does,
         # while the gate keeps a partially skipped install from ever reading PASS.
         manifest_ok = args.worker == "control" or (
-            len(manifest) == 14 and all(v["status"] == "applied" for v in manifest.values()))
+            len(manifest) == 15 and all(v["status"] == "applied" for v in manifest.values()))
         if args.worker == "approval":
             from .approval import case_approval
             outcome = await case_approval(args, server, check)
@@ -437,6 +503,9 @@ async def run(args):
         elif args.worker == "selfwake_batch":
             from .selfwake_batch import case_selfwake_batch
             outcome = await case_selfwake_batch(args, server, check)
+        elif args.worker == 'wakelatch':
+            from .wakelatch import case_wakelatch
+            outcome = await case_wakelatch(args, server, check)
         else:
             outcome = await globals()["case_"+args.worker](args)
         status, detail = outcome or ("PASS", f"{len(DETAILS)} assertions")

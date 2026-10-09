@@ -119,3 +119,5 @@ scripts/watch-nudge.sh
 
 # TASK-APPROVBUTTON-IMPL evidence (never commit)
 .approvbutton-evidence/
+.imgperfimpl-evidence/
+.wakelatchfix-evidence/
