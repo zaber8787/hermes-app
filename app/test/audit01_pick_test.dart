@@ -78,12 +78,18 @@ class MemBlobs implements DraftStore {
   int stageSeq = 0;
   @override
   Future<String> stage(Stream<List<int>> source, String key) async {
-    final bytes = <int>[];
+    // Typed accumulation. `List<int>().addAll(Uint8List)` unboxes EVERY
+    // byte into a boxed-int list — in debug that is ~5 MB/s and grows a
+    // 4-8 GB heap for a 500 MiB stream: the flutter_tester 8.6G OOM that
+    // killed the 2026-10-09 17:27 session (this test never finished
+    // inside any timeout). BytesBuilder keeps the footprint at the true
+    // byte count.
+    final bytes = BytesBuilder(copy: false);
     await for (final chunk in source) {
-      bytes.addAll(chunk);
+      bytes.add(chunk);
     }
     if (failStage.contains(key)) throw StateError('stage broken');
-    blobs[key] = bytes;
+    blobs[key] = bytes.takeBytes();
     return 'blob:$key';
   }
 
@@ -197,10 +203,14 @@ void main() {
   test('oversize stream is rejected while spooling (no re-open needed)',
       () async {
     Stream<List<int>> hugeStream() async* {
-      // Chunked so peak memory stays ~64 MiB while crossing the cap.
+      // Chunked so peak memory stays low while crossing the cap. The chunk
+      // MUST be a typed list: a plain List.filled(1<<26, 0) is a BOXED-int
+      // list (~512 MB of debug heap per chunk) — that shape is what grew
+      // flutter_tester to 8.6G anon-rss and OOM-killed the 2026-10-09
+      // session; it also never finished inside the test timeout here.
       var sent = 0;
       while (sent <= attachmentMaxBytes) {
-        final chunk = List.filled(1 << 26, 0);
+        final chunk = Uint8List(1 << 23);
         sent += chunk.length;
         yield chunk;
       }

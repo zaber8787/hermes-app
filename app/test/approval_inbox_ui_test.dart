@@ -109,7 +109,7 @@ class FakeInboxRepo extends HermesRepository {
     String runId,
     String choice,
     String requestId,
-    int? serverEpoch,
+    String? serverEpoch,
   ) async {
     if (postGate case final g?) await g.future;
     if (postError case final e?) {
@@ -223,7 +223,7 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(repo.posts, [
-      ['r7', 'once', 'q1', 7],
+      ['r7', 'once', 'q1', '7'],
     ]);
     // Settled card is gone.
     expect(find.byKey(const ValueKey('approval-inbox-q1')), findsNothing);
@@ -254,7 +254,7 @@ void main() {
     ));
     await tester.pump();
     await tester.pump();
-    expect(repo.posts.single, ['r7', 'deny', 'q2', 7]);
+    expect(repo.posts.single, ['r7', 'deny', 'q2', '7']);
     expect(find.byKey(const ValueKey('approval-inbox-q1')), findsOneWidget);
   await finish(tester);
   });

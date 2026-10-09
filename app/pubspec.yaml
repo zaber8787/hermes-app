@@ -1,7 +1,7 @@
 name: hermes_app
 description: Hermes Android session browser and streaming chat.
 publish_to: none
-version: 0.14.15+53
+version: 0.14.16+54
 environment:
   # NOTIF2 B2: app_links 7.x (native deep-link intents) needs Dart >=3.12;
   # the repo toolchain (3.47.3 / Dart 3.13.3) is comfortably inside.

@@ -116,3 +116,6 @@ scripts/watch-nudge.sh
 # TASK-NOTIF2-IMPL evidence/scratch (never commit)
 .notif2-evidence/
 .n2-scratch/
+
+# TASK-APPROVBUTTON-IMPL evidence (never commit)
+.approvbutton-evidence/

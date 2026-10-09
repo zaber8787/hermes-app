@@ -24,7 +24,14 @@ class ApprovalRequest {
 
   final String serverUrl;
   final String sessionId;
-  int serverEpoch;
+
+  /// APPROVBUTTON X4 (§7.4): the gateway's epoch is an OPAQUE STRING (real
+  /// deployments: hex like `8322a8641e79`). Equality is the ONLY epoch
+  /// question — generations are never ordered numerically, and the raw
+  /// value rides the exact-answer POST so the SERVER stale check stays
+  /// real (an omitted epoch silently falls back to the server's current
+  /// generation — that was the contract hole).
+  String serverEpoch;
   final String runId;
   final String requestId;
   String? summary;
@@ -34,6 +41,13 @@ class ApprovalRequest {
   double createdAt;
   double? expiresAt;
   bool deadlineEstimated;
+
+  /// The submittable policy tokens this client understands (R6) — the UI
+  /// renders a button ONLY for these; the model guard (X2) uses the same
+  /// list, so "legal choices" means one thing everywhere.
+  static const actionableChoices = {'once', 'session', 'always', 'deny'};
+
+  bool get hasActionableChoice => choices.any(actionableChoices.contains);
 
   bool busy = false;
   ApprovalPhase phase = ApprovalPhase.pending;
@@ -70,39 +84,50 @@ class ApprovalRequest {
       ? null
       : (v is num ? v.toDouble() : double.tryParse(v.toString()));
 
-  static int _asInt(Object? v) =>
-      v is num ? v.toInt() : int.tryParse('${v ?? ''}') ?? 0;
+  /// X4: opaque epoch reader — a String rides VERBATIM, anything else is
+  /// stringified, absence is '' (never a numeric 0 that fabricates a
+  /// generation).
+  static String _epoch(Object? v) => switch (v) {
+    null => '',
+    final String s => s,
+    final v => '$v',
+  };
 
-  void mergeEvent(Map data, {required int epoch, required double now}) {
+  void mergeEvent(Map data, {required double now}) {
     command = data['command']?.toString() ?? command;
     description = data['description']?.toString() ?? description;
     summary = data['summary']?.toString() ?? summary;
     final c = data['choices'];
     if (c is List) {
-      choices = c.map((e) => e.toString()).toList(growable: false);
+      final parsed = c.map((e) => e.toString()).toList(growable: false);
+      // APPROVBUTTON X2 (§7.2): a replay whose choices carry NOTHING legal
+      // (explicit empty list, all-unknown tokens) never erases choices that
+      // were already populated — absence is not a policy answer, and the
+      // client may not erase the server's own earlier statement.
+      if (parsed.any(actionableChoices.contains) || !hasActionableChoice) {
+        choices = parsed;
+      }
     }
     createdAt = _asDouble(data['created_at']) ?? createdAt;
     expiresAt = _asDouble(data['expires_at']) ?? expiresAt;
     if (data['deadline_estimated'] != null) {
       deadlineEstimated = data['deadline_estimated'] == true;
     }
-    // A NEWER epoch may restamp a live card; an older one never revives a
-    // settled entry.
-    if (phase == ApprovalPhase.pending || epoch >= serverEpoch) {
-      serverEpoch = epoch;
-    }
+    // X4: epoch generations are handled by upsertEvent (equality only) —
+    // a merge never restamps and never orders epochs.
   }
 
   static ApprovalRequest fromEvent(
     Map data, {
     required String serverUrl,
     required double now,
+    String? epoch,
   }) {
     final created = _asDouble(data['created_at']) ?? now;
     return ApprovalRequest(
       serverUrl: serverUrl,
       sessionId: '${data['session_id'] ?? ''}',
-      serverEpoch: _asInt(data['server_epoch']),
+      serverEpoch: epoch ?? _epoch(data['server_epoch']),
       runId: '${data['run_id'] ?? ''}',
       requestId: '${data['request_id']}',
       createdAt: created,
@@ -134,33 +159,79 @@ class ApprovalInbox {
   void markUnconfirmed(String runId) => _unconfirmed.add(runId);
   Set<String> get unconfirmedRuns => Set.unmodifiable(_unconfirmed);
 
-  /// SSE view of a request. Returns the (possibly pre-existing) entry, or
+  /// SSE view of a request. Returns the (possibly new-generation) entry, or
   /// null for a legacy event without a request_id (the old card path owns
   /// those). A duplicate never resets identity, timers, or settlement.
+  /// X4: [epoch] (when a transport supplies it, e.g. the GET envelope)
+  /// overrides the data field. Epoch decides generation by EQUALITY only:
+  /// a moved generation retires the live card ('superseded' — it belongs
+  /// to a dead generation and must never be answerable again), installs
+  /// the new one, and flags the run unconfirmed so the repair loops
+  /// re-read the truth. A settled card is never resurrected or restamped.
   ApprovalRequest? upsertEvent({
     required String serverUrl,
     required Map data,
     double? now,
+    String? epoch,
   }) {
     final requestId = '${data['request_id'] ?? ''}';
     if (requestId.isEmpty) return null;
     final runId = '${data['run_id'] ?? ''}';
     final sessionId = '${data['session_id'] ?? ''}';
     final mapKey = '$serverUrl|$sessionId|$runId|$requestId';
-    final epoch = ApprovalRequest._asInt(data['server_epoch']);
+    final incoming = epoch ?? ApprovalRequest._epoch(data['server_epoch']);
     final t = now ?? _wall();
     final existing = _entries[mapKey];
     if (existing != null) {
-      existing.mergeEvent(data, epoch: epoch, now: t);
+      final generationMoved =
+          existing.serverEpoch.isNotEmpty &&
+          incoming.isNotEmpty &&
+          incoming != existing.serverEpoch;
+      if (generationMoved) {
+        if (existing.phase == ApprovalPhase.pending) {
+          _settle(existing, t, outcome: 'superseded');
+          final fresh = ApprovalRequest.fromEvent(
+            data,
+            serverUrl: serverUrl,
+            now: t,
+            epoch: incoming,
+          );
+          _entries[mapKey] = fresh;
+          markUnconfirmed(fresh.runId);
+          _flagUnknownChoices(fresh);
+          return fresh;
+        }
+        return existing; // a foreign generation never touches a settled card
+      }
+      existing.mergeEvent(data, now: t);
+      if (epoch != null &&
+          incoming.isNotEmpty &&
+          existing.phase == ApprovalPhase.pending) {
+        existing.serverEpoch = incoming;
+      }
+      _flagUnknownChoices(existing);
       return existing;
     }
     final entry = ApprovalRequest.fromEvent(
       data,
       serverUrl: serverUrl,
       now: t,
+      epoch: incoming,
     );
     _entries[mapKey] = entry;
+    _flagUnknownChoices(entry);
     return entry;
+  }
+
+  /// APPROVBUTTON X2 (§7.2): a pending card that owns NO actionable choice
+  /// is a STATE-UNKNOWN, not a "no options" card — the run is marked
+  /// unconfirmed so the repair loops (status/activity poll → bounded
+  /// re-GET) and the card's 「重新核對」 entry own it. A later
+  /// available=true snapshot confirms the truth and clears the flag.
+  void _flagUnknownChoices(ApprovalRequest e) {
+    if (e.phase == ApprovalPhase.pending && !e.hasActionableChoice) {
+      markUnconfirmed(e.runId);
+    }
   }
 
   /// GET view of a run. available=true is the server's truth: pending rows
@@ -174,7 +245,7 @@ class ApprovalInbox {
     double? now,
   }) {
     final t = now ?? _wall();
-    final epoch = ApprovalRequest._asInt(snapshot['server_epoch']);
+    final epoch = ApprovalRequest._epoch(snapshot['server_epoch']);
     final available = snapshot['available'] != false;
     final rows = (snapshot['pending'] is List ? snapshot['pending'] as List : const [])
         .map(ApprovalRequest._asMap)
@@ -192,16 +263,31 @@ class ApprovalInbox {
           ...row,
           'run_id': row['run_id'] ?? runId,
           'session_id': row['session_id'] ?? snapSession,
-          'server_epoch': row['server_epoch'] ?? epoch,
         },
         now: t,
+        epoch: ApprovalRequest._epoch(row['server_epoch'] ?? snapshot['server_epoch']),
       );
     }
     if (!available) {
       markUnconfirmed(runId);
       return;
     }
-    markConfirmed(runId);
+    // APPROVBUTTON X2: only rows that all carry an actionable choice
+    // CONFIRM the run. An available-but-illegal row stays UNCONFIRMED so
+    // the bounded repair loop keeps trying — the client still may not
+    // invent the server's policy (§7.2).
+    final allLegal = rows.every(
+      (row) =>
+          row['choices'] is List &&
+          (row['choices'] as List).any(
+            (c) => ApprovalRequest.actionableChoices.contains('$c'),
+          ),
+    );
+    if (rows.isEmpty || allLegal) {
+      markConfirmed(runId);
+    } else {
+      markUnconfirmed(runId);
+    }
     for (final e in _entries.values) {
       if (e.serverUrl != serverUrl || e.runId != runId) continue;
       if (e.phase != ApprovalPhase.pending) continue;

@@ -953,12 +953,14 @@ class HermesRepository {
   );
 
   /// Exact answer: request_id names the ONE request; server_epoch (when
-  /// known) rejects cross-generation guesses.
+  /// known) is the OPAQUE generation token (hex in real deployments) and
+  /// rejects cross-generation guesses — it must ride verbatim, never a
+  /// numeric coercion that drops to null (APPROVBUTTON X4).
   Future<void> resolveApprovalExact(
     String runId,
     String choice,
     String requestId,
-    int? serverEpoch,
+    String? serverEpoch,
   ) async {
     await _json(
       'POST',

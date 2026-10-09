@@ -1687,6 +1687,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     lastActivitySuccess = _clock();
     activityFreshness = ActivityFreshness.fresh;
     _rebuildRemoteRows();
+    _discoverApprovals(snap, prev);
     final rev = snap.historyRevision;
     if (_appliedHistoryRevision == null ||
         !rev.sameAs(_appliedHistoryRevision!) ||
@@ -1703,6 +1704,49 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       }
     }
     notifyListeners();
+  }
+
+  /// APPROVBUTTON X1 (§7.1): the activity observer OWNS approval discovery.
+  /// A waiting run the snapshot proves — remote OR local bootstrap — gets
+  /// its capability probe and per-run GET reconcile (per-run single-flight
+  /// bounds the rate to one GET per run per activity tick). A run proven
+  /// TERMINAL settles its pending entries fail-closed; a run that VANISHED
+  /// while it still owned pending/unconfirmed entries gets a read-only
+  /// refresh. Nothing here ever fabricates a turn or a message row.
+  void _discoverApprovals(SessionActivity snap, SessionActivity? prev) {
+    for (final r in snap.activeRuns) {
+      final id = r.runId;
+      if (id != null && r.status == 'waiting_for_approval') {
+        unawaited(_refreshApprovals(id));
+      }
+    }
+    for (final r in snap.activeRuns.followedBy(snap.recentTerminal)) {
+      final id = r.runId;
+      if (id == null || !r.isTerminal) continue;
+      if (snap.activeRuns.any((a) => a.runId == id && !a.isTerminal)) {
+        continue; // a live row of the same run outranks a stale receipt
+      }
+      approvalInbox.settleRun(
+        serverUrl: serverUrl,
+        runId: id,
+        outcome: 'run_terminal',
+      );
+    }
+    if (prev == null) return;
+    for (final r in prev.activeRuns) {
+      final id = r.runId;
+      if (id == null || !ActivityRun.isLiveStatus(r.status)) continue;
+      final stillSeen =
+          snap.activeRuns.any((a) => a.runId == id) ||
+          snap.recentTerminal.any((t) => t.runId == id);
+      if (stillSeen) continue;
+      // Vanished: the snapshot truth must RE-ANSWER, silence may not clear.
+      if (approvalInbox.pendingFor(runId: id).isEmpty &&
+          !approvalInbox.isUnconfirmed(id)) {
+        continue; // this run owns nothing — nothing to reconcile
+      }
+      unawaited(_refreshApprovals(id));
+    }
   }
 
   /// Ordered pairing between remote observations and durable rows: candidate
@@ -2141,8 +2185,35 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       final a = status['approval'];
       if (a is Map && turn != null && turn.approval == null) {
         if (approvalInboxSupported) {
-          // The inbox owns the cards; bootstrap once per idle gap.
-          if (!approvalInbox.hasPendingForRun(runId)) {
+          // APPROVBUTTON X2 (§7.2): the status payload is a READ-ONLY view
+          // of the SAME exact-request cards — merge it. And owning a
+          // pending is NO LONGER the sole catch-up gate: an unconfirmed
+          // run, an empty bucket, or choices with nothing submittable must
+          // earn a bounded re-GET (read-only; the client never guesses
+          // once/session/always on the server's behalf).
+          final merged = approvalInbox.upsertEvent(
+            serverUrl: serverUrl,
+            data: {...a, 'run_id': a['run_id'] ?? runId},
+          );
+          // A card the LIVE turn itself names — and no older live-card
+          // duplicate: with the inbox on, one request renders ONE card.
+          if (merged != null && runId == turn.runId) {
+            turn.approval = null;
+            for (final dup
+                in approvalInbox.pendingFor().where((e) => e != merged && e.requestId == merged.requestId)) {
+              approvalInbox.settle(
+                runId: dup.runId,
+                requestId: dup.requestId,
+                outcome: 'reconciled',
+              );
+            }
+          }
+          final pend = approvalInbox.pendingFor(runId: runId);
+          final needsRepair =
+              pend.isEmpty ||
+              approvalInbox.isUnconfirmed(runId) ||
+              pend.any((e) => !e.hasActionableChoice);
+          if (needsRepair) {
             unawaited(_refreshApprovals(runId));
           }
         } else {
@@ -2169,7 +2240,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   final ApprovalInbox approvalInbox = ApprovalInbox();
   Map<String, dynamic>? _approvalCap;
   bool _approvalCapAsked = false;
-  bool _approvalsFetching = false;
+  // APPROVBUTTON X1 (§7.1): single flight is PER RUN, not per controller —
+  // runId → the connection generation that owns the in-flight GET. A second
+  // trigger for the same run sets dirty and earns exactly ONE replay; it can
+  // never silently drop, and a bumped generation fences the old answer.
+  final _approvalsInflight = <String, int>{};
+  final _approvalsDirty = <String>{};
 
   bool get approvalInboxSupported => _approvalCap?['enabled'] == true;
 
@@ -2193,25 +2269,58 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // Absent/transient: not cached — the next approval touch re-asks.
   }
 
+  /// One capability-probed snapshot GET per run. APPROVBUTTON X1 (§7.1):
+  /// PER-RUN single flight — a second trigger for a run that already owns a
+  /// GET sets dirty and earns exactly ONE replay after the flight lands
+  /// (never silently dropped, never a third parallel GET). The connection
+  /// generation rides the flight: after a bump the late answer may not
+  /// merge, may not mark, and earns no replay — the NEW generation
+  /// re-probes through its own next observation.
   Future<void> _refreshApprovals(String runId) async {
-    if (_approvalsFetching) return;
-    _approvalsFetching = true;
+    if (_disposed) return;
+    final gen = _currentConnectionGeneration();
+    if (_approvalsInflight.containsKey(runId)) {
+      if (_approvalsInflight[runId] == gen) _approvalsDirty.add(runId);
+      return;
+    }
+    _approvalsInflight[runId] = gen;
+    var replay = false;
+    var landed = true;
     try {
       await _probeApprovalCap();
-      if (!approvalInboxSupported || _disposed) return;
+      if (!approvalInboxSupported || _disposed) {
+        landed = false;
+        return;
+      }
+      if (gen != _currentConnectionGeneration()) {
+        landed = false;
+        return;
+      }
       final snapshot = await repo.runApprovals(runId);
-      if (_disposed) return;
+      if (_disposed) {
+        landed = false;
+        return;
+      }
+      if (gen != _currentConnectionGeneration()) {
+        landed = false; // fenced: a moved connection never merges stale truth
+        return;
+      }
       approvalInbox.mergeSnapshot(
         serverUrl: serverUrl,
         runId: runId,
         snapshot: snapshot,
       );
     } on Object {
-      if (!_disposed) approvalInbox.markUnconfirmed(runId);
+      if (!_disposed && gen == _currentConnectionGeneration()) {
+        approvalInbox.markUnconfirmed(runId);
+      }
     } finally {
-      _approvalsFetching = false;
+      _approvalsInflight.remove(runId);
+      final dirty = _approvalsDirty.remove(runId);
+      replay = dirty && landed && !_disposed && gen == _currentConnectionGeneration();
       if (!_disposed) notifyListeners();
     }
+    if (replay) await _refreshApprovals(runId);
   }
 
   static bool _approvalTerminalEvent(String type) => switch (type) {
@@ -2280,7 +2389,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         req.runId,
         choice,
         req.requestId,
-        req.serverEpoch > 0 ? req.serverEpoch : null,
+        // X4: the OPAQUE epoch always rides when known — omitting it lets
+        // the server fall back to its CURRENT generation and the stale
+        // check quietly passes.
+        req.serverEpoch.isEmpty ? null : req.serverEpoch,
       );
       if (_disposed) return;
       approvalInbox.settle(
@@ -3368,6 +3480,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
             state == 'waiting_for_approval' ||
             state == 'stopping') {
           _lastActiveSeen = _clock();
+        }
+        if (state == 'waiting_for_approval') {
+          // APPROVBUTTON X1: a bootstrap-observed waiting run owns the
+          // discovery chain too — probe + per-run reconcile, read-only.
+          unawaited(_refreshApprovals(runId));
         }
         return;
       }

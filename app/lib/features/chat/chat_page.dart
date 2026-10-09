@@ -137,7 +137,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       });
     });
     scroll.addListener(() {
+      final wasFollow = follow;
       follow = scroll.position.maxScrollExtent - scroll.offset < 120;
+      // APPROVBUTTON X3: the pinned approval entry appears/disappears with
+      // the follow boundary — repaint on the flip only (post-frame: scroll
+      // notifications can fire inside layout).
+      if (wasFollow != follow && mounted) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (mounted) setState(() {});
+        });
+      }
       // Auto-load near the TOP only. A clamped jumpTo at the bottom of a
       // momentarily short viewport reports offset < 80 with offset == max;
       // that is not a reader scrolling into older rows (and the in-list
@@ -1142,6 +1151,26 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       WidgetsBinding.instance.addPostFrameCallback(
         (_) => _followBottom(refine - 1),
       );
+    }
+  }
+
+  /// APPROVBUTTON X3: land the reader on the TAIL sliver where the pending
+  /// approvals panel lives. Placeholder estimates can make maxScrollExtent
+  /// shrink under a plain jump — _followBottom reads a negative gap as
+  /// "settled" — so this walks the bottom down tick by tick (bounded),
+  /// then repaints once so the follow flip retires the pinned entry.
+  void _revealApprovals([int ticks = 8]) {
+    if (!scroll.hasClients || !mounted) return;
+    final position = scroll.position;
+    if ((position.maxScrollExtent - position.pixels).abs() > 0.5) {
+      scroll.jumpTo(position.maxScrollExtent);
+    }
+    if (ticks > 0) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _revealApprovals(ticks - 1),
+      );
+    } else if (mounted) {
+      setState(() {});
     }
   }
 
@@ -2533,6 +2562,29 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               ],
             ),
           ),
+          // APPROVBUTTON X3 (§7.3): a pending approval while the reader is
+          // NOT near the tail panel owns a PINNED entry — the panel lives
+          // in the tail sliver of the lazy timeline (never eager-expanded
+          // for this), and a long read must stay put until the user asks
+          // to be taken to the exact request card.
+          if (c.approvalInboxSupported &&
+              !follow &&
+              c.pendingApprovals().isNotEmpty)
+            Positioned(
+              right: 16,
+              bottom: 16,
+              child: FilledButton.icon(
+                key: const ValueKey('approval-nav-cta'),
+                onPressed: _revealApprovals,
+                icon: const Icon(Icons.warning_amber_rounded, size: 18),
+                label: Text(
+                  strings.resolve(
+                    MessageKey.approvalPendingCount,
+                    args: {'count': '${c.pendingApprovals().length}'},
+                  ),
+                ),
+              ),
+            ),
           if (_dragging)
             Positioned.fill(
               child: IgnorePointer(

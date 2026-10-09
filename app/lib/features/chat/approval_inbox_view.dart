@@ -178,6 +178,10 @@ class _PendingApprovalCardState extends State<PendingApprovalCard> {
 
     final expired = r.expiredAt(now);
     final remaining = r.remainingSeconds(now);
+    // X2: choices with nothing submittable is a STATE-UNKNOWN card — it
+    // wears the same notice + recovery entry as an unconfirmed run, never
+    // a bare control-less card.
+    final unknownChoices = !r.hasActionableChoice;
     final stalled = widget.unconfirmed || expired;
     if (expired && !_reconfirmAsked) {
       _reconfirmAsked = true;
@@ -253,7 +257,7 @@ class _PendingApprovalCardState extends State<PendingApprovalCard> {
                   style: TextStyle(fontSize: 12, color: colors.onErrorContainer),
                 ),
               ),
-            if (widget.unconfirmed)
+            if (widget.unconfirmed || unknownChoices)
               Padding(
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
@@ -291,6 +295,18 @@ class _PendingApprovalCardState extends State<PendingApprovalCard> {
                     ),
               ],
             ),
+            // X2 (§7.2): an unconfirmed / choice-unknown card always owns a
+            // VISIBLE recovery action — a read-only re-check, never a
+            // guessed answer.
+            if (widget.unconfirmed || unknownChoices)
+              Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: FilledButton.tonal(
+                  key: ValueKey('approval-recheck-${r.requestId}'),
+                  onPressed: r.busy ? null : () => unawaited(widget.onReconfirm(r)),
+                  child: Text(strings.resolve(MessageKey.chatM021)),
+                ),
+              ),
           ],
         ),
       ),

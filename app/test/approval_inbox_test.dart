@@ -59,7 +59,7 @@ void main() {
       );
       expect(identical(a, b), isTrue);
       expect(inbox.count, 1);
-      expect(a!.serverEpoch, 7);
+      expect(a!.serverEpoch, '7');
       expect(a.command, 'rm -rf /tmp/scratch-q1');
       expect(a.deadlineEstimated, isTrue);
     });
