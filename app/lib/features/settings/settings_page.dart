@@ -14,8 +14,9 @@ import 'server_url.dart';
 import '../../diagnostics/diagnostics.dart';
 
 class SettingsPage extends ConsumerStatefulWidget {
-  const SettingsPage({super.key, this.initialError});
+  const SettingsPage({super.key, this.initialError, this.repositoryFactory});
   final UiMessage? initialError;
+  final HermesRepository Function(String url, String key)? repositoryFactory;
   @override
   ConsumerState<SettingsPage> createState() => _SettingsPageState();
 }
@@ -76,9 +77,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     // nothing that passes here can produce a relative/network-less request.
     final normalized = normalizeServerUrl(url.text.trim());
     if (normalized.isEmpty) {
-      throw const AppFormatException(
-        UiMessage.local(MessageKey.settingsM001),
-      );
+      throw const AppFormatException(UiMessage.local(MessageKey.settingsM001));
     }
     if (key.text.trim().isEmpty) {
       throw const AppFormatException(UiMessage.local(MessageKey.settingsM002));
@@ -100,7 +99,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           ScaffoldMessenger.of(context).showSnackBar(
             SnackBar(
               content: LocalizedText(
-                pending ?? const UiMessage.local(MessageKey.settingsLanguageSaveFailed),
+                pending ??
+                    const UiMessage.local(
+                      MessageKey.settingsLanguageSaveFailed,
+                    ),
               ),
             ),
           );
@@ -119,7 +121,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     HermesRepository? repo;
     try {
       final s = validated();
-      repo = HermesRepository(s.url, s.key);
+      repo =
+          widget.repositoryFactory?.call(s.url, s.key) ??
+          HermesRepository(s.url, s.key);
       await repo.checkCapabilities();
       final alive = await repo.health();
       if (mounted) {
@@ -133,6 +137,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       if (mounted) setState(() => feedback = e.uiMessage);
     } on FormatException catch (e) {
       if (mounted) setState(() => feedback = UiRaw(e.message));
+    } on ApiException catch (e) {
+      if (mounted) setState(() => feedback = e.uiMessage);
     } catch (_) {
       if (mounted) {
         setState(
@@ -178,15 +184,13 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       final error = next.saveError;
       if (error != null) {
         ref.read(localeProvider.notifier).clearSaveError();
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: LocalizedText(error)),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: LocalizedText(error)));
       }
     });
     return Scaffold(
-      appBar: AppBar(
-        title: Text(strings.resolve(MessageKey.settingsM007)),
-      ),
+      appBar: AppBar(title: Text(strings.resolve(MessageKey.settingsM007))),
       body: Center(
         child: ConstrainedBox(
           constraints: const BoxConstraints(maxWidth: 600),
@@ -317,7 +321,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                   border: const OutlineInputBorder(),
                   suffixIcon: IconButton(
                     tooltip: strings.resolve(
-                      obscure ? MessageKey.settingsM016 : MessageKey.settingsM017,
+                      obscure
+                          ? MessageKey.settingsM016
+                          : MessageKey.settingsM017,
                     ),
                     onPressed: () => setState(() => obscure = !obscure),
                     icon: Icon(
@@ -369,7 +375,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                                   ref.read(settingsProvider).url,
                                   v,
                                 ) ??
-                              Future<void>.value(),
+                                Future<void>.value(),
                           );
                         }
                       : null,

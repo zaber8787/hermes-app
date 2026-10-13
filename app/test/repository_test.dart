@@ -1,11 +1,98 @@
 import 'dart:convert';
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
+import 'package:hermes_app/models/session.dart';
 import 'package:hermes_app/l10n/message_key.dart';
 import 'package:hermes_app/l10n/ui_message.dart';
 
 void main() {
+  test('messages GET has a short body deadline independent of long SSE reads', () async {
+    final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+    final bodyGate = Completer<void>();
+    server.listen((request) async {
+      request.response.headers.contentType = ContentType.json;
+      request.response.write('{"data":[');
+      await request.response.flush();
+      await bodyGate.future;
+      await request.response.close();
+    });
+    final repo = HermesRepository(
+      'http://127.0.0.1:${server.port}',
+      'fake',
+      metadataTimeout: const Duration(milliseconds: 40),
+    );
+    try {
+      await expectLater(
+        repo.messages('s').timeout(const Duration(milliseconds: 500)),
+        throwsA(isA<ApiException>().having(
+          (e) => (e.uiMessage as UiLocal).key,
+          'message',
+          MessageKey.apiM008,
+        )),
+      );
+    } finally {
+      bodyGate.complete();
+      repo.close();
+      await server.close(force: true);
+    }
+  });
+
+  test(
+    'first session page appears before bounded legacy timestamp probe',
+    () async {
+      final server = await HttpServer.bind(InternetAddress.loopbackIPv4, 0);
+      final historyGate = Completer<void>();
+      server.listen((request) async {
+        request.response.headers.contentType = ContentType.json;
+        if (request.uri.path == '/api/sessions') {
+          request.response.write(
+            jsonEncode({
+              'data': [
+                {
+                  'id': 's',
+                  'title': 'Ready',
+                  'message_count': 1,
+                  'started_at': 1,
+                },
+              ],
+            }),
+          );
+          await request.response.close();
+        } else {
+          await historyGate.future;
+          request.response.write(jsonEncode({'data': []}));
+          await request.response.close();
+        }
+      });
+      final repo = HermesRepository(
+        'http://127.0.0.1:${server.port}',
+        'fake',
+        metadataTimeout: const Duration(milliseconds: 100),
+      );
+      final first = Completer<List<Session>>();
+      repo.sessionsPreview.addListener(() {
+        final rows = repo.sessionsPreview.value;
+        if (rows != null && !first.isCompleted) first.complete(rows);
+      });
+      try {
+        final loading = repo.sessions();
+        expect(
+          (await first.future.timeout(const Duration(seconds: 1))).single.id,
+          's',
+        );
+        expect(
+          (await loading.timeout(const Duration(milliseconds: 500))).single.id,
+          's',
+        );
+      } finally {
+        historyGate.complete();
+        repo.close();
+        await server.close(force: true);
+      }
+    },
+  );
   test(
     'HTTP session paging advances raw offset and deduplicates overlapping IDs',
     () async {

@@ -19,17 +19,18 @@ class PendingApprovalsPanel extends StatefulWidget {
     required this.onResolve,
     required this.onReconfirm,
     this.focusRequestId,
+    this.focusAnchorKey,
   });
 
   final List<ApprovalRequest> requests;
   final Set<String> unconfirmedRuns;
-  final Future<void> Function(ApprovalRequest request, String choice)
-  onResolve;
+  final Future<void> Function(ApprovalRequest request, String choice) onResolve;
   final Future<void> Function(ApprovalRequest request) onReconfirm;
 
   /// 01412FIX F5: the deep link named this exact request — its card is the
   /// ONE highlighted card; an id that matches nothing highlights nothing.
   final String? focusRequestId;
+  final Key? focusAnchorKey;
 
   @override
   State<PendingApprovalsPanel> createState() => _PendingApprovalsPanelState();
@@ -81,13 +82,18 @@ class _PendingApprovalsPanelState extends State<PendingApprovalsPanel> {
           ),
         ),
         for (final r in requests)
-          PendingApprovalCard(
-            key: ValueKey('approval-inbox-${r.requestId}'),
-            request: r,
-            unconfirmed: widget.unconfirmedRuns.contains(r.runId),
-            onResolve: widget.onResolve,
-            onReconfirm: widget.onReconfirm,
-            focused: r.requestId == widget.focusRequestId,
+          KeyedSubtree(
+            key: r.requestId == widget.focusRequestId
+                ? widget.focusAnchorKey
+                : null,
+            child: PendingApprovalCard(
+              key: ValueKey('approval-inbox-${r.requestId}'),
+              request: r,
+              unconfirmed: widget.unconfirmedRuns.contains(r.runId),
+              onResolve: widget.onResolve,
+              onReconfirm: widget.onReconfirm,
+              focused: r.requestId == widget.focusRequestId,
+            ),
           ),
       ],
     );
@@ -109,8 +115,7 @@ class PendingApprovalCard extends StatefulWidget {
 
   final ApprovalRequest request;
   final bool unconfirmed;
-  final Future<void> Function(ApprovalRequest request, String choice)
-  onResolve;
+  final Future<void> Function(ApprovalRequest request, String choice) onResolve;
   final Future<void> Function(ApprovalRequest request) onReconfirm;
 
   /// Deep-link focus ring (F5): marks the EXACT named request, nothing else.
@@ -169,7 +174,13 @@ class _PendingApprovalCardState extends State<PendingApprovalCard> {
         child: Padding(
           padding: const EdgeInsets.all(12),
           child: Text(
-            strings.resolve(MessageKey.approvalResolvedElsewhere),
+            strings.resolve(
+              r.resolvedLocally
+                  ? r.choice == 'deny'
+                        ? MessageKey.approvalDeniedHere
+                        : MessageKey.approvalAllowedHere
+                  : MessageKey.approvalResolvedElsewhere,
+            ),
             style: TextStyle(fontSize: 12, color: colors.onSurfaceVariant),
           ),
         ),
@@ -254,7 +265,10 @@ class _PendingApprovalCardState extends State<PendingApprovalCard> {
                 padding: const EdgeInsets.only(top: 8),
                 child: Text(
                   strings.resolve(MessageKey.approvalSubmitting),
-                  style: TextStyle(fontSize: 12, color: colors.onErrorContainer),
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: colors.onErrorContainer,
+                  ),
                 ),
               ),
             if (widget.unconfirmed || unknownChoices)
@@ -283,7 +297,9 @@ class _PendingApprovalCardState extends State<PendingApprovalCard> {
                 for (final c in r.choices)
                   if (approvalChoiceKeys.containsKey(c))
                     FilledButton.tonal(
-                      onPressed: actionable ? () => widget.onResolve(r, c) : null,
+                      onPressed: actionable
+                          ? () => widget.onResolve(r, c)
+                          : null,
                       style: c == 'deny'
                           ? FilledButton.styleFrom(
                               backgroundColor: colors.errorContainer,
@@ -303,7 +319,9 @@ class _PendingApprovalCardState extends State<PendingApprovalCard> {
                 padding: const EdgeInsets.only(top: 8),
                 child: FilledButton.tonal(
                   key: ValueKey('approval-recheck-${r.requestId}'),
-                  onPressed: r.busy ? null : () => unawaited(widget.onReconfirm(r)),
+                  onPressed: r.busy
+                      ? null
+                      : () => unawaited(widget.onReconfirm(r)),
                   child: Text(strings.resolve(MessageKey.chatM021)),
                 ),
               ),

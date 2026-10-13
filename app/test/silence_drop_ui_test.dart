@@ -29,8 +29,10 @@ class FakeUiRepo extends HermesRepository {
   Future<SessionActivity> sessionActivity(String sid) async =>
       SessionActivity.quiet(sid);
   @override
-  Future<Map<String, dynamic>> sessionDetail(String sid) async =>
-      {'id': sid, 'message_count': 0};
+  Future<Map<String, dynamic>> sessionDetail(String sid) async => {
+    'id': sid,
+    'message_count': 0,
+  };
   @override
   Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     sends++;
@@ -85,15 +87,17 @@ void main() {
 
   Future<void> mount(WidgetTester tester, AppLocale locale) async {
     final binding = tester.binding;
-    container = ProviderContainer(overrides: [
-      localStoreProvider.overrideWithValue(store),
-      initialSettingsProvider.overrideWithValue(
-        const AppSettings(url: url, key: 'fake'),
-      ),
-      repositoryProvider.overrideWithValue(repo),
-      skillsProvider.overrideWith((ref) async => []),
-      chatNowProvider.overrideWith((ref) => binding.clock.now),
-    ]);
+    container = ProviderContainer(
+      overrides: [
+        localStoreProvider.overrideWithValue(store),
+        initialSettingsProvider.overrideWithValue(
+          const AppSettings(url: url, key: 'fake'),
+        ),
+        repositoryProvider.overrideWithValue(repo),
+        skillsProvider.overrideWith((ref) async => []),
+        chatNowProvider.overrideWith((ref) => binding.clock.now),
+      ],
+    );
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
@@ -130,12 +134,13 @@ void main() {
       await mount(tester, AppLocale.en);
       await sendHi(tester);
 
-      await tester.pump(const Duration(seconds: 40));
-      final waiting = find.text('Waiting for a reply (no output for 40s)');
-      expect(waiting, findsOneWidget);
-      expect(textColor(tester, waiting), isNot(scheme(tester, waiting).error));
+      await tester.pump(const Duration(seconds: 30));
+      final quiet = find.textContaining('No stream updates for 30s');
+      expect(quiet, findsOneWidget);
+      expect(textColor(tester, quiet), isNot(scheme(tester, quiet).error));
+      expect(find.textContaining('Waiting for a reply'), findsNothing);
 
-      await tester.pump(const Duration(seconds: 45)); // tick at 80 recovers
+      await tester.pump(const Duration(seconds: 55)); // tick at 80 recovers
       final check = find.textContaining('No stream updates received');
       expect(check, findsOneWidget);
       expect(textColor(tester, check), scheme(tester, check).tertiary);
@@ -164,19 +169,19 @@ void main() {
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
-        child: localizedWrap(locale: AppLocale.zhHant, ChatPage(session: session)),
+        child: localizedWrap(
+          locale: AppLocale.zhHant,
+          ChatPage(session: session),
+        ),
       ),
     );
     await tester.pump();
     await tester.pump();
 
     await sendHi(tester);
-    await tester.pump(const Duration(seconds: 40));
-    expect(
-      find.text('等待回覆（無輸出 40 秒）'),
-      findsOneWidget,
-    ); // zh rendering
-    await tester.pump(const Duration(seconds: 45));
+    await tester.pump(const Duration(seconds: 30));
+    expect(find.textContaining('30 秒未收到串流更新'), findsOneWidget); // zh rendering
+    await tester.pump(const Duration(seconds: 55));
     expect(
       find.textContaining('暫未收到串流更新'),
       findsOneWidget,
@@ -190,6 +195,36 @@ void main() {
     await tester.pump();
     await tester.pump();
     expect(repo.sends, 1);
+  });
+
+  testWidgets('a heartbeat clears the 30s transport warning without a resend', (
+    tester,
+  ) async {
+    await mount(tester, AppLocale.en);
+    await sendHi(tester);
+    await tester.pump(const Duration(seconds: 30));
+    expect(find.textContaining('No stream updates for 30s'), findsOneWidget);
+
+    repo.events.add(const SseEvent('heartbeat', '{}'));
+    await tester.pump();
+    await tester.pump();
+    expect(find.textContaining('No stream updates for 30s'), findsNothing);
+    expect(repo.sends, 1);
+    await tester.pump(const Duration(seconds: 10));
+    expect(find.textContaining('Waiting for a reply'), findsOneWidget);
+    expect(find.textContaining('No stream updates for 30s'), findsNothing);
+    repo.history = const [
+      Message(id: '1', role: 'user', content: 'hi'),
+      Message(id: '2', role: 'assistant', content: 'ok'),
+    ];
+    repo.events.add(
+      const SseEvent('run.completed', '{"completed":true,"messages":[]}'),
+    );
+    await tester.pump();
+    await tester.pump();
+    repo.cancelStream('s');
+    await tester.pump();
+    await tester.pump();
   });
 
   testWidgets('an OBSERVED stream interruption keeps the error red', (
@@ -208,7 +243,7 @@ void main() {
 
     repo.history = const [
       Message(id: '1', role: 'user', content: 'hi'),
-      Message(id: '2', role: 'assistant', content:'ok'),
+      Message(id: '2', role: 'assistant', content: 'ok'),
     ];
     await tester.pump(const Duration(seconds: 2));
     await tester.pump();

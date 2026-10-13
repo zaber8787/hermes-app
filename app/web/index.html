@@ -46,14 +46,16 @@
     // WEBSYNC F5: the service worker is exit-style (install/activate only —
     // it never caches or pushes), so an ALREADY-OPEN tab cannot learn about
     // a new release from the SW. Visible signal instead, without touching
-    // the no-cache bootstrap relay: this page snapshots the release's
-    // version.json at load (the very file publish.sh swaps atomically),
-    // rechecks it a few seconds later and every five minutes, and on a
+    // the no-cache bootstrap relay: this page embeds the loaded bundle's
+    // build ID, checks version.json at load, then checks it a few seconds
+    // later and every five minutes. The embedded ID remains the baseline
+    // even when the first network check fails. On a
     // mismatch says so in the console and shows a click-to-reload chip.
     // No silent navigation — an active send is never reloaded underneath
     // the user; the chip is the only trigger.
     (function () {
-      var mine = null, CHECK_MS = 300000, FIRST_MS = 15000, chip = null;
+      var mine = {build: '__HERMES_BUILD_ID__'}, CHECK_MS = 300000,
+        FIRST_MS = 15000, chip = null;
       function zh() {
         return (document.documentElement.lang || navigator.language || '')
           .toLowerCase().indexOf('zh') === 0;
@@ -83,10 +85,11 @@
         } catch (e) { return null; }
       }
       async function start() {
-        mine = await probe();
-        if (!mine || !mine.build) return;
-        setTimeout(check, FIRST_MS);
-        setInterval(check, CHECK_MS);
+        try { await check(); }
+        finally {
+          setTimeout(check, FIRST_MS);
+          setInterval(check, CHECK_MS);
+        }
       }
       async function check() {
         var fresh = await probe();

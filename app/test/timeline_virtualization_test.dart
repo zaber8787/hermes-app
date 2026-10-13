@@ -102,6 +102,34 @@ void main() {
     repo.close();
   });
 
+  testWidgets('reader away from tail can return to latest without approval', (
+    tester,
+  ) async {
+    repo.history = heavyHistory(80);
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: localizedWrap(ChatPage(session: sessionA)),
+      ),
+    );
+    for (var i = 0; i < 10; i++) {
+      await tester.pump();
+    }
+    final position = tester
+        .state<ScrollableState>(find.byType(Scrollable).first)
+        .position;
+    position.jumpTo(position.maxScrollExtent / 2);
+    await tester.pump();
+    await tester.pump();
+    final latest = find.byKey(const ValueKey('chat.returnLatest'));
+    expect(latest.hitTestable(), findsOneWidget);
+    await tester.tap(latest);
+    for (var i = 0; i < 12; i++) {
+      await tester.pump();
+    }
+    expect(position.maxScrollExtent - position.pixels, lessThan(120));
+  });
+
   testWidgets('200-message first build stays viewport-sized (P1 pin)', (
     tester,
   ) async {

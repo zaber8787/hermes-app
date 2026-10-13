@@ -360,22 +360,35 @@ def report(home: Path, *, batch_id: str, resolved: str, state: str, run_id=None,
                 return {"status": "ok", "receipt": _batch_view(conn, batch_id)}  # idempotent
             if current != "dispatching":
                 return {"status": "conflict", "state": current}
-            conn.execute("UPDATE wake_batches SET state='accepted', run_id = ?, updated_at = ?"
-                         " WHERE batch_id = ?", (run_id.strip(), at, batch_id))
+            changed = conn.execute(
+                "UPDATE wake_batches SET state='accepted', run_id = ?, updated_at = ?"
+                " WHERE batch_id = ? AND session_id = ? AND state = 'dispatching'",
+                (run_id.strip(), at, batch_id, resolved))
         elif state == "terminal":
             if current not in ("dispatching", "accepted"):
                 return {"status": "conflict", "state": current}
-            conn.execute("UPDATE wake_batches SET state='terminal', updated_at = ?,"
-                         " terminal_at = ? WHERE batch_id = ?", (at, at, batch_id))
+            changed = conn.execute(
+                "UPDATE wake_batches SET state='terminal', updated_at = ?,"
+                " terminal_at = ? WHERE batch_id = ? AND session_id = ?"
+                " AND state IN ('dispatching', 'accepted')",
+                (at, at, batch_id, resolved))
         elif state == "uncertain":
             # Cannot prove the run never executed: consumed WITHOUT re-sending.
             if current not in ("dispatching", "accepted"):
                 return {"status": "conflict", "state": current}
-            conn.execute("UPDATE wake_batches SET state='uncertain-consumed', updated_at = ?,"
-                         " terminal_at = ?, reason='uncertain-consumed' WHERE batch_id = ?",
-                         (at, at, batch_id))
+            changed = conn.execute(
+                "UPDATE wake_batches SET state='uncertain-consumed', updated_at = ?,"
+                " terminal_at = ?, reason='uncertain-consumed'"
+                " WHERE batch_id = ? AND session_id = ?"
+                " AND state IN ('dispatching', 'accepted')",
+                (at, at, batch_id, resolved))
         else:
             return {"status": "error", "error": "unknown_state"}
+        if changed.rowcount != 1:
+            conn.rollback()
+            latest = conn.execute("SELECT state FROM wake_batches WHERE batch_id = ?",
+                                  (batch_id,)).fetchone()
+            return {"status": "conflict", "state": latest["state"] if latest else None}
         conn.commit()
         return {"status": "ok", "receipt": _batch_view(conn, batch_id)}
 

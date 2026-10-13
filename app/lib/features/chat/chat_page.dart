@@ -65,6 +65,8 @@ class ChatPage extends ConsumerStatefulWidget {
 class _ChatPageState extends ConsumerState<ChatPage> {
   final input = TextEditingController();
   final scroll = ScrollController();
+  final GlobalKey _approvalFocusAnchor = GlobalKey();
+  RunLink? _lastScrolledDeepLink;
   bool follow = true;
   bool preparing = false, suppressDraft = false;
   bool firstLoaded = false;
@@ -754,21 +756,54 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     );
     final text = controller.text.trim();
     if (send != true || text.isEmpty) return;
-    if (watch) await c.watchSteerReady(runId);
+    final watchOk = !watch || await c.watchSteerReady(runId);
     final target = c.steerTargetForRun(runId);
     final outcome = target == null
         ? const RemoteSteerOutcome(RemoteSteerKind.staleTarget)
         : await c.submitRemoteSteer(target, text);
     if (!mounted) return;
     final message = outcome.message ?? remoteSteerMessage(outcome.kind);
+    final outcomeText = message is UiLocal
+        ? strings.resolve(message.key, args: message.args)
+        : '$message';
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         key: const ValueKey('chat.steerOutcome'),
         content: Text(
-          message is UiLocal
-              ? strings.resolve(message.key, args: message.args)
-              : '$message',
+          watchOk
+              ? outcomeText
+              : '$outcomeText\n${strings.resolve(MessageKey.steerWatchFailed)}',
         ),
+        action: watchOk
+            ? null
+            : SnackBarAction(
+                label: strings.resolve(MessageKey.commonRetry),
+                onPressed: () => unawaited(_retrySteerWatch(c, runId)),
+              ),
+      ),
+    );
+  }
+
+  Future<void> _retrySteerWatch(ChatController c, String runId) async {
+    final ok = await c.watchSteerReady(runId);
+    if (!mounted) return;
+    final strings = AppStrings.forLocale(
+      ref.read(localStoreProvider).loadLocale(),
+    );
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        key: const ValueKey('chat.steerWatchOutcome'),
+        content: Text(
+          strings.resolve(
+            ok ? MessageKey.steerWatchEnabled : MessageKey.steerWatchFailed,
+          ),
+        ),
+        action: ok
+            ? null
+            : SnackBarAction(
+                label: strings.resolve(MessageKey.commonRetry),
+                onPressed: () => unawaited(_retrySteerWatch(c, runId)),
+              ),
       ),
     );
   }
@@ -1174,6 +1209,27 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  void _revealExactApproval([int ticks = 12]) {
+    if (!mounted || !scroll.hasClients) return;
+    if (ticks > 0) {
+      _revealApprovals(0); // the lazy tail can grow after each layout
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _revealExactApproval(ticks - 1),
+      );
+      return;
+    }
+    final target = _approvalFocusAnchor.currentContext;
+    if (target != null) {
+      unawaited(
+        Scrollable.ensureVisible(
+          target,
+          duration: Duration.zero,
+          alignment: 0.2,
+        ),
+      );
+    }
+  }
+
   // Enter 傳送、Shift+Enter 換行（桌面/網頁鍵盤慣例）；行動端 Enter 由下方
   // insertNewline 落地換行（decideChatInputKey 依有效輸入平台判定）。
   KeyEventResult _inputKey(FocusNode _, KeyEvent event) => decideChatInputKey(
@@ -1403,6 +1459,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   Widget build(BuildContext context) {
     final strings = AppStrings.of(context);
     final c = ref.watch(chatProvider(widget.session.id));
+    final explicitLink = c.deepLinkFocus;
+    if (explicitLink?.requestId != null &&
+        !identical(explicitLink, _lastScrolledDeepLink) &&
+        c.pendingApprovals().any(
+          (r) => r.requestId == explicitLink!.requestId,
+        )) {
+      _lastScrolledDeepLink = explicitLink;
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _revealExactApproval(),
+      );
+    }
     // TOOLCARD-DUP: ONE tool-overlap projection computed per build from
     // this snapshot and passed to BOTH sibling views — the two sides must
     // never compute removals independently and drop the same tool twice.
@@ -1678,11 +1745,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                 // SILENCE-DROP §3.3: "waiting for a reply" is its own
                 // secondary-tone line — never red, never folded into the
                 // error slot (the stream is alive; nothing failed).
-                if (c.streamWaitingNotice != null)
+                if (c.streamQuietNotice != null ||
+                    c.streamWaitingNotice != null)
                   Padding(
                     padding: const EdgeInsets.all(12),
                     child: Text(
-                      strings.render(c.streamWaitingNotice!),
+                      strings.render(
+                        c.streamQuietNotice ?? c.streamWaitingNotice!,
+                      ),
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
@@ -2026,6 +2096,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                     onResolve: c.resolveApprovalExact,
                                     onReconfirm: c.reconfirmApprovals,
                                     focusRequestId: c.approvalFocus,
+                                    focusAnchorKey: _approvalFocusAnchor,
                                   ),
                                 ),
                               if (c.approvalLegacyNotice)
@@ -2572,7 +2643,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
               c.pendingApprovals().isNotEmpty)
             Positioned(
               right: 16,
-              bottom: 16,
+              bottom: 64,
               child: FilledButton.icon(
                 key: const ValueKey('approval-nav-cta'),
                 onPressed: _revealApprovals,
@@ -2583,6 +2654,17 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                     args: {'count': '${c.pendingApprovals().length}'},
                   ),
                 ),
+              ),
+            ),
+          if (!follow)
+            Positioned(
+              right: 16,
+              bottom: 16,
+              child: FilledButton.icon(
+                key: const ValueKey('chat.returnLatest'),
+                onPressed: _revealApprovals,
+                icon: const Icon(Icons.arrow_downward, size: 18),
+                label: Text(strings.resolve(MessageKey.chatReturnLatest)),
               ),
             ),
           if (_dragging)

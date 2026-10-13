@@ -38,6 +38,8 @@ INTENT_STATES = ("shadow", "pending", "watching", "done", "void")
 BATCH_MAX_DELIVERY_IDS = 10
 RETRY_BUSY_S = 5.0
 RETRY_JITTER_S = 2.0
+RETRY_MAX_AGE_S = 24 * 60 * 60
+RETRY_MAX_ATTEMPTS = 128
 RECONCILE_INTERVAL_S = 60.0
 SWEEP_INTERVAL_S = 15.0
 MODES = ("off", "shadow", "on")
@@ -437,6 +439,29 @@ def chain_human_checkpoint(home: Path, db, resolved: str, since: float):
     return bool(rows)
 
 
+def chain_gate_checkpoint(home: Path, lineage: str, db, resolved: str):
+    """Reopen an at-limit chain only on a provable post-fire human message."""
+    verdict = chain_gate(home, lineage)
+    if verdict[1] != "chain-limit reached (needs human checkpoint)":
+        return verdict
+    row = _ledger(home).execute(
+        "SELECT fires, last_fire_at, fused FROM selfwake_chain WHERE session_id = ?",
+        (lineage,)).fetchone()
+    if row is None or row["fused"] or row["last_fire_at"] is None:
+        return verdict
+    if not chain_human_checkpoint(home, db, resolved, float(row["last_fire_at"])):
+        return verdict
+    # Compare the observed fire state inside the write transaction. A concurrent
+    # fire must not be erased by a checkpoint proven against an older fire.
+    try:
+        if _chain_reset(home, lineage, "human-checkpoint", row["fires"],
+                        row["last_fire_at"], clear_fuse=False):
+            return chain_gate(home, lineage)
+    except Exception:
+        pass  # an unprovable reset stays closed
+    return chain_gate(home, lineage)
+
+
 def fault_fuse(home: Path, lineage: str, reason: str):
     now = time.time()
     conn = _ledger(home)
@@ -447,13 +472,45 @@ def fault_fuse(home: Path, lineage: str, reason: str):
     audit(home, phase="fuse", resolved=lineage, reason=reason, trigger="self")
 
 
-def chain_release(home: Path, lineage: str):
-    """Admin reset (documented in the deploy note); never automatic."""
-    conn = _ledger(home)
-    conn.execute("UPDATE selfwake_chain SET fires = 0, fused = 0, updated_at = ?"
-                 " WHERE session_id = ?", (time.time(), lineage))
-    conn.commit()
-    audit(home, phase="chain-reset", resolved=lineage, reason="admin", trigger="self")
+def _chain_reset(home: Path, lineage: str, reason: str, expected_fires: int,
+                 expected_last: float | None, *, clear_fuse: bool) -> bool:
+    """Atomically reset one unchanged lineage and write its audit record."""
+    _ledger(home)  # ensure the schema exists before opening a private transaction
+    conn = sqlite3.connect(Path(home) / "wake_ledger.db", timeout=10.0)
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        update = conn.execute(
+            "UPDATE selfwake_chain SET fires = 0, fused = ?, fails = 0,"
+            " updated_at = ? WHERE session_id = ? AND fires = ?"
+            " AND last_fire_at IS ? AND (? = 1 OR fused = 0)",
+            (0, time.time(), lineage, expected_fires, expected_last,
+             1 if clear_fuse else 0))
+        if update.rowcount != 1:
+            conn.rollback()
+            return False
+        conn.execute(
+            "INSERT INTO selfwake_audit(at, session_resolved, trigger,"
+            " key_prefixes, row_ids, phase, reason, chain_count)"
+            " VALUES(?,?,'self','[]','[]','chain-reset',?,?)",
+            (time.time(), lineage, reason, expected_fires))
+        conn.commit()
+        return True
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def chain_release(home: Path, lineage: str, expected_fires: int = None) -> bool:
+    """Explicit admin reset of one lineage; audited in the same transaction."""
+    row = _ledger(home).execute(
+        "SELECT fires, last_fire_at FROM selfwake_chain WHERE session_id = ?",
+        (lineage,)).fetchone()
+    if row is None or (expected_fires is not None and row["fires"] != expected_fires):
+        return False
+    return _chain_reset(home, lineage, "admin", row["fires"],
+                        row["last_fire_at"], clear_fuse=True)
 
 
 def audit(home: Path, *, phase: str, resolved: str = None, original: str = None,
@@ -890,10 +947,33 @@ class SelfWakeWorker:
                 else:
                     self._set_items(linked, "done", detail=f"batch-{state_now}")
                 return
+            # Only unclaimed busy/quota intents use this fuse. An owned batch
+            # follows the settlement path above and is never abandoned here.
+            eligible = []
+            for item in linked:
+                previous = item.get("detail")
+                exhausted = None
+                if previous in ("busy", "quota"):
+                    if now - item["created_at"] >= RETRY_MAX_AGE_S:
+                        exhausted = f"{previous}-age-exhausted"
+                    elif item["attempts"] >= RETRY_MAX_ATTEMPTS:
+                        exhausted = f"{previous}-attempts-exhausted"
+                if exhausted is None:
+                    eligible.append(item)
+                    continue
+                self._set_items([item], "void", detail=exhausted)
+                audit(self.home, phase="decision", original=session,
+                      resolved=resolved, keys=[item["delivery_key"]],
+                      from_state="pending", to_state="void",
+                      reason=exhausted, trigger="self")
+            linked = eligible
+            if not linked:
+                return
+            keys = [i["delivery_key"] for i in linked][:BATCH_MAX_DELIVERY_IDS]
             # 3. Fresh claim: fuse → admit.
             lineage = await asyncio.to_thread(lineage_root, db, resolved)
             allowed, deny, fires, retry = await asyncio.to_thread(
-                chain_gate, self.home, lineage)
+                chain_gate_checkpoint, self.home, lineage, db, resolved)
             if not allowed:
                 self._throttled_audit(f"fuse:{lineage}", phase="decision", original=session,
                                       resolved=resolved, keys=keys, reason=deny,

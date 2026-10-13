@@ -5,7 +5,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:hermes_app/api/hermes_repository.dart';
 import 'package:hermes_app/api/sse.dart';
 import 'package:hermes_app/features/chat/approval_inbox_view.dart';
 import 'package:hermes_app/features/chat/chat_page.dart';

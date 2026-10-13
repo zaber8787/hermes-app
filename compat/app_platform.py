@@ -128,6 +128,7 @@ class AppDeliveryAdapter:
         # and the install-time scan share one bookkeeping path (SELFWAKE2).
         from . import compat as _compat
         _compat.selfwake_connect_arm(asyncio.get_running_loop(), home)
+        _compat.cron_connect_arm(asyncio.get_running_loop(), home)
         log.info("app platform connected; cron drainer armed for %s", home)
         return True
 

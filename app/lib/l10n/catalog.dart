@@ -203,6 +203,8 @@ const Map<MessageKey, String> catalogEn = {
   // ---- SILENCE-DROP §3.3: quiet-stream waiting / neutral check / unconfirmed
   MessageKey.chatStreamWaiting:
       'Waiting for a reply (no output for {seconds}s)',
+  MessageKey.chatStreamQuiet:
+      'No stream updates for 30s. The connection may be interrupted; status will be checked if silence continues. The message will not be resent.',
   MessageKey.chatStreamChecking:
       'No stream updates received; checking history in {seconds}s. The message will not be resent.',
   MessageKey.chatStreamUnconfirmed:
@@ -248,6 +250,9 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.steerTooLarge: 'Steer exceeds the size limit',
   MessageKey.steerQueueFull: 'The steer queue is full; try again later',
   MessageKey.steerNotifyReady: 'Notify me when steering is available',
+  MessageKey.steerWatchFailed:
+      'The notification request failed. Retry to turn it on.',
+  MessageKey.steerWatchEnabled: 'Notification enabled for this run.',
   MessageKey.notificationEnableDesktop: 'Enable desktop browser notifications',
   MessageKey.notificationHttps:
       'Browser notifications require a secure connection',
@@ -270,6 +275,8 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.deepLinkNotFound:
       'This conversation is not available on this account',
   MessageKey.deepLinkHidden: 'This conversation is hidden',
+  MessageKey.deepLinkRetry: 'Retry opening notification',
+  MessageKey.chatReturnLatest: 'Return to latest',
   MessageKey.chatStopRemoteChecking: 'Checking stop status',
   MessageKey.chatStopRemoteUnavailable:
       'This run is unavailable; refreshing status',
@@ -363,6 +370,7 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.copyM007: 'the link',
   MessageKey.copyM008: 'This message has no link',
   MessageKey.copyM009: 'Copy',
+  MessageKey.copyFailed: 'Copy failed. Try again.',
   MessageKey.streamM001: 'The stream\'s session_id does not match',
   MessageKey.streamM002:
       'The server stream reported an error; refresh history to confirm.',
@@ -431,6 +439,8 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.approvalExpired: 'Approval timed out; this action did not run',
   MessageKey.approvalResolvedElsewhere:
       'This request was handled on another device',
+  MessageKey.approvalDeniedHere: 'Denied on this device',
+  MessageKey.approvalAllowedHere: 'Allowed on this device',
   MessageKey.approvalSubmitting: 'Submitting your choice',
   MessageKey.approvalPendingCount: 'Pending approvals: {count}',
   MessageKey.approvalCrossDeviceUnavailable:
@@ -724,6 +734,7 @@ const Map<MessageKey, String> catalogZhHant = {
 
   // ---- SILENCE-DROP §3.3: quiet-stream waiting / neutral check / unconfirmed
   MessageKey.chatStreamWaiting: '等待回覆（無輸出 {seconds} 秒）',
+  MessageKey.chatStreamQuiet: '30 秒未收到串流更新，連線可能中斷；若持續靜默將核對狀態，不會重送訊息。',
   MessageKey.chatStreamChecking: '暫未收到串流更新，{seconds} 秒後核對歷史；不會重送訊息。',
   MessageKey.chatStreamUnconfirmed: '尚無法確認這回合的結果。請使用「重新核對」確認。',
   MessageKey.chatDeliveredReplyLoading: '訊息已送達，回覆載入中。可使用「重新核對」更新。',
@@ -760,6 +771,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.steerTooLarge: '插話超過長度限制',
   MessageKey.steerQueueFull: '待處理插話已滿，請稍後重試',
   MessageKey.steerNotifyReady: '可插話時提醒我',
+  MessageKey.steerWatchFailed: '提醒設定失敗，請重試。',
+  MessageKey.steerWatchEnabled: '已為此工作啟用提醒。',
   MessageKey.notificationEnableDesktop: '啟用桌面瀏覽器通知',
   MessageKey.notificationHttps: '瀏覽器通知需要安全入口',
   MessageKey.notificationOpenHttps: '開啟安全入口',
@@ -776,6 +789,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.notificationUnavailable: '此通知的對話無法開啟',
   MessageKey.deepLinkNotFound: '此帳戶無法開啟這個對話',
   MessageKey.deepLinkHidden: '這個對話已被隱藏',
+  MessageKey.deepLinkRetry: '重試開啟通知',
+  MessageKey.chatReturnLatest: '回到最新',
   MessageKey.chatStopRemoteChecking: '正在核對停止狀態',
   MessageKey.chatStopRemoteUnavailable: '此運行已不可用，正在更新狀態',
   MessageKey.chatStopRemoteNoRunId: '伺服器未提供運行識別碼，無法從此處停止',
@@ -857,6 +872,7 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.copyM007: '連結',
   MessageKey.copyM008: '此訊息沒有連結',
   MessageKey.copyM009: '複製',
+  MessageKey.copyFailed: '複製失敗，請重試。',
   MessageKey.streamM001: '串流 session_id 不符',
   MessageKey.streamM002: '伺服器串流回報錯誤，請刷新歷史確認。',
   MessageKey.contentM001: '無法開啟此連結。',
@@ -917,6 +933,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.approvalUnavailable: '核准狀態尚未確認，請重新核對',
   MessageKey.approvalExpired: '核准已逾時，此動作未執行',
   MessageKey.approvalResolvedElsewhere: '此請求已在其他裝置處理',
+  MessageKey.approvalDeniedHere: '已拒絕（此裝置）',
+  MessageKey.approvalAllowedHere: '已允許（此裝置）',
   MessageKey.approvalSubmitting: '正在送出選擇',
   MessageKey.approvalPendingCount: '待核准：{count}',
   MessageKey.approvalCrossDeviceUnavailable: '此伺服器尚不支援跨裝置核准',

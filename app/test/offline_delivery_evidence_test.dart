@@ -200,6 +200,21 @@ Map<String, Object?> _quietActivity(String sid) => {
   'overflow': false,
 };
 
+class ThrowOnceEvidenceStore extends LocalStore {
+  ThrowOnceEvidenceStore(super.prefs);
+
+  bool threw = false;
+
+  @override
+  Future<bool> saveAttempt(String server, String sid, LocalAttempt attempt) {
+    if (!threw && attempt.terminalEvidence?['stage'] == 'dispatchInvoked') {
+      threw = true;
+      throw StateError('injected journal write failure');
+    }
+    return super.saveAttempt(server, sid, attempt);
+  }
+}
+
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
   late SharedPreferences prefs;
@@ -375,6 +390,22 @@ void main() {
     expect(port.gets, greaterThan(0)); // the observation is GETs only
     a = attemptFor(c)!;
     expect(a.delivery, AttemptDelivery.acknowledged); // never downgraded
+    c.dispose();
+  });
+
+  test('one journal exception does not poison later evidence merges', () async {
+    makeRepo(mode: 'ackThenDrop');
+    final flaky = ThrowOnceEvidenceStore(prefs);
+    store = flaky;
+    final c = scripted();
+    final sending = c.send('question one');
+    await settleMicrotasks();
+    expect(flaky.threw, isTrue);
+    expect(attemptFor(c)!.delivery, AttemptDelivery.acknowledged);
+    expect(attemptFor(c)!.terminalEvidence?['firstEventType'], 'run.started');
+    expect((c.storageNotice! as UiLocal).key, MessageKey.chatRecoveryStorageFailed);
+    await sending;
+    expect(port.chatPosts, 1);
     c.dispose();
   });
 

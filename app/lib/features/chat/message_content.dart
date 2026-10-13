@@ -8,6 +8,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:gpt_markdown/gpt_markdown.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'linkify.dart';
+import 'copy_actions.dart';
 import '../../api/hermes_repository.dart';
 import '../../l10n/app_strings.dart';
 import '../../l10n/localized_text.dart';
@@ -217,60 +218,63 @@ class MessageContent extends StatelessWidget {
     child: Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: splitMessageContent(text).map((part) {
-      if (part.media) {
-        if (isImageReference(part.value)) return MessageImage(part.value);
-        // OPENPERF P3 (定案2): history ships MEDIA REFERENCES. An image
-        // reference renders inline through the download endpoint (one
-        // file per view — never 13 MB of JSON on the list GET); a miss
-        // (old gateway 404, deleted file) degrades to the download tile.
-        if (looksLikeServerPath(part.value) &&
-            _serverImagePath.hasMatch(part.value)) {
-          return ServerPathImage(part.value, filename: part.filename);
+        if (part.media) {
+          if (isImageReference(part.value)) return MessageImage(part.value);
+          // OPENPERF P3 (定案2): history ships MEDIA REFERENCES. An image
+          // reference renders inline through the download endpoint (one
+          // file per view — never 13 MB of JSON on the list GET); a miss
+          // (old gateway 404, deleted file) degrades to the download tile.
+          if (looksLikeServerPath(part.value) &&
+              _serverImagePath.hasMatch(part.value)) {
+            return ServerPathImage(part.value, filename: part.filename);
+          }
+          return AttachmentTile(part.value, filename: part.filename);
         }
-        return AttachmentTile(part.value, filename: part.filename);
-      }
-      final value = part.value.trim();
-      if (value.isEmpty) return const SizedBox.shrink();
-      if (value.startsWith('data:image/') && !value.contains(RegExp(r'\s'))) {
-        return MessageImage(value);
-      }
-      return GptMarkdown(
-        linkifyBareUrls(value),
-        onLinkTap: (url, _) => openMessageLink(context, url),
-        imageBuilder: (context, url, width, height) => MessageImage(url),
-        codeBuilder: (context, language, code, closed) => Container(
-          width: double.infinity,
-          margin: const EdgeInsets.symmetric(vertical: 8),
-          padding: const EdgeInsets.all(12),
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Row(
-                children: [
-                  Expanded(child: Text(language)),
-                  IconButton(
-                    tooltip: AppStrings.of(
-                      context,
-                    ).resolve(MessageKey.contentM002),
-                    icon: const Icon(Icons.copy, size: 18),
-                    onPressed: () =>
-                        Clipboard.setData(ClipboardData(text: code)),
-                  ),
-                ],
-              ),
-              SingleChildScrollView(
-                scrollDirection: Axis.horizontal,
-                child: SelectableText(
-                  code,
-                  style: const TextStyle(fontFamily: 'monospace'),
+        final value = part.value.trim();
+        if (value.isEmpty) return const SizedBox.shrink();
+        if (value.startsWith('data:image/') && !value.contains(RegExp(r'\s'))) {
+          return MessageImage(value);
+        }
+        return GptMarkdown(
+          linkifyBareUrls(value),
+          onLinkTap: (url, _) => openMessageLink(context, url),
+          imageBuilder: (context, url, width, height) => MessageImage(url),
+          codeBuilder: (context, language, code, closed) => Container(
+            width: double.infinity,
+            margin: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.all(12),
+            color: Theme.of(context).colorScheme.surfaceContainerHighest,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(child: Text(language)),
+                    IconButton(
+                      tooltip: AppStrings.of(
+                        context,
+                      ).resolve(MessageKey.contentM002),
+                      icon: const Icon(Icons.copy, size: 18),
+                      onPressed: () => copyWithFeedback(
+                        context,
+                        code,
+                        const UiMessage.local(MessageKey.contentM002),
+                      ),
+                    ),
+                  ],
                 ),
-              ),
-            ],
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: SelectableText(
+                    code,
+                    style: const TextStyle(fontFamily: 'monospace'),
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-      );
-    }).toList(),
+        );
+      }).toList(),
     ),
   );
 }
@@ -316,7 +320,8 @@ int _dataUrlDecodes = 0;
     _dataUrlCacheBytes += bytes.length;
     while (_dataUrlCache.length > _dataUrlCacheMaxEntries ||
         _dataUrlCacheBytes > _dataUrlCacheMaxBytes) {
-      _dataUrlCacheBytes -= _dataUrlCache.remove(_dataUrlCache.keys.first)!
+      _dataUrlCacheBytes -= _dataUrlCache
+          .remove(_dataUrlCache.keys.first)!
           .bytes
           .length;
     }
@@ -343,9 +348,7 @@ class _MessageImageState extends ConsumerState<MessageImage> {
     final decoded = _decodeDataUrl(widget.source);
     if (decoded == null) return null;
     final slash = decoded.mimeType.indexOf('/');
-    final subtype = (slash >= 0
-            ? decoded.mimeType.substring(slash + 1)
-            : 'png')
+    final subtype = (slash >= 0 ? decoded.mimeType.substring(slash + 1) : 'png')
         .split(RegExp(r'[+.]'))
         .first;
     return (bytes: decoded.bytes, name: 'hermes-image.$subtype');
@@ -365,20 +368,22 @@ class _MessageImageState extends ConsumerState<MessageImage> {
     try {
       final saved = await saveBytesAs(name, bytes);
       if (mounted) {
-        setState(() => _notice = switch (saved) {
-          // Typed outcome (§4.4): the web path no longer renders a
-          // pseudo-path string.
-          SaveCancelled() => const UiMessage.local(
-            MessageKey.downloadCancelled,
-          ),
-          SavedPath(:final path) => UiMessage.local(
-            MessageKey.contentM003,
-            args: {'saved': UiMessage.raw(path)},
-          ),
-          BrowserStarted() => const UiMessage.local(
-            MessageKey.downloadBrowserStarted,
-          ),
-        });
+        setState(
+          () => _notice = switch (saved) {
+            // Typed outcome (§4.4): the web path no longer renders a
+            // pseudo-path string.
+            SaveCancelled() => const UiMessage.local(
+              MessageKey.downloadCancelled,
+            ),
+            SavedPath(:final path) => UiMessage.local(
+              MessageKey.contentM003,
+              args: {'saved': UiMessage.raw(path)},
+            ),
+            BrowserStarted() => const UiMessage.local(
+              MessageKey.downloadBrowserStarted,
+            ),
+          },
+        );
       }
     } catch (_) {
       if (mounted) {
@@ -390,8 +395,7 @@ class _MessageImageState extends ConsumerState<MessageImage> {
   }
 
   Widget _image() {
-    Widget local(MessageKey key) =>
-        LocalizedText(UiMessage.local(key));
+    Widget local(MessageKey key) => LocalizedText(UiMessage.local(key));
     Widget failure(BuildContext c, Object e, StackTrace? s) => Padding(
       padding: const EdgeInsets.all(16),
       child: local(MessageKey.contentM005),
@@ -415,8 +419,11 @@ class _MessageImageState extends ConsumerState<MessageImage> {
           uri.userInfo.isNotEmpty) {
         return local(MessageKey.contentM008);
       }
-      return Image.network(widget.source,
-          fit: BoxFit.contain, errorBuilder: failure);
+      return Image.network(
+        widget.source,
+        fit: BoxFit.contain,
+        errorBuilder: failure,
+      );
     } catch (_) {
       return local(MessageKey.contentM007);
     }
@@ -448,22 +455,25 @@ class _MessageImageState extends ConsumerState<MessageImage> {
                             context,
                           ).resolve(MessageKey.contentM011),
                           onPressed: _saving ? null : _save,
-                          icon: Icon(_saving
-                              ? Icons.hourglass_top
-                              : Icons.download_outlined),
+                          icon: Icon(
+                            _saving
+                                ? Icons.hourglass_top
+                                : Icons.download_outlined,
+                          ),
                         ),
                     ],
                   ),
                   body: Center(
-                    child: InteractiveViewer(
-                        maxScale: 5, child: _image()),
+                    child: InteractiveViewer(maxScale: 5, child: _image()),
                   ),
                 ),
               ),
             ),
             child: SizedBox(
-              width:
-                  (MediaQuery.sizeOf(context).width - 80).clamp(100.0, 480.0),
+              width: (MediaQuery.sizeOf(context).width - 80).clamp(
+                100.0,
+                480.0,
+              ),
               height: 250,
               child: _image(),
             ),
@@ -476,9 +486,11 @@ class _MessageImageState extends ConsumerState<MessageImage> {
                 tooltip: strings.resolve(MessageKey.contentM011),
                 visualDensity: VisualDensity.compact,
                 onPressed: _saving ? null : _save,
-                icon: Icon(Icons.download_outlined,
-                    size: 16,
-                    color: Theme.of(context).colorScheme.onSurfaceVariant),
+                icon: Icon(
+                  Icons.download_outlined,
+                  size: 16,
+                  color: Theme.of(context).colorScheme.onSurfaceVariant,
+                ),
               ),
             if (_notice != null)
               Expanded(
@@ -562,18 +574,17 @@ class _AttachmentTileState extends ConsumerState<AttachmentTile> {
       title: Text(
         name.isEmpty ? strings.resolve(MessageKey.contentM012) : name,
       ),
-      subtitle:
-          notice != null
-              ? LocalizedText(notice!)
-              : Text(
-                id != null
-                    ? strings.resolve(MessageKey.contentM013)
-                    : remote
-                    ? strings.resolve(MessageKey.contentM014)
-                    : serverFile
-                    ? strings.resolve(MessageKey.contentM015)
-                    : strings.resolve(MessageKey.contentM016),
-              ),
+      subtitle: notice != null
+          ? LocalizedText(notice!)
+          : Text(
+              id != null
+                  ? strings.resolve(MessageKey.contentM013)
+                  : remote
+                  ? strings.resolve(MessageKey.contentM014)
+                  : serverFile
+                  ? strings.resolve(MessageKey.contentM015)
+                  : strings.resolve(MessageKey.contentM016),
+            ),
       trailing: busy
           ? const SizedBox(
               width: 20,
@@ -581,12 +592,11 @@ class _AttachmentTileState extends ConsumerState<AttachmentTile> {
               child: CircularProgressIndicator(),
             )
           : IconButton(
-              tooltip:
-                  id != null || serverFile
-                      ? strings.resolve(MessageKey.contentM013)
-                      : remote
-                      ? strings.resolve(MessageKey.contentM017)
-                      : strings.resolve(MessageKey.contentM018),
+              tooltip: id != null || serverFile
+                  ? strings.resolve(MessageKey.contentM013)
+                  : remote
+                  ? strings.resolve(MessageKey.contentM017)
+                  : strings.resolve(MessageKey.contentM018),
               icon: Icon(
                 id != null || serverFile
                     ? Icons.download
@@ -601,11 +611,19 @@ class _AttachmentTileState extends ConsumerState<AttachmentTile> {
                     return;
                   }
                   if (!serverFile) {
-                    await Clipboard.setData(ClipboardData(text: reference));
+                    var copied = false;
+                    try {
+                      await Clipboard.setData(ClipboardData(text: reference));
+                      copied = true;
+                    } on Object {
+                      // Keep the attachment tile available for another try.
+                    }
                     if (mounted) {
                       setState(
-                        () => notice = const UiMessage.local(
-                          MessageKey.contentM019,
+                        () => notice = UiMessage.local(
+                          copied
+                              ? MessageKey.contentM019
+                              : MessageKey.copyFailed,
                         ),
                       );
                     }
@@ -619,23 +637,27 @@ class _AttachmentTileState extends ConsumerState<AttachmentTile> {
                     final saved = await saveBytesAs(name, bytes);
                     if (mounted) {
                       setState(
-                        () => notice =
-                            !saved.succeeded
-                                ? const UiMessage.local(
-                                  MessageKey.contentM020,
-                                )
-                                : const UiMessage.local(
-                                  MessageKey.contentM021,
-                                ),
+                        () => notice = !saved.succeeded
+                            ? const UiMessage.local(MessageKey.contentM020)
+                            : const UiMessage.local(MessageKey.contentM021),
                       );
                     }
                   } on ApiException catch (e) {
                     if (!mounted) return;
                     if (e.status == 404) {
-                      await Clipboard.setData(ClipboardData(text: reference));
+                      var copied = false;
+                      try {
+                        await Clipboard.setData(ClipboardData(text: reference));
+                        copied = true;
+                      } on Object {
+                        // The fallback path must not report a false copy.
+                      }
+                      if (!mounted) return;
                       setState(
-                        () => notice = const UiMessage.local(
-                          MessageKey.contentM022,
+                        () => notice = UiMessage.local(
+                          copied
+                              ? MessageKey.contentM022
+                              : MessageKey.copyFailed,
                         ),
                       );
                     } else {
@@ -664,25 +686,17 @@ class _AttachmentTileState extends ConsumerState<AttachmentTile> {
                   final saved = await saveBytesAs(name, bytes);
                   if (mounted) {
                     setState(
-                      () => notice =
-                          !saved.succeeded
-                              ? const UiMessage.local(
-                                MessageKey.contentM024,
-                              )
-                              : const UiMessage.local(
-                                MessageKey.contentM021,
-                              ),
+                      () => notice = !saved.succeeded
+                          ? const UiMessage.local(MessageKey.contentM024)
+                          : const UiMessage.local(MessageKey.contentM021),
                     );
                   }
                 } catch (e) {
                   if (mounted) {
                     setState(
-                      () => notice =
-                          e is UiCarriesMessage
-                              ? e.uiMessage
-                              : const UiMessage.local(
-                                MessageKey.contentM025,
-                              ),
+                      () => notice = e is UiCarriesMessage
+                          ? e.uiMessage
+                          : const UiMessage.local(MessageKey.contentM025),
                     );
                   }
                 } finally {

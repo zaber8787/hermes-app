@@ -2,6 +2,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../api/hermes_repository.dart';
 import '../../l10n/app_strings.dart';
 import '../../l10n/localized_text.dart';
 import '../../l10n/message_key.dart';
@@ -43,6 +44,11 @@ void sortSessionRows(
 
 class _SessionsPageState extends ConsumerState<SessionsPage> {
   Timer? timer;
+  HermesRepository? _previewRepo;
+  void _onSessionsPreview() {
+    if (mounted) setState(() {});
+  }
+
   final search = TextEditingController();
   String query = '';
   bool showHidden = false;
@@ -268,18 +274,18 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
     // attaching here makes this page the router; the stashed launch link
     // (login handoff) is spent ONCE through the ingress queue, and warm
     // links (web address changes, native intents) route while mounted.
-    deepLinkIngress.attach((link) => _routeDeepLink(link));
+    deepLinkIngress.attachWithOutcome((link) => _routeDeepLink(link));
   }
 
-  Future<void> _routeDeepLink(RunLink link) async {
-    if (!mounted) return;
+  Future<DeepLinkRouteOutcome> _routeDeepLink(RunLink link) async {
+    if (!mounted) return DeepLinkRouteOutcome.temporaryFailure;
     final List<Session> list;
     try {
       list = await ref.read(sessionsProvider.future);
     } on Object {
-      return; // an unreachable list changes NOTHING (no fake miss)
+      return DeepLinkRouteOutcome.temporaryFailure;
     }
-    if (!mounted) return;
+    if (!mounted) return DeepLinkRouteOutcome.temporaryFailure;
     final store = ref.read(localStoreProvider);
     final server = ref.read(settingsProvider).url;
     final route = resolveDeepLink(
@@ -293,17 +299,21 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
         // would strand the wrong session behind it.
         Navigator.of(context).popUntil((r) => r.isFirst);
         await open(route.session!, deepLink: link);
+        return DeepLinkRouteOutcome.opened;
       case DeepLinkStatus.sessionHidden:
         _snack(const UiMessage.local(MessageKey.deepLinkHidden));
+        return DeepLinkRouteOutcome.permanentMiss;
       case DeepLinkStatus.sessionNotFound:
         // deleted OR another profile — never distinguished, never guessed
         _snack(const UiMessage.local(MessageKey.deepLinkNotFound));
+        return DeepLinkRouteOutcome.permanentMiss;
     }
   }
 
   @override
   void dispose() {
     timer?.cancel();
+    _previewRepo?.sessionsPreview.removeListener(_onSessionsPreview);
     deepLinkIngress.detach();
     search.dispose();
     super.dispose();
@@ -692,6 +702,17 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
   @override
   Widget build(BuildContext context) {
     final sessions = ref.watch(sessionsProvider);
+    final repo = ref.watch(repositoryProvider);
+    if (!identical(_previewRepo, repo)) {
+      _previewRepo?.sessionsPreview.removeListener(_onSessionsPreview);
+      _previewRepo = repo;
+      repo.sessionsPreview.addListener(_onSessionsPreview);
+    }
+    final preview = repo.sessionsPreview.value;
+    final displaySessions =
+        sessions.isLoading && sessions.asData == null && preview != null
+        ? AsyncValue<List<Session>>.data(preview)
+        : sessions;
     final online = ref.watch(healthProvider).asData?.value ?? false;
     final skillState = ref.watch(
       skillsProvider,
@@ -738,6 +759,17 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
               style: TextStyle(letterSpacing: 3, fontSize: 18),
             ),
             actions: [
+              ValueListenableBuilder<RunLink?>(
+                valueListenable: deepLinkIngress.pendingRetryNotifier,
+                builder: (context, link, _) => link == null
+                    ? const SizedBox.shrink()
+                    : IconButton(
+                        key: const ValueKey('sessions.retryDeepLink'),
+                        tooltip: strings.resolve(MessageKey.deepLinkRetry),
+                        onPressed: deepLinkIngress.retryPending,
+                        icon: const Icon(Icons.link),
+                      ),
+              ),
               if (_selection.selecting)
                 IconButton(
                   // visible Select/Cancel pair on EVERY platform (B4).
@@ -797,7 +829,7 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
           ),
           body: RefreshIndicator(
             onRefresh: applying ? () async {} : refresh,
-            child: sessions.when(
+            child: displaySessions.when(
               loading: () => ListView(
                 physics: const AlwaysScrollableScrollPhysics(),
                 children: const [

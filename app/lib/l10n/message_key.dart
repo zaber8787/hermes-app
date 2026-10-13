@@ -139,6 +139,7 @@ enum MessageKey {
 
   // ---- SILENCE-DROP §3.3: quiet-stream waiting / neutral check / unconfirmed
   chatStreamWaiting,
+  chatStreamQuiet,
   chatStreamChecking,
   chatStreamUnconfirmed,
 
@@ -261,6 +262,7 @@ enum MessageKey {
   copyM007,
   copyM008,
   copyM009,
+  copyFailed,
   streamM001,
   streamM002,
   contentM001,
@@ -321,6 +323,8 @@ enum MessageKey {
   approvalUnavailable,
   approvalExpired,
   approvalResolvedElsewhere,
+  approvalDeniedHere,
+  approvalAllowedHere,
   approvalSubmitting,
   approvalPendingCount,
   approvalCrossDeviceUnavailable,
@@ -454,6 +458,8 @@ enum MessageKey {
   steerTooLarge,
   steerQueueFull,
   steerNotifyReady,
+  steerWatchFailed,
+  steerWatchEnabled,
   notificationEnableDesktop,
   notificationHttps,
   notificationOpenHttps,
@@ -470,4 +476,6 @@ enum MessageKey {
   notificationUnavailable,
   deepLinkNotFound,
   deepLinkHidden,
+  deepLinkRetry,
+  chatReturnLatest,
 }

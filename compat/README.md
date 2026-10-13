@@ -115,6 +115,14 @@ Hindsight moved out of upstream core. See `HINDSIGHT-MIGRATION.md` for the
 catalog install path, verification, rollback, and the local-mode behavior
 difference to record before updating.
 
+Artifact uploads also have durable live-byte reservations: 1 GiB per
+principal and 4 GiB globally by default. Operators may set
+`HERMES_ARTIFACT_PRINCIPAL_LIVE_BYTES` and
+`HERMES_ARTIFACT_GLOBAL_LIVE_BYTES` to positive byte counts. Reservations are
+atomic across processes in `artifact_live_quota.db`; successful one-shot reads
+release them immediately, and expired receipts release them at the next prune
+or reservation. Quota storage errors reject uploads.
+
 Media paths use upstream validation with its default empty session key. This is
 operator-authenticated host-file delivery, not a new per-session filesystem boundary.
 `FileResponse` inherits upstream path-open races and stat-time size checking. History
@@ -144,10 +152,15 @@ column says `self:*`. Uncertain outcomes (crash between CAS and terminal)
 settle once as `uncertain-consumed` with the missed-reply risk recorded in
 `selfwake_audit` — never a re-POST.
 
-Fuse: 3 fires / lineage (`chain_limit`, durable, survives restart/hour/
-compression) or 3 consecutive failed/uncertain settlements stops the lineage;
-reopening needs a human message on the session (`chain_human_checkpoint`) or
-`chain_release` (audited `chain-reset`). `causal_suspect` is a conservative
+Fuse: `chain_limit` fires / lineage (durable, survives restart/hour/
+compression) stops new admits until a human user message newer than the last
+fire is proved on the resolved session. Bridge reports and the canonical wake
+input do not qualify. Three consecutive failed/uncertain settlements fault-
+fuse the lineage and require an explicit admin release. Hermes can invoke the
+local admin entry `python3 tools/wake_chain_admin.py --home "$HOME/.hermes"
+--session SESSION_ID --expect-fires N --apply` from its terminal; omit `--apply`
+to preview. It resets only that lineage and writes `phase=chain-reset`,
+`reason=admin` in the same transaction. `causal_suspect` is a conservative
 heuristic, not full causal tracking.
 
 Wire coverage: `.selfwake-evidence/s4-wire-matrix.sh` proves the wake turn

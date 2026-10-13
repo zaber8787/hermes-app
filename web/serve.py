@@ -10,6 +10,7 @@ Bind 介面由部署者選定：未設定時只綁 loopback，绝不預設公開
 import asyncio
 import json
 import logging
+import mimetypes
 import os
 import pathlib
 import sys
@@ -583,6 +584,58 @@ def _static_etag(target: pathlib.Path) -> str:
     return f'W/"{st.st_size:x}-{st.st_mtime_ns & 0xFFFFFFFF:x}"'
 
 
+class _NegotiatedFileResponse(web.FileResponse):
+    """SESSIONDIR B1: FileResponse's own sibling auto-discovery matches
+    Accept-Encoding as a SUBSTRING (gzip;q=0 would count as consent), so the
+    handler negotiates the variant itself and this subclass stops FileResponse
+    from re-discovering a .gz sibling behind that decision."""
+
+    def _get_file_path_stat_encoding(self, accept_encoding):
+        return self._path, self._path.stat(), None
+
+
+def _encoding_consents(request: web.Request) -> dict:
+    """Accept-Encoding -> {br: q, gzip: q, '*': q} (absent means no consent)."""
+    consents: dict = {}
+    for token in (request.headers.get("Accept-Encoding") or "").lower().split(","):
+        parts = token.strip().split(";")
+        name = parts[0].strip()
+        q = 1.0
+        for param in parts[1:]:
+            param = param.strip()
+            if param.startswith("q="):
+                try:
+                    q = float(param[2:])
+                except ValueError:
+                    q = 0.0
+        if name in ("br", "gzip", "*") and name not in consents:
+            consents[name] = q
+    return consents
+
+
+def _safe_companion(target: pathlib.Path, root: pathlib.Path, ext: str) -> pathlib.Path | None:
+    candidate = pathlib.Path(str(target) + ext).resolve()
+    if candidate.is_relative_to(root) and candidate.is_file():
+        return candidate
+    return None
+
+
+def _pick_encoding(request: web.Request, target: pathlib.Path,
+                   root: pathlib.Path) -> tuple[str, pathlib.Path] | None:
+    """Best consented precompressed companion: brotli over gzip at equal q
+    (SESSIONDIR B1b: the 10Mbps boot budget needs brotli's extra ~35%; a
+    refusal like br;q=0 is parsed, not substring-matched)."""
+    consents = _encoding_consents(request)
+    best = None
+    for enc, ext in (("br", ".br"), ("gzip", ".gz")):
+        q = consents.get(enc, consents.get("*", 0.0))
+        companion = _safe_companion(target, root, ext) if q > 0 else None
+        if companion is not None:
+            if best is None or q > best[0]:
+                best = (q, enc, companion)
+    return (best[1], best[2]) if best else None
+
+
 async def static_handler(request: web.Request) -> web.StreamResponse:
     path = request.match_info.get("path") or "index.html"
     root = ROOT.resolve()
@@ -600,7 +653,24 @@ async def static_handler(request: web.Request) -> web.StreamResponse:
     if request.headers.get("If-None-Match") == etag:
         return web.Response(status=304,
                             headers={"ETag": etag, "Cache-Control": "no-cache"})
-    resp = web.FileResponse(target)
+    # SESSIONDIR B1/B1b: publish ships .gz/.br companions
+    # (web/compress-release.sh); serving one is a stat+send, never a
+    # request-path compression. With no companion present the response is
+    # byte-for-byte what it always was.
+    selected = _pick_encoding(request, target, root)
+    if selected:
+        enc, companion = selected
+        resp = _NegotiatedFileResponse(companion)
+        content_type = mimetypes.guess_type(target.name)[0]
+        if content_type:
+            resp.headers["Content-Type"] = content_type
+        resp.headers["Content-Encoding"] = enc
+    else:
+        resp = _NegotiatedFileResponse(target)
+    if (_safe_companion(target, root, ".gz") is not None
+            or _safe_companion(target, root, ".br") is not None):
+        # variants of the same URL exist -> cache keys must not conflate
+        resp.headers["Vary"] = "Accept-Encoding"
     # WEBSYNC F5/F6 policy choice, with the reason: the build carries a
     # FIXED main.dart.js path (no content-hash URL), so max-age+immutable
     # would be a lie — the correct pair is revalidate-always (no-cache)

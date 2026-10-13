@@ -76,8 +76,7 @@ void main() {
       expect(seen.length, 1); // no repeat, no re-read surprise
     });
 
-    test('a junk href before login stashes nothing and never throws',
-        () async {
+    test('a junk href before login stashes nothing and never throws', () async {
       source.add('https://h/#/chat?session=s&apikey=BAD');
       source.add('not a url at all');
       await pumpEventQueue();
@@ -89,6 +88,35 @@ void main() {
   });
 
   group('warm start with a router attached', () {
+    test('temporary route failure waits for explicit retry', () async {
+      var calls = 0;
+      var available = false;
+      ingress.attachWithOutcome((link) async {
+        calls++;
+        return available
+            ? DeepLinkRouteOutcome.opened
+            : DeepLinkRouteOutcome.temporaryFailure;
+      });
+      source.add(serverCanonical);
+      await pumpEventQueue();
+      expect(calls, 1);
+      expect(ingress.pendingRetry?.requestId, 'q3');
+      ingress.detach();
+      ingress.attachWithOutcome((link) async {
+        calls++;
+        return available
+            ? DeepLinkRouteOutcome.opened
+            : DeepLinkRouteOutcome.temporaryFailure;
+      });
+      await pumpEventQueue();
+      expect(calls, 1, reason: 'reattach must not jump to another page');
+      available = true;
+      ingress.retryPending();
+      await pumpEventQueue();
+      expect(calls, 2);
+      expect(ingress.pendingRetry, isNull);
+    });
+
     test('later links route immediately without touching the stash', () async {
       final seen = <String>[];
       ingress.attach((link) async => seen.add(link.sessionId));
@@ -98,45 +126,49 @@ void main() {
       expect(store.peekDeepLink(), isNull);
     });
 
-    test('a link arriving while a route is busy is QUEUED, never dropped',
-        () async {
-      final done = <String>[];
-      final first = Completer<void>();
-      ingress.attach((link) async {
-        if (link.runId == 'r9') await first.future; // route one hangs
-        done.add(link.runId ?? '?');
-      });
-      source.add(serverCanonical); // run=r9 hangs inside the router
-      await pumpEventQueue();
-      source.add(
-        'https://entry.example.com/#/chat?session=s%2F1&run=r10',
-      );
-      await pumpEventQueue();
-      expect(done, isEmpty); // still busy — the second link WAITS
+    test(
+      'a link arriving while a route is busy is QUEUED, never dropped',
+      () async {
+        final done = <String>[];
+        final first = Completer<void>();
+        ingress.attach((link) async {
+          if (link.runId == 'r9') await first.future; // route one hangs
+          done.add(link.runId ?? '?');
+        });
+        source.add(serverCanonical); // run=r9 hangs inside the router
+        await pumpEventQueue();
+        source.add('https://entry.example.com/#/chat?session=s%2F1&run=r10');
+        await pumpEventQueue();
+        expect(done, isEmpty); // still busy — the second link WAITS
 
-      first.complete();
-      await pumpEventQueue();
-      expect(done, ['r9', 'r10']); // ordered, nothing dropped
-    });
+        first.complete();
+        await pumpEventQueue();
+        expect(done, ['r9', 'r10']); // ordered, nothing dropped
+      },
+    );
 
-    test('the same notification tapped later navigates AGAIN (no URL dedup)',
-        () async {
-      final done = <int>[];
-      ingress.attach((link) async => done.add(1));
-      source.add(serverCanonical);
-      await pumpEventQueue();
-      source.add(serverCanonical); // deliberate second tap, minutes later
-      await pumpEventQueue();
-      expect(done.length, 2);
-    });
+    test(
+      'the same notification tapped later navigates AGAIN (no URL dedup)',
+      () async {
+        final done = <int>[];
+        ingress.attach((link) async => done.add(1));
+        source.add(serverCanonical);
+        await pumpEventQueue();
+        source.add(serverCanonical); // deliberate second tap, minutes later
+        await pumpEventQueue();
+        expect(done.length, 2);
+      },
+    );
 
-    test('detached (settings open), links wait in the stash, not the void',
-        () async {
-      ingress.attach((link) async {});
-      ingress.detach();
-      source.add(serverCanonical);
-      await pumpEventQueue();
-      expect(store.peekDeepLink(), serverCanonical);
-    });
+    test(
+      'detached (settings open), links wait in the stash, not the void',
+      () async {
+        ingress.attach((link) async {});
+        ingress.detach();
+        source.add(serverCanonical);
+        await pumpEventQueue();
+        expect(store.peekDeepLink(), serverCanonical);
+      },
+    );
   });
 }

@@ -9,8 +9,8 @@ import '../../l10n/ui_message.dart';
 /// Copy affordances shared by every rendered message: whole text, individual
 /// blocks (paragraph split), and any links found inside.
 List<String> extractLinks(String text) => RegExp(
-      r'''https?://[^\s)（）"'<>]+''',
-    ).allMatches(text).map((m) => m.group(0)!).toList();
+  r'''https?://[^\s)（）"'<>]+''',
+).allMatches(text).map((m) => m.group(0)!).toList();
 
 /// Paragraph blocks for the per-block copy list; blank-line separated like
 /// the markdown source.
@@ -20,18 +20,26 @@ List<String> copyBlocks(String text) => text
     .where((b) => b.isNotEmpty)
     .toList();
 
-Future<void> _copy(
+Future<void> copyWithFeedback(
   BuildContext context,
   String value,
   UiMessage label,
 ) async {
-  await Clipboard.setData(ClipboardData(text: value));
+  var copied = false;
+  try {
+    await Clipboard.setData(ClipboardData(text: value));
+    copied = true;
+  } on Object {
+    // Browser permissions and native clipboard services can reject writes.
+  }
   if (context.mounted) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         // The 'Copied …' feedback localizes; the clipboard bytes never do.
         content: LocalizedText(
-          UiMessage.local(MessageKey.copyM001, args: {'label': label}),
+          copied
+              ? UiMessage.local(MessageKey.copyM001, args: {'label': label})
+              : const UiMessage.local(MessageKey.copyFailed),
         ),
         duration: const Duration(seconds: 1),
       ),
@@ -59,7 +67,7 @@ Future<void> showCopySheet(BuildContext context, String text) async {
                 title: Text(strings.resolve(MessageKey.copyM002)),
                 onTap: () {
                   Navigator.pop(sheetContext);
-                  _copy(
+                  copyWithFeedback(
                     context,
                     text,
                     const UiMessage.local(MessageKey.copyM003),
@@ -77,8 +85,10 @@ Future<void> showCopySheet(BuildContext context, String text) async {
                 for (var i = 0; i < blocks.length; i++)
                   ListTile(
                     dense: true,
-                    leading: Text('${i + 1}',
-                        style: const TextStyle(fontWeight: FontWeight.bold)),
+                    leading: Text(
+                      '${i + 1}',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
                     title: Text(
                       blocks[i].replaceAll('\n', ' '),
                       maxLines: 2,
@@ -86,7 +96,7 @@ Future<void> showCopySheet(BuildContext context, String text) async {
                     ),
                     onTap: () {
                       Navigator.pop(sheetContext);
-                      _copy(
+                      copyWithFeedback(
                         context,
                         blocks[i],
                         UiMessage.local(
@@ -109,11 +119,14 @@ Future<void> showCopySheet(BuildContext context, String text) async {
                   ListTile(
                     dense: true,
                     leading: const Icon(Icons.link, size: 18),
-                    title: Text(link,
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
+                    title: Text(
+                      link,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                     onTap: () {
                       Navigator.pop(sheetContext);
-                      _copy(
+                      copyWithFeedback(
                         context,
                         link,
                         const UiMessage.local(MessageKey.copyM007),
@@ -143,13 +156,11 @@ class CopyMenuButton extends StatelessWidget {
   final double size;
   @override
   Widget build(BuildContext context) => IconButton(
-        tooltip: AppStrings.of(context).resolve(MessageKey.copyM009),
-        visualDensity: VisualDensity.compact,
-        padding: EdgeInsets.zero,
-        constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
-        icon: Icon(Icons.copy_all_outlined, size: size),
-        onPressed: text.trim().isEmpty
-            ? null
-            : () => showCopySheet(context, text),
-      );
+    tooltip: AppStrings.of(context).resolve(MessageKey.copyM009),
+    visualDensity: VisualDensity.compact,
+    padding: EdgeInsets.zero,
+    constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+    icon: Icon(Icons.copy_all_outlined, size: size),
+    onPressed: text.trim().isEmpty ? null : () => showCopySheet(context, text),
+  );
 }

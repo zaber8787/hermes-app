@@ -1,7 +1,10 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
 
 import '../settings/local_store.dart';
 import 'run_link.dart';
+
+enum DeepLinkRouteOutcome { opened, permanentMiss, temporaryFailure }
 
 /// NOTIF2 B2: ONE deep-link ingress for the whole app. Web feeds it the
 /// live address changes (its launch URL is stashed by main() as before);
@@ -17,6 +20,8 @@ class DeepLinkIngress {
   Future<void> Function(RunLink)? _router;
   final List<RunLink> _queued = [];
   bool _routing = false;
+  final ValueNotifier<RunLink?> pendingRetryNotifier = ValueNotifier(null);
+  RunLink? get pendingRetry => pendingRetryNotifier.value;
 
   /// Subscribe EARLY (from main(), right after the store exists): a cold
   /// Android intent must not wait for the first widget to mount.
@@ -61,7 +66,21 @@ class DeepLinkIngress {
   /// The SessionsPage seam: attached while the session list lives. Attaching
   /// spends any stashed link through the same queue.
   void attach(Future<void> Function(RunLink) router) {
-    _router = router;
+    attachWithOutcome((link) async {
+      await router(link);
+      return DeepLinkRouteOutcome.opened;
+    });
+  }
+
+  void attachWithOutcome(
+    Future<DeepLinkRouteOutcome> Function(RunLink) router,
+  ) {
+    _router = (link) async {
+      final outcome = await router(link);
+      if (outcome == DeepLinkRouteOutcome.temporaryFailure) {
+        pendingRetryNotifier.value = link;
+      }
+    };
     final raw = _store?.peekDeepLink();
     if (raw != null && _store != null) {
       unawaited(_store!.clearDeepLink()); // spent ONCE — never a surprise jump
@@ -71,13 +90,26 @@ class DeepLinkIngress {
     _pump();
   }
 
-  void detach() => _router = null;
+  /// Only a user action requeues a failed route; network recovery/reattach
+  /// never opens a different page behind the user's back.
+  void retryPending() {
+    final link = pendingRetry;
+    if (link == null || _router == null) return;
+    pendingRetryNotifier.value = null;
+    _queued.insert(0, link);
+    _pump();
+  }
+
+  void detach() {
+    _router = null;
+  }
 
   void dispose() {
     unawaited(_sub?.cancel() ?? Future<void>.value());
     _sub = null;
     _router = null;
     _queued.clear();
+    pendingRetryNotifier.value = null;
     _routing = false;
   }
 
@@ -90,7 +122,7 @@ class DeepLinkIngress {
       try {
         await router(link);
       } on Object {
-        // a failed route changes NOTHING; the next link still runs
+        pendingRetryNotifier.value = link;
       } finally {
         _routing = false;
         _pump();

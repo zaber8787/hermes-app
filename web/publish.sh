@@ -32,6 +32,25 @@ mkdir -p "$root/web/$DEST"
 # 只寫新目錄：rsync 無 --delete、目標恆為剛建立的空目錄——覆寫在服務檔案
 # 在這條路徑上不可能發生。
 rsync -a build/web/ "$root/web/$DEST/"
+# Embed the identity of THIS loaded bundle before the release is visible.
+# version.json is fetched later and may already belong to the NEXT release.
+python3 - "$root/web/$DEST/index.html" "$STAMP" <<'PY'
+from pathlib import Path
+import sys
+page = Path(sys.argv[1])
+source = page.read_text()
+marker = '__HERMES_BUILD_ID__'
+if source.count(marker) != 1:
+    raise SystemExit('web build is missing the single release identity marker')
+page.write_text(source.replace(marker, sys.argv[2]))
+PY
+# SESSIONDIR B3: mirror the engine's own gstatic web-fallback table into the
+# release and redirect fontFallbackBaseUrl at it (offline Chinese, zero boot
+# cost; B2 deferral measured engine-unsupported — see patch_release_fonts).
+python3 "$root/web/patch_release_fonts.py" "$root/web/$DEST"
+# SESSIONDIR B1: gzip companions while the directory is still invisible to
+# the server (翻線前壓縮；請求路徑上只做 stat+send).
+bash "$root/web/compress-release.sh" "$root/web/$DEST"
 printf '{"version":"%s","build":"%s","published_at":"%s"}\n' \
   "$VERSION" "$STAMP" "$(date -u +%FT%TZ)" > "$root/web/$DEST/version.json"
 

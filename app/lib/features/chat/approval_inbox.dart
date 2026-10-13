@@ -53,6 +53,7 @@ class ApprovalRequest {
   ApprovalPhase phase = ApprovalPhase.pending;
   String? outcome;
   String? choice;
+  bool resolvedLocally = false;
   double? resolvedAt;
   UiMessage? error;
 
@@ -63,9 +64,7 @@ class ApprovalRequest {
   String get _mapKey => '$serverUrl|$sessionId|$runId|$requestId';
 
   bool expiredAt(double now) =>
-      phase == ApprovalPhase.pending &&
-      expiresAt != null &&
-      now >= expiresAt!;
+      phase == ApprovalPhase.pending && expiresAt != null && now >= expiresAt!;
 
   /// Estimate only: the native deadline starts when notify RETURNS, so the
   /// UI must say "about". Null once spent — expiry is a question for the
@@ -245,12 +244,12 @@ class ApprovalInbox {
     double? now,
   }) {
     final t = now ?? _wall();
-    final epoch = ApprovalRequest._epoch(snapshot['server_epoch']);
     final available = snapshot['available'] != false;
-    final rows = (snapshot['pending'] is List ? snapshot['pending'] as List : const [])
-        .map(ApprovalRequest._asMap)
-        .whereType<Map<String, dynamic>>()
-        .toList();
+    final rows =
+        (snapshot['pending'] is List ? snapshot['pending'] as List : const [])
+            .map(ApprovalRequest._asMap)
+            .whereType<Map<String, dynamic>>()
+            .toList();
     final snapSession = '${snapshot['session_id'] ?? ''}';
     final seen = <String>{};
     for (final row in rows) {
@@ -265,7 +264,9 @@ class ApprovalInbox {
           'session_id': row['session_id'] ?? snapSession,
         },
         now: t,
-        epoch: ApprovalRequest._epoch(row['server_epoch'] ?? snapshot['server_epoch']),
+        epoch: ApprovalRequest._epoch(
+          row['server_epoch'] ?? snapshot['server_epoch'],
+        ),
       );
     }
     if (!available) {
@@ -303,11 +304,13 @@ class ApprovalInbox {
     required String requestId,
     required String outcome,
     String? choice,
+    bool local = false,
     double? now,
   }) {
     final e = find(runId: runId, requestId: requestId);
     if (e == null || e.phase != ApprovalPhase.pending) return e;
     e.choice = choice ?? e.choice;
+    e.resolvedLocally = local;
     _settle(e, now ?? _wall(), outcome: outcome);
     return e;
   }
@@ -354,21 +357,23 @@ class ApprovalInbox {
       if (runId != null && e.runId != runId) return false;
       return true;
     }).toList();
-    out.sort((a, b) => a.createdAt != b.createdAt
-        ? a.createdAt.compareTo(b.createdAt)
-        : a.requestId.compareTo(b.requestId));
+    out.sort(
+      (a, b) => a.createdAt != b.createdAt
+          ? a.createdAt.compareTo(b.createdAt)
+          : a.requestId.compareTo(b.requestId),
+    );
     return out;
   }
 
-  bool hasPendingForRun(String runId) =>
-      _entries.values.any((e) =>
-          e.phase == ApprovalPhase.pending && e.runId == runId);
+  bool hasPendingForRun(String runId) => _entries.values.any(
+    (e) => e.phase == ApprovalPhase.pending && e.runId == runId,
+  );
 
   /// Whether an entry still owns a slot right now: pending, or a brief
   /// "handled elsewhere" receipt before it retires.
   static bool isVisible(ApprovalRequest e, double now) =>
       e.phase == ApprovalPhase.pending ||
-      (e.outcome == 'answered_elsewhere' &&
+      ((e.outcome == 'answered_elsewhere' || e.resolvedLocally) &&
           e.resolvedAt != null &&
           now - e.resolvedAt! < resolvedTtlSeconds);
 
@@ -388,9 +393,11 @@ class ApprovalInbox {
     for (final e in stale) {
       _entries.remove(e._mapKey);
     }
-    out.sort((a, b) => a.createdAt != b.createdAt
-        ? a.createdAt.compareTo(b.createdAt)
-        : a.requestId.compareTo(b.requestId));
+    out.sort(
+      (a, b) => a.createdAt != b.createdAt
+          ? a.createdAt.compareTo(b.createdAt)
+          : a.requestId.compareTo(b.requestId),
+    );
     return out;
   }
 

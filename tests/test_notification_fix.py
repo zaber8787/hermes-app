@@ -57,8 +57,20 @@ def _env(home, scope):
                   _error_response=lambda message, status, **kw: {"http": status, **kw}),
               notification_store=store, notification_events=events, reg=reg,
               asyncio=SimpleNamespace(to_thread=synchronous_to_thread))
+    stub_self = SimpleNamespace(_check_auth=lambda request: None)
+
+    def _bind(fn):
+        # S1 (commit 8bb7e2f) made the real handlers call self._check_auth.
+        # These AST-extracted routes are invoked with self=None, so swap in a
+        # stub adapter that authenticates everything (auth itself is covered
+        # by tests/test_notification_auth.py against the real adapter).
+        async def call(self, request):
+            return await fn(stub_self if self is None else self, request)
+        return call
+
     for name, code in _routes("delivery_post", "claim_post").items():
         exec(code, ns)
+        ns[name] = _bind(ns[name])
     return ns
 
 

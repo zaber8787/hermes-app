@@ -13,10 +13,9 @@ import 'picker_session.dart';
 /// exactly what must NOT happen here).
 class PickerSessionCore {
   PickerSessionCore({
-    required void Function(PickerOutcome outcome) emit,
-    required void Function() releaseDriver,
-  }) : _emit = emit,
-       _releaseDriver = releaseDriver;
+    required this._emit,
+    required this._releaseDriver,
+  });
 
   final void Function(PickerOutcome) _emit;
   final void Function() _releaseDriver;

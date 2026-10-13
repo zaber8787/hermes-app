@@ -8,14 +8,42 @@
 set -euo pipefail
 S="${1:?tmux session}"
 DONE="${2:?done marker path}"
-root="$HOME/hermes-app"
-pgrep -f "bash .*approve-worker.sh $S( |\$)" >/dev/null \
-  || systemd-run --user --quiet --unit="hermes-approve-$S" \
-       bash "$root/scripts/approve-worker.sh" "$S" >/dev/null 2>&1 < /dev/null \
-  || setsid bash "$root/scripts/approve-worker.sh" "$S" >/dev/null 2>&1 < /dev/null &
-pgrep -f "bash .*watch-nudge.sh $S " >/dev/null \
-  || systemd-run --user --quiet --unit="hermes-nudge-$S" \
-       bash "$root/scripts/watch-nudge.sh" "$S" "$DONE" >/dev/null 2>&1 < /dev/null \
-  || setsid bash "$root/scripts/watch-nudge.sh" "$S" "$DONE" >/dev/null 2>&1 < /dev/null &
-sleep 1
-pgrep -af "approve-worker.sh $S|watch-nudge.sh $S" | sed 's/^[0-9]* //' | sort -u
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+for script in approve-worker.sh watch-nudge.sh; do
+  if [[ ! -f "$root/scripts/$script" ]]; then
+    echo "missing required watcher: $root/scripts/$script" >&2
+    exit 1
+  fi
+done
+
+ensure_one() {
+  local script="$1" unit="$2" pattern="$3"
+  shift 3
+  if pgrep -f "$pattern" >/dev/null; then
+    return 0
+  fi
+  if command -v systemd-run >/dev/null &&
+      systemd-run --user --quiet --unit="$unit" \
+        bash "$root/scripts/$script" "$@" >/dev/null 2>&1 < /dev/null; then
+    :
+  elif command -v setsid >/dev/null; then
+    setsid bash "$root/scripts/$script" "$@" >/dev/null 2>&1 < /dev/null &
+  else
+    echo "cannot launch $script" >&2
+    return 1
+  fi
+  for _ in 1 2 3 4 5; do
+    sleep 0.2
+    if pgrep -f "$pattern" >/dev/null; then
+      return 0
+    fi
+  done
+  echo "$script did not start for $S" >&2
+  return 1
+}
+
+ensure_one approve-worker.sh "hermes-approve-$S" \
+  "bash .*approve-worker.sh $S( |\$)" "$S"
+ensure_one watch-nudge.sh "hermes-nudge-$S" \
+  "bash .*watch-nudge.sh $S " "$S" "$DONE"
+echo "both watchers ready for $S"

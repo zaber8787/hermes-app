@@ -60,6 +60,14 @@ def _click_base() -> str:
 
 _capability_on = False
 _registry = None
+MAX_WATCHERS = 256
+
+
+def _trim_watchers(reg):
+    """Bound opt-ins even if an old registry survives a module reload."""
+    watchers = reg["watchers"]
+    while len(watchers) > MAX_WATCHERS:
+        watchers.pop(next(iter(watchers)))
 
 
 def run_link(*, sid=None, run_id=None, event_id=None, request_id=None) -> str:
@@ -99,6 +107,7 @@ def open_ledger(state, home_resolver=None, settings=None):
         state["notification_events"] = reg
     reg["settings"] = settings or reg["settings"]
     reg["closed"] = False
+    _trim_watchers(reg)
     _registry = reg
     return reg
 
@@ -285,9 +294,12 @@ def _redact_summary(text) -> str:
 def terminal_event(reg, *, owner_scope, run_id, sid, status, summary=""):
     kind = {"completed": "completed", "failed": "failed",
             "cancelled": "cancelled", "interrupted": "interrupted"}[status]
-    return deliver(reg, owner_scope=owner_scope, run_id=run_id, sid=sid,
-                   kind=kind, source_id="terminal",
-                   payload={"summary": _redact_summary(summary)})
+    try:
+        return deliver(reg, owner_scope=owner_scope, run_id=run_id, sid=sid,
+                       kind=kind, source_id="terminal",
+                       payload={"summary": _redact_summary(summary)})
+    finally:
+        unwatch_run(reg, (owner_scope, run_id))
 
 
 def _ntfy_publish(reg, kind, click=None):
@@ -311,13 +323,19 @@ def steer_ready(reg, *, owner_scope, run_id, sid):
         return  # only runs the user explicitly opted into
     deliver(reg, owner_scope=owner_scope, run_id=run_id, sid=sid,
             kind="steer_ready", source_id="ready", payload={}, channel="none")
+    unwatch_run(reg, (owner_scope, run_id))
 
 
 def watch(reg, *, owner_scope, run_id, on: bool):
+    key = (owner_scope, run_id)
     if on:
-        reg["watchers"][(owner_scope, run_id)] = True
+        # Dict insertion order gives a small LRU: a renewed opt-in stays,
+        # while orphaned old runs eventually yield their slots.
+        reg["watchers"].pop(key, None)
+        reg["watchers"][key] = True
+        _trim_watchers(reg)
     else:
-        reg["watchers"].pop((owner_scope, run_id), None)
+        reg["watchers"].pop(key, None)
     return on
 
 

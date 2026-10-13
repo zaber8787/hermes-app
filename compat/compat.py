@@ -354,6 +354,8 @@ def install(ctx):
                                         pass
                                 if _module is not None:
                                     _selfwake_rearm(loop, _module, _gen, "factory-replay")
+                                from hermes_constants import get_hermes_home
+                                cron_connect_arm(loop, get_hermes_home())
                             except Exception as exc:
                                 # silence here once hid "reload never re-arms"
                                 # for a full day (audit ticks dead 12h+)
@@ -531,6 +533,38 @@ def selfwake_connect_arm(loop, home):
     _selfwake_rearm(loop, swst["module"], swst.get("generation"), "connect")
 
 
+def cron_connect_arm(loop, home):
+    """Re-arm cron recovery after connect or same-name plugin reload."""
+    state = getattr(api, _STATE, None) or {}
+    bridge = state.get("cron_bridge") or {}
+    if state.get("manifest", {}).get("cron_bridge", {}).get("status") != "applied":
+        return
+    store = bridge.get("store")
+    if store is None:
+        return
+
+    def arm():
+        if (getattr(api, _STATE, None) or {}).get("cron_bridge") is not bridge:
+            return
+        base = Path(home)
+        homes = [base]
+        profiles = base / "profiles"
+        if profiles.is_dir():
+            homes.extend(p for p in profiles.iterdir()
+                         if p.is_dir() and (p / "cron_bridge.db").is_file())
+        for item in homes:
+            store.arm_loop(loop, item)
+
+    try:
+        running = asyncio.get_running_loop()
+    except RuntimeError:
+        running = None
+    if running is loop:
+        arm()
+    else:
+        loop.call_soon_threadsafe(arm)
+
+
 def selfwake_liveness(state_name, reason):
     """Public stamp surface for lifecycle transitions (armed / skipped /
     dead / stopped, plus reason) so every state change lands on the ONE
@@ -600,6 +634,11 @@ def _sync_live_adapters():
     if found:
         log.info("route sync replayed on %d live api_server adapter(s)", found)
         _selfwake_scan_rearm((getattr(api, _STATE, None) or {}).get("selfwake") or {}, live)
+        from hermes_constants import get_hermes_home
+        for ref in live:
+            loop = getattr(getattr(ref, "gateway_runner", None), "_gateway_loop", None)
+            if loop is not None:
+                cron_connect_arm(loop, get_hermes_home())
 
 
 def _install_limits(tx):
@@ -621,12 +660,65 @@ def _install_limits(tx):
 
 
 def _install_upload(tx):
+    from gateway import browser_control_artifacts as artifacts
+    from . import artifact_quota
     _fingerprint(api.APIServerAdapter, "_handle_artifact_upload")
     if _BACKEND == "target":
         _signature(api.APIServerAdapter, "_artifact_store_for_async", "self", "profile")
         tx.set(api.APIServerAdapter, "_handle_artifact_upload", _upload_target)
     else:
         tx.set(api.APIServerAdapter, "_handle_artifact_upload", _upload)
+
+    old_store = artifacts.ArtifactStore.store
+    old_load = artifacts.ArtifactStore.load
+    old_prune = artifacts.ArtifactStore.prune_expired
+
+    @wraps(old_store)
+    def store_with_quota(self, data, *, filename, content_type, scope):
+        quota_home = artifact_quota.home()
+        principal = str(getattr(scope, "principal_id", "") or "")
+        try:
+            token = artifact_quota.reserve(quota_home, principal, len(data),
+                                           self._ttl_seconds)
+        except artifact_quota.QuotaExceeded as exc:
+            raise artifacts.ArtifactTooLarge(str(exc)) from exc
+        except Exception as exc:
+            raise artifacts.ArtifactError("artifact quota reservation failed") from exc
+        try:
+            receipt = old_store(self, data, filename=filename,
+                                content_type=content_type, scope=scope)
+        except Exception:
+            with suppress(Exception):
+                artifact_quota.cancel(quota_home, token)
+            raise
+        try:
+            artifact_quota.finalize(quota_home, token, self.root,
+                                    receipt.artifact_id, receipt.expires_at)
+        except Exception as exc:
+            with self._lock:
+                self._discard_locked(receipt.artifact_id,
+                                     self._artifact_path(receipt.artifact_id))
+            with suppress(Exception):
+                artifact_quota.cancel(quota_home, token)
+            raise artifacts.ArtifactError("artifact quota finalization failed") from exc
+        return receipt
+
+    @wraps(old_load)
+    def load_with_quota(self, artifact_id, *, scope):
+        result = old_load(self, artifact_id, scope=scope)
+        artifact_quota.release(artifact_quota.home(), self.root, artifact_id)
+        return result
+
+    @wraps(old_prune)
+    def prune_with_quota(self, now=None):
+        removed = old_prune(self, now=now)
+        artifact_quota.expire(artifact_quota.home(),
+                              self._clock() if now is None else float(now))
+        return removed
+
+    tx.set(artifacts.ArtifactStore, "store", store_with_quota)
+    tx.set(artifacts.ArtifactStore, "load", load_with_quota)
+    tx.set(artifacts.ArtifactStore, "prune_expired", prune_with_quota)
 
 
 async def _upload(self, request):
@@ -739,7 +831,22 @@ def _install_media(tx):
         safe = base.validate_media_delivery_path((request.query.get("path") or "").strip(), session_key="")
         if not safe:
             return api._error_response("Path is not an allowed media file", 400)
-        path = Path(safe)
+        try:
+            path = Path(safe).resolve(strict=True)
+            # The receipt route is the only reader of browser-control artifacts.
+            # Covers stores not yet opened and custom/injected profile stores;
+            # resolving first also catches a media symlink into either root.
+            parts = path.parts
+            artifact_root = any(parts[i:i + 2] == ("artifacts", "browser-control")
+                                for i in range(len(parts) - 1))
+            for store in (getattr(self, "_browser_control_artifacts", {}) or {}).values():
+                if path.is_relative_to(Path(store.root).resolve()):
+                    artifact_root = True
+                    break
+        except (OSError, RuntimeError, ValueError):
+            return api._error_response("Path is not an allowed media file", 400)
+        if artifact_root:
+            return api._error_response("Path is not an allowed media file", 400)
         try:
             size = path.stat().st_size
         except OSError:
@@ -2658,8 +2765,16 @@ class _Bridge:
             on_loop = False
         if on_loop:
             self.forget()
-        elif not self.loop.is_closed():
-            self.loop.call_soon_threadsafe(self.forget)
+        elif self.loop.is_closed():
+            # No owner-loop callback can run now; retire the strong entries
+            # synchronously instead of leaving this bridge registered.
+            self.forget()
+        else:
+            try:
+                self.loop.call_soon_threadsafe(self.forget)
+            except RuntimeError:
+                # The owner loop may close between is_closed and scheduling.
+                self.forget()
 
 
 def _install_approval(tx):
@@ -4076,7 +4191,7 @@ def _install_notification_events(tx):
     if state["manifest"].get("push", {}).get("status") != "applied":
         raise RuntimeError("push unit not applied (it is the transport being routed)")
     _require(cls, "_set_run_status", "_http_route_table", "_handle_capabilities",
-             "_run_idempotency_scope")
+             "_check_auth", "_run_idempotency_scope")
     _require(runs, "_load_owned_run")
     _signature(cls, "_set_run_status", "self", "run_id", "status")
 
@@ -4157,6 +4272,9 @@ def _install_notification_events(tx):
             return None
 
     async def events_get(self, request):
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
         if not enabled():
             return api._error_response("Notification events are disabled.", 404,
                                        code="notification_events_disabled")
@@ -4182,6 +4300,9 @@ def _install_notification_events(tx):
         }, headers={"Cache-Control": "no-store"})
 
     async def read_post(self, request):
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
         if not enabled():
             return api._error_response("Notification events are disabled.", 404,
                                        code="notification_events_disabled")
@@ -4197,6 +4318,9 @@ def _install_notification_events(tx):
         return api.web.json_response(result)
 
     async def claim_post(self, request):
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
         if not enabled():
             return api._error_response("Notification events are disabled.", 404,
                                        code="notification_events_disabled")
@@ -4230,6 +4354,9 @@ def _install_notification_events(tx):
                                       else None})
 
     async def delivery_post(self, request):
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
         if not enabled():
             return api._error_response("Notification events are disabled.", 404,
                                        code="notification_events_disabled")
@@ -4255,6 +4382,9 @@ def _install_notification_events(tx):
         return api.web.json_response({"delivery": outcome or state_now})
 
     async def watch_post(self, request):
+        auth_err = self._check_auth(request)
+        if auth_err:
+            return auth_err
         if not enabled():
             return api._error_response("Notification events are disabled.", 404,
                                        code="notification_events_disabled")

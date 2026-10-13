@@ -1,34 +1,23 @@
 #!/usr/bin/env bash
-# Per-file flutter test sweep OUTSIDE the interactive session's cgroup: some
-# sandboxes cap memory low enough that the Dart VM is killed mid-suite.
-# Repo-relative paths — works from any checkout location.
-# Usage: run-tests-detached.sh [test/file_test.dart ...]  -> prints unit name;
-# default = full per-file sweep; with args only those files run. Results land
-# in <repo>/.sweep/RESULT (SWEEP-DONE fails=N) and per-file logs.
-# Portable fallback: without systemd-run the sweep runs inline (same per-file
-# loop), so any checkout can verify itself.
+# Launch a per-file Flutter sweep in an isolated result directory. A successful
+# launch is not a passing suite: wait for out=.../RESULT to say SWEEP-DONE.
+set -euo pipefail
+
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-out="$root/.sweep"
-rm -rf "$out"; mkdir -p "$out"
-files="$*"
-sweep='
-    source "'"$root"'/scripts/env.sh"
-    out="'"$out"'"
-    files="'"$files"'"
-    fails=0; cd "'"$root"'/app"
-    for f in ${files:-test/*.dart}; do
-      if ! timeout 300 flutter test "$f" >"$out/$(basename "$f").log" 2>&1; then
-        echo "FAIL $f" >>"$out/RESULT"; fails=$((fails+1))
-      fi
-    done
-    echo "SWEEP-DONE fails=$fails files=$(for f in ${files:-test/*.dart}; do echo x; done | wc -l)" >>"$out/RESULT"
-'
+mkdir -p "$root/.sweep"
+out="$(mktemp -d "$root/.sweep/run-XXXXXXXX")"
+unit="hermes-tests-${out##*/}"
+
 if command -v systemd-run >/dev/null; then
-  unit="hermes-tests-$(date +%s)"
-  systemd-run --user --collect --property=MemoryMax=10G \
-    --property=MemorySwapMax=infinity --unit="$unit" bash -c "$sweep" 2>&1 | head -1
+  if ! launch_output="$(systemd-run --user --collect \
+    --property=MemoryMax=10G --property=MemorySwapMax=infinity \
+    --unit="$unit" bash "$root/scripts/run-tests-worker.sh" "$out" "$@" 2>&1)"; then
+    printf '%s\n' "$launch_output" >&2
+    exit 1
+  fi
+  printf '%s\n' "$launch_output"
 else
   echo "no systemd-run: running the sweep inline"
-  bash -c "$sweep"
+  bash "$root/scripts/run-tests-worker.sh" "$out" "$@"
 fi
 echo "out=$out/RESULT"

@@ -16,9 +16,9 @@ import tarfile
 import tempfile
 import time
 
-CASES = ("upload", "limits", "media", "history", "approval", "skills", "activity", "push",
+CASES = ("upload", "limits", "artifact_quota", "media", "history", "approval", "skills", "activity", "push",
          "approval_inbox", "approval_push", "approval_central", "cron_bridge", "wake",
-         "wakecap", "selfwake", "selfwake_reload", "selfwake_batch", "wakelatch", "steer_inbox",
+         "wakecap", "wake_report_race", "selfwake", "selfwake_reload", "selfwake_batch", "selfwake_checkpoint", "wakelatch", "steer_inbox",
          "notification_events", "messages_timing")
 REPO = Path(__file__).resolve().parents[1]
 
@@ -182,6 +182,7 @@ def offline(args):
                 "upload": "APIServerAdapter._handle_artifact_upload",
                 "limits": "api_server/ArtifactStore constants and keyword defaults",
                 "media": "APIServerAdapter._http_route_table / _CAPABILITY_ENDPOINTS",
+                "artifact_quota": "ArtifactStore public store/load/prune with principal/global live-byte limits",
                 "history": "APIServerAdapter._message_response (staticmethod)",
                 "approval": "approval_context + approval aliases / session SSE worker / run controls",
                 "skills": "tools.skills_tool._find_all_skills",
@@ -193,9 +194,11 @@ def offline(args):
                 "cron_bridge": "app platform registration + cron scheduler identity/mirror/outcome shims / atomic bridge writer",
                 "wake": "messages provenance / auto-wake admission ledger, quota, receipts, dispatch CAS",
                 "wakecap": "hot-reload route sync: live/frozen routers resolve compat route rows to the current handlers",
+                "wake_report_race": "two-process terminal/accepted report ordering against the same durable batch",
                 "selfwake": "server self-wake: durable intents in the receipt transaction, generation/cutoff, reconciliation, shadow/off gates, chain fuse, audit",
                 "selfwake_reload": "selfwake liveness survives same-name force reloads: install-path re-arm, notification contract, stop semantics",
                 "selfwake_batch": "zombie wake_batches: done intents never due, reconcile never reopens, pending sibling still progresses, ledger untouched",
+                "selfwake_checkpoint": "chain limit reopens only for a proven newer human user message; bridge and canonical rows stay excluded",
                 "wakelatch": "same-session causal latch: historical proofs, mirror provenance, real due/POST/terminal and conserved claims",
                 "steer_inbox": "durable run-scoped steer inbox: auth/epoch gates, idempotent admission, receipts, seal, capability fail-closed",
                 "notification_events": "notification ledger: stable event ids, single publish, read-gated reminders, browser claim, terminals never replayed",

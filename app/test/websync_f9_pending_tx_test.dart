@@ -1,16 +1,16 @@
-/// WEBSYNC F9: the pending-slot transactions must decide from the
-/// AUTHORITATIVE storage value re-read INSIDE the critical section —
-/// serialization alone is not enough when each tab's shared_preferences
-/// instance answers from its own pre-loaded cache.
-///
-/// Two-tab simulation (contract level): on the VM there is one isolate, so
-/// cross-tab staleness is reproduced by handing the second "tab" its own
-/// SharedPreferences instance whose cache was built BEFORE the first tab's
-/// write (setMockInitialValues re-seeds the backend verbatim and resets the
-/// static, so the new instance's cache starts at the snapshot while the
-/// shared backend keeps evolving). The web build runs the same bodies under
-/// real Web Locks; true dual-browser-context timing is exercised in the
-/// .websync-evidence run and its gap is noted there.
+// WEBSYNC F9: the pending-slot transactions must decide from the
+// AUTHORITATIVE storage value re-read INSIDE the critical section —
+// serialization alone is not enough when each tab's shared_preferences
+// instance answers from its own pre-loaded cache.
+//
+// Two-tab simulation (contract level): on the VM there is one isolate, so
+// cross-tab staleness is reproduced by handing the second "tab" its own
+// SharedPreferences instance whose cache was built BEFORE the first tab's
+// write (setMockInitialValues re-seeds the backend verbatim and resets the
+// static, so the new instance's cache starts at the snapshot while the
+// shared backend keeps evolving). The web build runs the same bodies under
+// real Web Locks; true dual-browser-context timing is exercised in the
+// .websync-evidence run and its gap is noted there.
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:hermes_app/features/settings/local_store.dart';
@@ -120,7 +120,7 @@ void main() {
       // storage now has an owner — mismatch, not a blind stamp.
       final r = await b.beginPendingRecovery('http://s', 'x', token: null);
       expect(r.outcome, PendingRecoveryOutcome.mismatch);
-      expect((await a.loadPending('http://s', 'x')!).hasRecoveryMetadata,
+      expect(a.loadPending('http://s', 'x')!.hasRecoveryMetadata,
           isFalse);
       final r2 = await a.beginPendingRecovery('http://s', 'x', token: tokA);
       expect(r2.outcome, PendingRecoveryOutcome.begun);

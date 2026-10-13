@@ -1,11 +1,8 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-import 'package:hermes_app/api/hermes_repository.dart';
 import 'package:hermes_app/api/sse.dart';
 import 'package:hermes_app/features/chat/approval_inbox.dart';
 import 'package:hermes_app/features/chat/approval_inbox_view.dart';
@@ -267,7 +264,6 @@ class HexRepo extends fixture.FakeInboxRepo {
   HexRepo() : super(capability: Map<String, dynamic>.from(fixture.capabilityOn));
 
   String epoch = hexEpoch;
-  List<Map<String, dynamic>>? pendingRows;
 
   @override
   Future<Json> runApprovals(String runId) async {

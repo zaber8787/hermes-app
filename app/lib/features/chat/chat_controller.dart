@@ -2199,8 +2199,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           // duplicate: with the inbox on, one request renders ONE card.
           if (merged != null && runId == turn.runId) {
             turn.approval = null;
-            for (final dup
-                in approvalInbox.pendingFor().where((e) => e != merged && e.requestId == merged.requestId)) {
+            for (final dup in approvalInbox.pendingFor().where(
+              (e) => e != merged && e.requestId == merged.requestId,
+            )) {
               approvalInbox.settle(
                 runId: dup.runId,
                 requestId: dup.requestId,
@@ -2317,7 +2318,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     } finally {
       _approvalsInflight.remove(runId);
       final dirty = _approvalsDirty.remove(runId);
-      replay = dirty && landed && !_disposed && gen == _currentConnectionGeneration();
+      replay =
+          dirty &&
+          landed &&
+          !_disposed &&
+          gen == _currentConnectionGeneration();
       if (!_disposed) notifyListeners();
     }
     if (replay) await _refreshApprovals(runId);
@@ -2400,6 +2405,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         requestId: req.requestId,
         outcome: 'answered',
         choice: choice,
+        local: true,
       );
       final turn = live;
       if (turn != null && turn.runId == req.runId && turn.approval == null) {
@@ -2455,6 +2461,17 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// Serializes every journal merge so merges land in evidence order inside
   /// the same session lock; decision points `await` it before settling.
   Future<void> _evidenceQueue = Future.value();
+
+  void _queueEvidence(Future<void> Function() write) {
+    _evidenceQueue = _evidenceQueue.then((_) => write()).catchError((Object _) {
+      // A journal failure is visible, but must not reject the serialized
+      // queue: later transport facts may still be persisted.
+      storageNotice = const UiMessage.local(
+        MessageKey.chatRecoveryStorageFailed,
+      );
+      if (!_disposed) notifyListeners();
+    });
+  }
 
   /// Business ack already recorded for this turn — merge once, not per frame.
   bool _journalAckRecorded = false;
@@ -2658,8 +2675,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     if (parent == null) return false;
     final stamp = parent.terminalEvidence?['retriedBy'];
     if (stamp == childAttemptId) return true;
-    if (stamp != null && stamp != replacing)
+    if (stamp != null && stamp != replacing) {
       return false; // another view's child
+    }
     final next = Map<String, dynamic>.from(parent.terminalEvidence ?? const {})
       ..['retriedBy'] = childAttemptId;
     return store.saveAttempt(
@@ -2761,8 +2779,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final turn = live;
     final token = _turnToken;
     final id = turn?.approvalRunId; // R4: bridge events carry their own run_id
-    if (turn == null || id == null || turn.approval == null || approvalBusy)
+    if (turn == null || id == null || turn.approval == null || approvalBusy) {
       return;
+    }
     approvalBusy = true;
     notifyListeners();
     try {
@@ -2799,6 +2818,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// Cached whole seconds of the waiting notice; null hides it. Only the
   /// watchdog tick changes the value, so repaints stay cheap.
   int? _waitingSeconds;
+  bool _quietStream = false;
 
   /// Turn-local recovery cause: the first start of a turn sets it; an
   /// explicitly observed stream failure upgrades a neutral one, and a
@@ -2825,6 +2845,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           MessageKey.chatStreamWaiting,
           args: {'seconds': _waitingSeconds},
         )
+      : null;
+
+  /// A missing transport heartbeat is distinct from a live stream with no
+  /// business output. Warn at 30s; the read-only watchdog still runs at 75s.
+  UiMessage? get streamQuietNotice =>
+      phase == ChatPhase.sending && !backgrounded && !_detached && _quietStream
+      ? const UiMessage.local(MessageKey.chatStreamQuiet)
       : null;
 
   @override
@@ -2870,6 +2897,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _silenceWatch?.cancel();
     _waitingSeconds =
         null; // SILENCE-DROP §3.1.6: a dead controller shows nothing
+    _quietStream = false;
     super.dispose();
   }
 
@@ -3004,8 +3032,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         }),
       );
     }
-    if (_disposed || busy || loading || _bootstrapping)
+    if (_disposed || busy || loading || _bootstrapping) {
       return; // duplicate: no-op
+    }
     // OPENPERF P2 (定案3): rows the reader already has stay on screen —
     // a warm re-entry neither spins nor re-reads the page; the activity
     // snapshot decides whether anything moved.
@@ -3610,8 +3639,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final token = _turnToken;
     try {
       final page = await repo.messages(sid, offset: _offset);
-      if (_disposed || !identical(_turnToken, token))
+      if (_disposed || !identical(_turnToken, token)) {
         return; // new turn owns state
+      }
       messages = mergeMessages(messages, page);
       _offset += page.length; // Raw page size, NOT de-duplicated rendered rows.
       hasOlder = page.length == 200;
@@ -3735,6 +3765,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // recovery cause from the previous one.
     _lastOutputAt = _clock();
     _waitingSeconds = null;
+    _quietStream = false;
     _turnRecoveryCause = null;
     _pendingStart = true; // claim in flight: detach defers to the mint point
     _detachArmed = false;
@@ -3947,6 +3978,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         unawaited(recover(cause: RecoveryCause.silence));
         return;
       }
+      if (!_quietStream &&
+          now.difference(_lastEventAt) >= noOutputNoticeLimit) {
+        _quietStream = true;
+        notifyListeners();
+      }
       final out = _lastOutputAt;
       if (out != null && now.difference(out) > noOutputNoticeLimit) {
         final secs = now.difference(out).inSeconds;
@@ -3987,6 +4023,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         if (_disposed) return;
         if (!identical(live, turn) || !identical(_turnToken, token)) continue;
         _lastEventAt = _clock();
+        if (_quietStream) {
+          _quietStream = false;
+          // Heartbeats normally do not repaint, but must remove a visible
+          // transport-silence warning when the stream resumes.
+          if (event.type == 'heartbeat') notifyListeners();
+        }
         if (event.type == 'heartbeat') {
           continue; // Silence-proof liveness, no repaint. Heartbeats refresh
           // transport freshness ONLY — the no-output clock keeps aging (§3.1.1).
@@ -4267,7 +4309,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       },
     );
     _attemptMirror = attempt; // the card is honest even if the write fails
-    _evidenceQueue = _evidenceQueue.then((_) async {
+    _queueEvidence(() async {
       if (!await store.saveAttempt(serverUrl, sid, attempt)) {
         storageNotice = const UiMessage.local(
           MessageKey.chatRecoveryStorageFailed,
@@ -4344,7 +4386,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     Map<String, Object?> evidence = const {},
   }) {
     if (_disposed || !identical(_turnToken, token)) return;
-    _evidenceQueue = _evidenceQueue.then((_) async {
+    _queueEvidence(() async {
       if (_disposed || !identical(_turnToken, token)) return;
       final journal = store.loadAttempt(serverUrl, sid, attemptId);
       if (journal == null) return; // entry is gone: never resurrect one here
@@ -4577,11 +4619,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     if (_disposed) return false;
     if (identical(_settledTurn, token)) {
       final gate = _settleGate;
-      if (gate != null)
+      if (gate != null) {
         return gate; // same turn settling (again): join, never double-clear
+      }
     }
-    if (!identical(_turnToken, token))
+    if (!identical(_turnToken, token)) {
       return false; // not my turn anymore: no-op
+    }
     _settledTurn = token;
     final gate = _settleCore(
       token,
@@ -4697,6 +4741,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // recovery cause with the rest of the turn's state.
     _turnRecoveryCause = null;
     _waitingSeconds = null;
+    _quietStream = false;
     _lastOutputAt = null;
     _deadlineTimer?.cancel();
     _deadlineTimer = null;
@@ -5537,8 +5582,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _budgetDeadline = deadline;
     _bootRetryUsed = retryUsed;
     _budgetRetryUsed = retryUsed;
-    if (deadline != null && phase == ChatPhase.recovering)
+    if (deadline != null && phase == ChatPhase.recovering) {
       _armCountdownTicker();
+    }
   }
 
   /// CROSSDEV-STOP R1 test seam: issue a RAW activity snapshot (the same
@@ -5902,7 +5948,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
 
   Map<String, dynamic>? _steerCap;
   Map<String, dynamic>? _notifyCap;
-  bool _notifyCapAsked = false;
+  bool _notifyCapUnsupported = false;
+  bool _notifyCapProbing = false;
+  int _notifyCapFailures = 0;
+  DateTime? _notifyCapNextProbe;
   final NotificationLedger _notifications = NotificationLedger();
   NotificationLedger get notifications => _notifications;
 
@@ -5936,14 +5985,34 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   bool _notifyPolling = false;
 
   Future<void> _probeNotifyCap() async {
-    if (_notifyCap != null && _notifyCap!['enabled'] == true) return;
-    if (_notifyCapAsked) return; // one probe until the ledger appears
-    _notifyCapAsked = true;
-    final f = await repo.notificationEventsFeature(); // never throws
-    if (_disposed) return;
-    if (f != null && f['enabled'] == true) {
-      _notifyCap = f;
-      notifyListeners();
+    if (notificationEventsEnabled ||
+        _notifyCapUnsupported ||
+        _notifyCapProbing ||
+        _disposed) {
+      return;
+    }
+    if (_notifyCapNextProbe case final next?) {
+      if (_clock().isBefore(next)) return;
+    }
+    _notifyCapProbing = true;
+    try {
+      final f = await repo.notificationEventsFeature();
+      if (_disposed) return;
+      if (f == null || f['enabled'] != true) {
+        _notifyCapUnsupported = true;
+      } else {
+        _notifyCap = f;
+        notifyListeners();
+      }
+    } on Object {
+      _notifyCapFailures++;
+      final seconds = math.min(
+        60,
+        5 * (1 << math.min(4, _notifyCapFailures - 1)),
+      );
+      _notifyCapNextProbe = _clock().add(Duration(seconds: seconds));
+    } finally {
+      _notifyCapProbing = false;
     }
   }
 
@@ -6071,11 +6140,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// Explicit opt-in for steer.ready on ONE run (R7: per-run, never per msg).
-  Future<void> watchSteerReady(String runId, {bool on = true}) async {
+  Future<bool> watchSteerReady(String runId, {bool on = true}) async {
     try {
       await repo.notificationWatch(runId, on: on);
+      return true;
     } on Object {
-      // opt-in is best-effort; the ledger records only explicit watches
+      return false;
     }
   }
 

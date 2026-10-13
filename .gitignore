@@ -121,3 +121,28 @@ scripts/watch-nudge.sh
 .approvbutton-evidence/
 .imgperfimpl-evidence/
 .wakelatchfix-evidence/
+
+# TASK-SESSIONDIR scratch (never commit)
+.sd-scratch/
+.sessiondirimpl-evidence/
+web/cjk-mirror/
+
+# investigation scratch + public-sync working dirs (never commit)
+.ab-scratch/
+.imgperf-scratch/
+.perf-scratch/
+.wl-scratch/
+.public-export/
+.public-repo/
+.wakefix3-evidence/
+.sweepfixa-evidence/
+.sweepfixb-evidence/
+.sweepfixc-evidence/
+.done-lintclean
+
+# QUAL sweep scratch (never commit)
+.sweepqual-scratch/
+.sweepsec-scratch/
+.sweepux-scratch/
+.sweeprel-scratch/
+.lintclean-evidence/

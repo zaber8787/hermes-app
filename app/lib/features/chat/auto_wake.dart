@@ -29,8 +29,8 @@ class AutoWakeObserver {
     required this.store,
     required this.serverUrl,
     required this.sid,
-    required DateTime Function() now,
-  }) : _now = now;
+    required this._now,
+  });
 
   final LocalStore store;
   final String serverUrl;
@@ -462,4 +462,3 @@ class AutoWakeContract {
   // matched byte-exactly by the admission ledger) — I18N-PLAN §5 class.
   static const canonicalInput = '請讀取新到的排程報告並簡短回覆。';
 }
-

@@ -9,6 +9,7 @@ them absent this module refuses every write (fail-closed).
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -37,6 +38,10 @@ CONTENT_PREFIX = "[Cron report: {name}]\n"
 _bindings = None
 _bridge_lock = threading.RLock()
 _bridges: dict[str, sqlite3.Connection] = {}
+_workers: dict[str, asyncio.Task] = {}
+_worker_health = {"state": "stopped", "passes": 0, "last_pass_at": None,
+                  "last_error": None, "pending": 0, "due": 0}
+RETENTION_INTERVAL = 3600.0
 
 
 class BridgeUnavailable(RuntimeError):
@@ -58,6 +63,10 @@ def configure(*, insert_sql, errors):
 def reset():
     global _bindings
     _bindings = None
+    for task in tuple(_workers.values()):
+        task.cancel()
+    _workers.clear()
+    _worker_health["state"] = "stopped"
     with _bridge_lock:
         for conn in _bridges.values():
             with suppress(Exception):
@@ -67,6 +76,69 @@ def reset():
 
 def bindings_ready() -> bool:
     return _bindings is not None
+
+
+def pending_health(home: Path) -> dict:
+    """Read-only progress boundary; never opens a new bridge database."""
+    path = bridge_file(home)
+    if not path.is_file():
+        return {"pending": 0, "due": 0, "oldest_due_age_s": 0}
+    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+    try:
+        total, due, oldest = conn.execute(
+            "SELECT COUNT(*), SUM(next_retry_at <= ?), MIN(next_retry_at) FROM pending",
+            (time.time(),)).fetchone()
+        return {"pending": total or 0, "due": due or 0,
+                "oldest_due_age_s": max(0, int(time.time() - oldest)) if due and oldest else 0}
+    finally:
+        conn.close()
+
+
+def liveness() -> dict:
+    return dict(_worker_health)
+
+
+async def _recovery_loop(home: Path):
+    last_retention = 0.0
+    try:
+        while True:
+            try:
+                summary = await asyncio.to_thread(drain_home, home)
+                if time.monotonic() - last_retention >= RETENTION_INTERVAL:
+                    from . import ledger_retention
+                    archived = await asyncio.to_thread(ledger_retention.prune_home, home)
+                    last_retention = time.monotonic()
+                    if any(archived.values()):
+                        log.info("terminal ledger rows archived: %s", archived)
+                health = await asyncio.to_thread(pending_health, home)
+                _worker_health.update(state="armed", passes=_worker_health["passes"] + 1,
+                                      last_pass_at=time.time(), last_error=None,
+                                      pending=health["pending"], due=health["due"])
+                if summary.get("delivered") or summary.get("failed"):
+                    log.info("cron bridge recovery drain: %s", summary)
+                if health["due"] and health["oldest_due_age_s"] > 300:
+                    log.warning("cron bridge overdue: %d due, oldest %ds, last pass %s",
+                                health["due"], health["oldest_due_age_s"], summary)
+            except Exception as exc:
+                _worker_health.update(state="dead", last_error=type(exc).__name__)
+                log.exception("cron bridge recovery pass failed")
+            await asyncio.sleep(DRAIN_INTERVAL)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        _workers.pop(str(home), None)
+
+
+def arm_loop(loop, home: Path):
+    """Idempotently re-arm a bridge drainer on the live gateway loop."""
+    home = Path(home).resolve()
+    key = str(home)
+    task = _workers.get(key)
+    if task is not None and not task.done():
+        return
+    _worker_health["state"] = "armed"
+    _workers[key] = loop.create_task(_recovery_loop(home),
+                                     name=f"hermes-app-cron-recovery:{home.name}")
 
 
 def delivery_key(*, home: str, job_id: str, execution_id: str, session_id: str) -> str:

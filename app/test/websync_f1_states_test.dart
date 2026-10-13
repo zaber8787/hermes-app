@@ -1,9 +1,9 @@
-/// WEBSYNC F1: "串流中斷" splits into three honest states once recovery
-/// is exhausted — DELIVERED-but-reply-loading (the message demonstrably
-/// landed: a runId exists or the text is in history), STREAM UNAVAILABLE
-/// (observed transport failure AND the text is positively NOT in history —
-/// the only path allowed to offer a resend), and UNCONFIRMED (neutral).
-/// The old M027 resend bait may never appear on a landed path.
+// WEBSYNC F1: "串流中斷" splits into three honest states once recovery
+// is exhausted — DELIVERED-but-reply-loading (the message demonstrably
+// landed: a runId exists or the text is in history), STREAM UNAVAILABLE
+// (observed transport failure AND the text is positively NOT in history —
+// the only path allowed to offer a resend), and UNCONFIRMED (neutral).
+// The old M027 resend bait may never appear on a landed path.
 import 'dart:async';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';

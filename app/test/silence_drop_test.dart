@@ -28,8 +28,10 @@ class FakeRepo extends HermesRepository {
   Future<SessionActivity> sessionActivity(String sid) async =>
       SessionActivity.quiet(sid);
   @override
-  Future<Map<String, dynamic>> sessionDetail(String sid) async =>
-      {'id': sid, 'message_count': 0};
+  Future<Map<String, dynamic>> sessionDetail(String sid) async => {
+    'id': sid,
+    'message_count': 0,
+  };
   @override
   Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) {
     sends++;
@@ -213,10 +215,7 @@ void main() {
       // exhausted state is the DELIVERED one, never a "connection lost" /
       // resend wording. The ladder, the single POST and the reconnect count
       // above are the silence-drop contract proper and are unchanged.
-      expect(
-        (c.error! as UiLocal).key,
-        MessageKey.chatDeliveredReplyLoading,
-      );
+      expect((c.error! as UiLocal).key, MessageKey.chatDeliveredReplyLoading);
       expect((c.error! as UiLocal).key, isNot(MessageKey.chatStateM027));
       expect(repo.sends, 1);
       expect(c.reconnects, 1);
@@ -287,12 +286,15 @@ void main() {
       expect(c.streamWaitingNotice, isNotNull);
       expect((c.streamWaitingNotice! as UiLocal).args['seconds'], 40);
 
-      // Heartbeat WITHOUT notice-vs-not: a bare heartbeat repaints nothing.
+      // A heartbeat removes the transport-silence warning, but the separate
+      // no-output waiting clock keeps aging.
+      expect(c.streamQuietNotice, isNotNull);
       var before = notifies;
       repo.events.add(heartbeat);
       await tester.pump();
       await tester.pump();
-      expect(notifies, before); // no-repaint contract stays intact
+      expect(c.streamQuietNotice, isNull);
+      expect(notifies, before + 1);
 
       // Heartbeat keeps freshness but NOT the output clock: 10s later the
       // tick only ages the notice; nothing recovers at t=80 (last event 40).
@@ -491,65 +493,67 @@ void main() {
     c.dispose();
   });
 
-  testWidgets('detach, dispose and a new turn never inherit the notice (§4.6)', (
-    tester,
-  ) async {
-    final waits = <Completer<void>>[];
-    final c = make(tester, waits);
-    final sending = c.send('hello');
-    await launch(tester, c);
+  testWidgets(
+    'detach, dispose and a new turn never inherit the notice (§4.6)',
+    (tester) async {
+      final waits = <Completer<void>>[];
+      final c = make(tester, waits);
+      final sending = c.send('hello');
+      await launch(tester, c);
 
-    await tester.pump(const Duration(seconds: 40));
-    expect(c.streamWaitingNotice, isNotNull);
+      await tester.pump(const Duration(seconds: 40));
+      expect(c.streamWaitingNotice, isNotNull);
 
-    // Finishing the turn retires notice + cause.
-    repo.events.add(
-      const SseEvent('run.completed', '{"completed":true,"messages":[]}'),
-    );
-    repo.closeStream();
-    await tester.pump();
-    await tester.pump();
-    await sending;
-    expect(c.phase, ChatPhase.idle);
-    expect(c.streamWaitingNotice, isNull);
+      // Finishing the turn retires notice + cause.
+      repo.events.add(
+        const SseEvent('run.completed', '{"completed":true,"messages":[]}'),
+      );
+      repo.closeStream();
+      await tester.pump();
+      await tester.pump();
+      await sending;
+      expect(c.phase, ChatPhase.idle);
+      expect(c.streamWaitingNotice, isNull);
 
-    // Turn 2 ages from ZERO: exactly 40s of silence means "40", not "80+".
-    final sending2 = c.send('again');
-    await tester.pump();
-    await tester.pump();
-    await tester.pump();
-    expect(repo.sends, 2);
-    repo.events.add(
-      const SseEvent('run.started', '{"run_id":"r2","session_id":"s"}'),
-    );
-    await tester.pump();
-    await tester.pump();
-    await tester.pump(const Duration(seconds: 40));
-    expect((c.streamWaitingNotice! as UiLocal).args['seconds'], 40);
-    c.dispose(); // dispose clears the notice even mid-sending
-    expect(c.streamWaitingNotice, isNull);
-    repo.closeStream();
-    await sending2;
-  });
+      // Turn 2 ages from ZERO: exactly 40s of silence means "40", not "80+".
+      final sending2 = c.send('again');
+      await tester.pump();
+      await tester.pump();
+      await tester.pump();
+      expect(repo.sends, 2);
+      repo.events.add(
+        const SseEvent('run.started', '{"run_id":"r2","session_id":"s"}'),
+      );
+      await tester.pump();
+      await tester.pump();
+      await tester.pump(const Duration(seconds: 40));
+      expect((c.streamWaitingNotice! as UiLocal).args['seconds'], 40);
+      c.dispose(); // dispose clears the notice even mid-sending
+      expect(c.streamWaitingNotice, isNull);
+      repo.closeStream();
+      await sending2;
+    },
+  );
 
-  testWidgets('detach and dispose clear the notice; stale events no-op (§4.6)', (
-    tester,
-  ) async {
-    final waits = <Completer<void>>[];
-    final c = make(tester, waits);
-    final sending = c.send('hello');
-    await launch(tester, c);
+  testWidgets(
+    'detach and dispose clear the notice; stale events no-op (§4.6)',
+    (tester) async {
+      final waits = <Completer<void>>[];
+      final c = make(tester, waits);
+      final sending = c.send('hello');
+      await launch(tester, c);
 
-    await tester.pump(const Duration(seconds: 40));
-    expect(c.streamWaitingNotice, isNotNull);
-    c.detach(); // leaving the page: notice dies with the SSE ownership
-    expect(c.streamWaitingNotice, isNull);
-    expect(c.recoveryCause, isNull);
-    c.dispose();
-    expect(c.streamWaitingNotice, isNull);
-    repo.closeStream();
-    await sending;
-  });
+      await tester.pump(const Duration(seconds: 40));
+      expect(c.streamWaitingNotice, isNotNull);
+      c.detach(); // leaving the page: notice dies with the SSE ownership
+      expect(c.streamWaitingNotice, isNull);
+      expect(c.recoveryCause, isNull);
+      c.dispose();
+      expect(c.streamWaitingNotice, isNull);
+      repo.closeStream();
+      await sending;
+    },
+  );
 
   testWidgets('settling retires the waiting clock for the next turn (§4.6)', (
     tester,
@@ -589,8 +593,11 @@ void main() {
         'Waiting for a reply (no output for ${s}s)',
       );
       expect(
-        t(MessageKey.chatStreamWaiting,
-            locale: AppLocale.zhHant, args: {'seconds': s}),
+        t(
+          MessageKey.chatStreamWaiting,
+          locale: AppLocale.zhHant,
+          args: {'seconds': s},
+        ),
         '等待回覆（無輸出 $s 秒）',
       );
     }
@@ -600,7 +607,11 @@ void main() {
       'The message will not be resent.',
     );
     expect(
-      t(MessageKey.chatStreamChecking, locale: AppLocale.zhHant, args: {'seconds': 3}),
+      t(
+        MessageKey.chatStreamChecking,
+        locale: AppLocale.zhHant,
+        args: {'seconds': 3},
+      ),
       '暫未收到串流更新，3 秒後核對歷史；不會重送訊息。',
     );
     expect(
@@ -618,7 +629,11 @@ void main() {
       'The message will not be resent.',
     );
     expect(
-      t(MessageKey.chatStateM026, locale: AppLocale.zhHant, args: {'seconds': 2}),
+      t(
+        MessageKey.chatStateM026,
+        locale: AppLocale.zhHant,
+        args: {'seconds': 2},
+      ),
       '回覆串流中斷，2 秒後核對歷史；不會重送訊息。',
     );
   });

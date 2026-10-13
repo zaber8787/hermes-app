@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:typed_data';
+import 'package:flutter/foundation.dart';
 import 'package:crypto/crypto.dart';
 import '../features/attachments/attachment.dart';
 import '../l10n/app_locale.dart';
@@ -33,10 +34,9 @@ class ApiException implements Exception, UiCarriesMessage {
   const ApiException.local(
     MessageKey key, {
     this.status,
-    Map<String, Object?> args = const {},
+    this._args = const {},
   }) : _rawMessage = null,
-       _key = key,
-       _args = args;
+       _key = key;
 
   final String? _rawMessage;
   final MessageKey? _key;
@@ -89,6 +89,10 @@ class HermesRepository {
   final String baseUrl, key;
   final HttpPort _port;
   final _activityCache = <String, (int, double)>{};
+
+  /// First-page list for the directory while later pages and legacy
+  /// timestamps are still loading. Kept on refresh until a new page lands.
+  final ValueNotifier<List<Session>?> sessionsPreview = ValueNotifier(null);
   static const readTimeout = Duration(seconds: 610); // Contract §1 >=600s.
   final Duration metadataTimeout;
   final _keepalives = <String, Set<StreamKeepalive>>{};
@@ -305,6 +309,7 @@ class HermesRepository {
         final s = Session.fromJson(Map<String, dynamic>.from(row));
         all[s.id] = s;
       }
+      sessionsPreview.value = _sortSessions(all.values);
       offset += page.length;
       if (page.length < 500) break;
     }
@@ -331,7 +336,7 @@ class HermesRepository {
           try {
             var cached = _activityCache[session.id];
             if (cached == null || cached.$1 != session.count) {
-              final last = await messages(session.id, limit: 1);
+              final last = await _legacyLastMessage(session.id);
               cached = (
                 session.count,
                 last.isNotEmpty && last.last.timestamp > 0
@@ -347,12 +352,33 @@ class HermesRepository {
         }
       }),
     );
-    final list = all.values.toList()
-      ..sort((a, b) {
-        if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
-        return b.activity.compareTo(a.activity);
-      });
+    final list = _sortSessions(all.values);
+    sessionsPreview.value = list;
     return list;
+  }
+
+  static List<Session> _sortSessions(Iterable<Session> rows) {
+    return rows.toList()..sort((a, b) {
+      if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
+      return b.activity.compareTo(a.activity);
+    });
+  }
+
+  Future<List<Message>> _legacyLastMessage(String sid) async {
+    // A timestamp is optional enrichment, never worth the 610s message-body
+    // budget reserved for a foreground history or stream transfer.
+    final budget = metadataTimeout < const Duration(seconds: 5)
+        ? metadataTimeout
+        : const Duration(seconds: 5);
+    final json = await _json(
+      'GET',
+      '/api/sessions/${Uri.encodeComponent(sid)}/messages',
+      query: const {'order': 'latest', 'limit': '1', 'offset': '0'},
+      deadline: budget,
+    );
+    return (json['data'] as List)
+        .map((e) => Message.fromJson(Map<String, dynamic>.from(e)))
+        .toList();
   }
 
   /// R1: the session row ({"id","message_count",...}) — message_count is the
@@ -396,6 +422,7 @@ class HermesRepository {
       'GET',
       '/api/sessions/${Uri.encodeComponent(sid)}/messages',
       query: {'order': 'latest', 'limit': '$limit', 'offset': '$offset'},
+      deadline: metadataTimeout,
     );
     return (json['data'] as List)
         .map((e) => Message.fromJson(Map<String, dynamic>.from(e)))
@@ -794,17 +821,13 @@ class HermesRepository {
   // ---- STEERWEB R7: notification events ledger REST ------------------------
 
   Future<Map<String, dynamic>?> notificationEventsFeature() async {
-    try {
-      final feats = (await _json(
-        'GET',
-        '/v1/capabilities',
-        deadline: metadataTimeout,
-      ))['features'];
-      final f = feats is Map ? feats['notification_events'] : null;
-      return f is Map ? Map<String, dynamic>.from(f) : null;
-    } on Object {
-      return null;
-    }
+    final feats = (await _json(
+      'GET',
+      '/v1/capabilities',
+      deadline: metadataTimeout,
+    ))['features'];
+    final f = feats is Map ? feats['notification_events'] : null;
+    return f is Map ? Map<String, dynamic>.from(f) : null;
   }
 
   /// Cursor page of MY events (server ledger dedups by exact event id).

@@ -102,6 +102,21 @@ async def case_notification_events(args, server, check):
             sid = db.create_session("compat-events", "api_server")
             adapter._session_db = db
             adapter._max_concurrent_runs = 8
+            # S1: every notification route authenticates before resolving owner
+            # scope or reading/mutating the event ledger.
+            routes = (
+                ("GET", "/api/notification-events"),
+                ("POST", "/api/notification-events/event-id/read"),
+                ("POST", "/api/notification-events/event-id/claim"),
+                ("POST", "/api/notification-events/event-id/delivery"),
+                ("POST", "/api/notification-events/steer-ready-watch"),
+            )
+            for method, route in routes:
+                for headers in ({}, {"Authorization": "Bearer wrong-key"}):
+                    async with client.request(method, route, headers=headers,
+                                              json={} if method == "POST" else None) as denied:
+                        check(denied.status == 401,
+                              f"S1 {method} {route} rejects missing/wrong API key")
             with patch.object(adapter, "_create_agent", side_effect=make_agent):
 
                 async def start(label, *, hold):

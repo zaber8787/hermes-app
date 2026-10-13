@@ -170,6 +170,23 @@ async def case_media(args):
                 check(r.status == 400, "unsafe/missing path rejected")
         async with client.get("/v1/media/download", params={"path":str(large)}, headers={**AUTH,"Range":"bytes=0-3"}) as r:
             check(r.status == 413, "oversize media rejected before Range")
+        from gateway.browser_control_artifacts import ArtifactStore
+        from types import SimpleNamespace
+        artifact = ArtifactStore(Path(os.environ["HERMES_HOME"]) / "artifact-probe",
+                                 max_bytes=64)
+        adapter._inject_browser_control_artifacts(artifact)
+        receipt = artifact.store(b"private-artifact-canary", filename="canary.bin",
+                                 content_type="application/octet-stream",
+                                 scope=SimpleNamespace(principal_id="foreign",
+                                                       transport_family="api"))
+        artifact_path = artifact._artifact_path(receipt.artifact_id)
+        alias = root / "artifact-alias.bin"
+        alias.symlink_to(artifact_path)
+        for exposed in (artifact_path, alias):
+            async with client.get("/v1/media/download", params={"path": str(exposed)},
+                                  headers=AUTH) as r:
+                check(r.status == 400 and await r.read() != b"private-artifact-canary",
+                      "S3 artifact store path and symlink cannot bypass receipt scope")
         async with client.get("/v1/media/download", params={"path":str(path)}) as r:
             check(r.status == 401, "media bad/missing bearer rejected")
         with patch.object(adapter,"_api_key", ""):
@@ -479,6 +496,9 @@ async def run(args):
         elif args.worker == "notification_events":
             from .notification_events import case_notification_events
             outcome = await case_notification_events(args, server, check)
+        elif args.worker == "artifact_quota":
+            from .artifact_quota import case_artifact_quota
+            outcome = await case_artifact_quota(args, server, check)
         elif args.worker == "steer_inbox":
             from .steer_inbox import case_steer_inbox
             outcome = await case_steer_inbox(args, server, check)
@@ -494,6 +514,9 @@ async def run(args):
         elif args.worker == "wakecap":
             from .wakecap import case_wakecap
             outcome = await case_wakecap(args, server, check)
+        elif args.worker == "wake_report_race":
+            from .wake_report_race import case_wake_report_race
+            outcome = await case_wake_report_race(args, server, check)
         elif args.worker == "selfwake":
             from .selfwake import case_selfwake
             outcome = await case_selfwake(args, server, check)
@@ -503,6 +526,9 @@ async def run(args):
         elif args.worker == "selfwake_batch":
             from .selfwake_batch import case_selfwake_batch
             outcome = await case_selfwake_batch(args, server, check)
+        elif args.worker == "selfwake_checkpoint":
+            from .selfwake_checkpoint import case_selfwake_checkpoint
+            outcome = await case_selfwake_checkpoint(args, server, check)
         elif args.worker == 'wakelatch':
             from .wakelatch import case_wakelatch
             outcome = await case_wakelatch(args, server, check)

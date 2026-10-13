@@ -4,15 +4,25 @@
 # - stops idle Gradle daemons (they squat 0.6-1.7G each after APK builds)
 # - warns (exit 1) when available RAM is below threshold; dispatchers must
 #   wait or shed load before launching flutter full suites / gradle builds.
-set -u
+set -euo pipefail
 THRESH="${1:-6000}"
-if [ -x "$HOME/hermes-app/app/android/gradlew" ]; then
-  ( cd "$HOME/hermes-app/app/android" && ./gradlew --stop >/dev/null 2>&1 ) || true
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+meminfo="${HERMES_MEMINFO_PATH:-/proc/meminfo}"
+if [[ ! "$THRESH" =~ ^[0-9]+$ ]]; then
+  echo "MEMGUARD: invalid threshold" >&2
+  exit 1
 fi
-avail=$(awk '/^MemAvailable/ {print int($2/1024)}' /proc/meminfo)
-swapused=$(awk '/^SwapTotal/ {t=$2} /^SwapFree/ {print int(($2*0)+0)}' /proc/meminfo)
-swap_mb=$(free -m | awk 'NR==2 {print $3}')
-echo "avail=${avail}M swap_used=${swap_mb}M"
+if [ -x "$root/app/android/gradlew" ]; then
+  ( cd "$root/app/android" && ./gradlew --stop >/dev/null 2>&1 ) || true
+fi
+if ! avail="$(awk '/^MemAvailable:/ {
+  if ($2 ~ /^[0-9]+$/) { print int($2 / 1024); found=1 }
+  exit
+} END { if (!found) exit 1 }' "$meminfo")"; then
+  echo "MEMGUARD: cannot read MemAvailable from $meminfo" >&2
+  exit 1
+fi
+echo "avail=${avail}M"
 if [ "$avail" -lt "$THRESH" ]; then
   echo "MEMGUARD: below ${THRESH}M — refuse heavy run; stop daemons/builds first"
   exit 1
