@@ -22,8 +22,13 @@ class FakeCmdRepo extends HermesRepository {
   FakeCmdRepo() : super('http://test.invalid', 'fake');
 
   @override
-  Future<Map<String, dynamic>> sessionDetail(String sid) async =>
-      {'id': sid, 'message_count': 0}; // R1 sync clock: quiet by default
+  Future<Map<String, dynamic>> sessionDetail(String sid) async => {
+    'id': sid,
+    'message_count': 0,
+  }; // R1 sync clock: quiet by default
+  Json contextFacts = const {};
+  @override
+  Future<Json> sessionContext(String sid) async => contextFacts;
   final events = StreamController<SseEvent>.broadcast();
   List<Message> history = [];
   Json Function(String runId) status = (_) => {'status': 'running'};
@@ -73,10 +78,15 @@ void main() {
   );
 
   Future<void> openPage(WidgetTester tester) async {
-    await tester.pumpWidget(UncontrolledProviderScope(
-      container: container,
-      child: localizedWrap(ChatPage(session: sessionA), locale: AppLocale.zhHant),
-    ));
+    await tester.pumpWidget(
+      UncontrolledProviderScope(
+        container: container,
+        child: localizedWrap(
+          ChatPage(session: sessionA),
+          locale: AppLocale.zhHant,
+        ),
+      ),
+    );
     await tester.pump();
     await tester.pump();
   }
@@ -120,10 +130,39 @@ void main() {
     expect(find.textContaining('空閒'), findsOneWidget);
     expect(find.textContaining('目前沒有執行中的 run'), findsOneWidget);
     expect(find.textContaining('重新連線次數'), findsOneWidget);
+    expect(find.text('模型：不確定', skipOffstage: false), findsOneWidget);
+    expect(find.text('已用：不確定', skipOffstage: false), findsOneWidget);
+    expect(find.text('壓縮閾值：不確定', skipOffstage: false), findsOneWidget);
     expect(repo.sends, 0); // 絕不進模型
     await tester.tap(find.text('關閉'));
     await tester.pumpAndSettle();
   });
+
+  testWidgets(
+    '/status shows measured prompt occupancy without cumulative totals',
+    (tester) async {
+      repo.contextFacts = {
+        'model': 'test-model',
+        'context_used_tokens': 32000,
+        'context_limit_tokens': 128000,
+        'last_compression_at': 1770000000,
+        'compression_threshold_tokens': null,
+      };
+      await openPage(tester);
+      await submit(tester, '/status');
+      expect(find.text('模型：test-model', skipOffstage: false), findsOneWidget);
+      expect(
+        find.text('已用：32000 / 128000 tokens (25%)', skipOffstage: false),
+        findsOneWidget,
+      );
+      expect(find.text('壓縮閾值：不確定', skipOffstage: false), findsOneWidget);
+      expect(
+        find.textContaining('上次壓縮：20', skipOffstage: false),
+        findsOneWidget,
+      );
+      expect(repo.sends, 0);
+    },
+  );
 
   testWidgets('/status during bootstrap observation: SnackBar names runId', (
     tester,

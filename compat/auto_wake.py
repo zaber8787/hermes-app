@@ -78,14 +78,39 @@ WAKE_INPUT_RE = r'\n*請讀取新到的排程報告並簡短回覆。\s*$'
 
 
 def is_ignored_report(content: str) -> bool:
-    """Empty or EXACTLY NO_REPLY/HEARTBEAT_OK after prefix, cron footer and
-    appended wake-input removal — ignored-consumed. A report merely
-    CONTAINING either string inside its body is never killed."""
+    """Ignore exact sentinels and a packaged idle heartbeat from the worker.
+
+    Prefix/footer/merged wake text are removed first. A substantive report
+    merely mentioning a sentinel inside its body remains eligible.
+    """
     import re
-    body = report_body(content)
-    body = re.sub(WAKE_INPUT_RE, '', body)
-    body = re.sub(CRON_FOOTER_RE, '', body).strip()
-    return body == "" or body in ("NO_REPLY", "HEARTBEAT_OK")
+    body = normalized_report_body(content)
+    if body == "" or body in ("NO_REPLY", "HEARTBEAT_OK"):
+        return True
+    # Real worker-done-watch row 42386: an idle/no-new-items explanation
+    # precedes the final standalone heartbeat sentinel. A mere mention in a
+    # substantive report still does not suppress that report.
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if lines and lines[-1] == "HEARTBEAT_OK":
+        preface = "\n".join(lines[:-1])
+        if (re.search(r"\bidle\b", preface, re.IGNORECASE)
+                and re.search(r"無新事項|no new (?:items|work)|nothing pending",
+                              preface, re.IGNORECASE)):
+            return True
+    return False
+
+
+def normalized_report_body(content: str) -> str:
+    """Stable source body across cron headers, footers and merge wake text."""
+    import re
+    body = report_body(content).replace("\r\n", "\n")
+    # Either suffix may wrap the other (and the merge may append twice).
+    while True:
+        previous = body
+        body = re.sub(WAKE_INPUT_RE, "", body).rstrip()
+        body = re.sub(CRON_FOOTER_RE, "", body).rstrip()
+        if body == previous:
+            return body.strip()
 
 
 def ledger_key(home: str, delivery_key: str) -> str:

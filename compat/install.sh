@@ -14,5 +14,6 @@ rsync -a -- "$source_dir/install.sh" "$source_dir/plugin.yaml" "$source_dir/__in
   "$source_dir/self_wake.py" "$source_dir/wake_reconcile.py" \
   "$source_dir/steer_inbox.py" "$source_dir/steer_store.py" \
   "$source_dir/notification_events.py" "$source_dir/notification_store.py" \
+  "$source_dir/status_context.py" \
   "$source_dir/README.md" "$source_dir/HINDSIGHT-MIGRATION.md" "$target/"
 printf 'Installed source at %s\nEnable separately: hermes plugins enable hermes-app-compat\n' "$target"

@@ -27,10 +27,11 @@ from pathlib import Path
 
 from .auto_wake import (BATCH_MAX, CANONICAL_INPUT, PROFILE_WAKE_LIMIT,
                         QUOTA_WINDOW_SECONDS, SESSION_WAKE_LIMIT,
-                        is_ignored_report)
+                        is_ignored_report, normalized_report_body, provenance_of)
 
 LEDGER_VERSION = 1
 ADMIT_MAX_DELIVERY_IDS = 32
+CONTENT_COOLDOWN_SECONDS = 15 * 60
 LEDGER_LOCK = threading.RLock()
 _LEDGERS: dict[str, sqlite3.Connection] = {}
 
@@ -160,7 +161,8 @@ def _find_report(db, resolved: str, key: str):
         SELECT s.parent_session_id FROM sessions s JOIN lineage l ON s.id = l.id
         JOIN sessions p ON p.id = s.parent_session_id WHERE p.end_reason = 'compression'
     ) SELECT m.id AS id, m.timestamp AS timestamp, m.content AS content,
-        json_extract(m.display_metadata, '$.hermes_app_cron.schema') AS sch
+        json_extract(m.display_metadata, '$.hermes_app_cron.schema') AS sch,
+        json_extract(m.display_metadata, '$.hermes_app_cron.job_id') AS job_id
         FROM messages m JOIN lineage l ON m.session_id = l.id
         WHERE m.role = 'user' AND m.display_kind = 'internal_notification'
         AND json_extract(m.display_metadata, '$.hermes_app_cron.delivery_key') = ?
@@ -178,6 +180,34 @@ def _session_busy(db, resolved: str, at: float) -> bool:
         return bool(rows)
     except Exception:
         return True  # fail closed: an unprovable session is "busy", retry later
+
+
+def _same_source_recent(conn, db, resolved: str, row, at: float) -> bool:
+    """Compare real source text, not per-execution delivery keys.
+
+    Existing consumption rows need no migration: their message_id points to
+    the durable report row. BEGIN IMMEDIATE in admit serializes two processes
+    claiming distinct execution keys for the same content.
+    """
+    job_id = row["job_id"]
+    if not isinstance(job_id, str) or not job_id:
+        return False
+    target = " ".join(normalized_report_body(row["content"]).split())
+    for prior in conn.execute(
+            "SELECT message_id FROM wake_consumption WHERE session_id = ?"
+            " AND ignored = 0 AND state = 'consumed' AND created_at > ?"
+            " AND message_id IS NOT NULL ORDER BY created_at DESC",
+            (resolved, at - CONTENT_COOLDOWN_SECONDS)):
+        old = db._read_all(
+            "SELECT role, display_kind, display_metadata, content FROM messages"
+            " WHERE id = ? LIMIT 1", (prior["message_id"],))
+        if not old:
+            continue
+        source = provenance_of(old[0])
+        if (source is not None and source["job_id"] == job_id
+                and " ".join(normalized_report_body(old[0]["content"]).split()) == target):
+            return True
+    return False
 
 
 def _batch_view(conn, batch_id: str):
@@ -218,7 +248,7 @@ def admit(home: Path, *, session_id: str, resolved: str, keys, db, now=None, own
         return {"status": "error", "error": "too_many_keys"}
     at = _now(now)
     conn = open_ledger(home)
-    with LEDGER_LOCK:
+    with LEDGER_LOCK, conn:
         session = db.get_session(resolved)
         if session is None:
             return {"status": "error", "error": "session_not_found"}
@@ -229,6 +259,7 @@ def admit(home: Path, *, session_id: str, resolved: str, keys, db, now=None, own
             return {"status": "error", "error": "session_not_allowed"}
         if _session_busy(db, resolved, at):
             return {"status": "busy", "retry_after_s": 5}
+        conn.execute("BEGIN IMMEDIATE")
         quota = _quota(conn, resolved, at)
         if quota["session_remaining"] <= 0 or quota["profile_remaining"] <= 0:
             return {"status": "quota_exceeded", "retry_after_s": 300, "quota": quota}
@@ -267,6 +298,17 @@ def admit(home: Path, *, session_id: str, resolved: str, keys, db, now=None, own
                 # trustworthy causal id this source stops auto-firing (the
                 # row stays visible for manual reading).
                 rejected.append({"delivery_key": key, "reason": "causal_suspect"})
+                continue
+            if _same_source_recent(conn, db, resolved, row, at):
+                # Ignore-consume the new execution key as well. Leaving it
+                # unclaimed would make the worker retry until the window
+                # expires, then fire the stale duplicate later.
+                conn.execute(
+                    "INSERT INTO wake_consumption(delivery_key, batch_id, session_id,"
+                    " message_id, report_order, ignored, state, created_at, updated_at)"
+                    " VALUES(?,?,?,NULL,?,1,'ignored',?,?)",
+                    (key, None, resolved, int(row["id"]), at, at))
+                ignored.append(key)
                 continue
             claims.append((key, int(row["id"]), float(row["timestamp"])))
         if len(claims) > BATCH_MAX:

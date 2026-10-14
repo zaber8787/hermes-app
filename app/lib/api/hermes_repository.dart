@@ -31,12 +31,9 @@ class ApiException implements Exception, UiCarriesMessage {
       _key = null,
       _args = null;
 
-  const ApiException.local(
-    MessageKey key, {
-    this.status,
-    this._args = const {},
-  }) : _rawMessage = null,
-       _key = key;
+  const ApiException.local(MessageKey key, {this.status, this._args = const {}})
+    : _rawMessage = null,
+      _key = key;
 
   final String? _rawMessage;
   final MessageKey? _key;
@@ -392,6 +389,19 @@ class HermesRepository {
     final session = json['session'];
     if (session is! Map) throw const ApiException.local(MessageKey.apiM011);
     return Map<String, dynamic>.from(session);
+  }
+
+  /// Read-only context facts from the web patch endpoint. Missing fields are
+  /// deliberately null: cumulative session usage is not context occupancy.
+  Future<Json> sessionContext(String sid) async {
+    final json = await _json(
+      'GET',
+      '/api/sessions/${Uri.encodeComponent(sid)}/context',
+      deadline: metadataTimeout,
+    );
+    final context = json['context'];
+    if (context is! Map) throw const ApiException.local(MessageKey.apiM011);
+    return Map<String, dynamic>.from(context);
   }
 
   /// WAVE4: the session's live activity snapshot (durable history revision +

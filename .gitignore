@@ -146,3 +146,6 @@ web/cjk-mirror/
 .sweepux-scratch/
 .sweeprel-scratch/
 .lintclean-evidence/
+.statusctx-evidence/
+.wakefix4-evidence/
+.done-wakefix4

@@ -429,37 +429,84 @@ def chain_human_checkpoint(home: Path, db, resolved: str, since: float):
     NOT a role=user report) after the last fire reopens the chain."""
     from . import auto_wake
     try:
-        rows = db._read_all(
-            "SELECT m.content AS content, m.display_kind AS dk, m.role AS role"
-            " FROM messages m WHERE m.session_id = ? AND m.role = 'user'"
-            " AND m.timestamp > ? AND m.display_kind IS NULL"
-            " AND m.content != ? LIMIT 1", (resolved, since, auto_wake.CANONICAL_INPUT))
+        stamp, mid = since, 0
+        while True:
+            rows = db._read_all(
+                "SELECT m.id AS id, m.timestamp AS timestamp, m.content AS content"
+                " FROM messages m WHERE m.session_id = ? AND m.role = 'user'"
+                " AND m.display_kind IS NULL AND m.timestamp > ?"
+                " AND (m.timestamp > ? OR (m.timestamp = ? AND m.id > ?))"
+                " ORDER BY m.timestamp, m.id LIMIT 128",
+                (resolved, since, stamp, stamp, mid))
+            if not rows:
+                return False
+            for row in rows:
+                content = row["content"]
+                if not isinstance(content, str):
+                    continue
+                text = content.strip()
+                # A strict-alternation merge may append the canonical input
+                # more than once; never mistake that synthetic user row or a
+                # report copied into it for a human checkpoint.
+                if text.startswith(auto_wake.CONTENT_PREFIX):
+                    continue
+                while text.endswith(auto_wake.CANONICAL_INPUT):
+                    text = text[:-len(auto_wake.CANONICAL_INPUT)].strip()
+                if text:
+                    return True
+            stamp, mid = rows[-1]["timestamp"], rows[-1]["id"]
     except Exception:
         return False  # unprovable: stays fused/limited (fail closed)
-    return bool(rows)
 
 
-def chain_gate_checkpoint(home: Path, lineage: str, db, resolved: str):
-    """Reopen an at-limit chain only on a provable post-fire human message."""
-    verdict = chain_gate(home, lineage)
-    if verdict[1] != "chain-limit reached (needs human checkpoint)":
-        return verdict
+def _checkpoint_if_human(home: Path, lineage: str, db, resolved: str) -> bool:
     row = _ledger(home).execute(
         "SELECT fires, last_fire_at, fused FROM selfwake_chain WHERE session_id = ?",
         (lineage,)).fetchone()
-    if row is None or row["fused"] or row["last_fire_at"] is None:
-        return verdict
+    if (row is None or row["fused"] or row["fires"] <= 0
+            or row["last_fire_at"] is None):
+        return False
     if not chain_human_checkpoint(home, db, resolved, float(row["last_fire_at"])):
-        return verdict
-    # Compare the observed fire state inside the write transaction. A concurrent
-    # fire must not be erased by a checkpoint proven against an older fire.
+        return False
     try:
-        if _chain_reset(home, lineage, "human-checkpoint", row["fires"],
-                        row["last_fire_at"], clear_fuse=False):
-            return chain_gate(home, lineage)
+        return _chain_reset(home, lineage, "human-checkpoint", row["fires"],
+                            row["last_fire_at"], clear_fuse=False)
     except Exception:
-        pass  # an unprovable reset stays closed
+        return False  # unprovable reset stays closed
+
+
+def chain_gate_checkpoint(home: Path, lineage: str, db, resolved: str):
+    """Apply a provable human checkpoint before every fresh-admission gate."""
+    verdict = chain_gate(home, lineage)
+    if verdict[1] and (verdict[1].startswith("selfwake off")
+                       or verdict[1].startswith("fault-fused")):
+        return verdict
+    _checkpoint_if_human(home, lineage, db, resolved)
     return chain_gate(home, lineage)
+
+
+def checkpoint_active_chains(home: Path, *, after: str = "", limit: int = 32) -> str:
+    """Periodically reset proven human checkpoints even with no due intent."""
+    conn = _ledger(home)
+    rows = conn.execute(
+        "SELECT session_id FROM selfwake_chain WHERE fires > 0 AND fused = 0"
+        " AND last_fire_at IS NOT NULL AND session_id > ?"
+        " ORDER BY session_id LIMIT ?", (after, limit)).fetchall()
+    if not rows:
+        return ""
+    from hermes_state_registry import acquire, release_or_close
+    db = acquire(Path(home) / "state.db")
+    try:
+        for row in rows:
+            lineage = row["session_id"]
+            try:
+                resolved = db.resolve_resume_session_id(lineage)
+                _checkpoint_if_human(home, lineage, db, resolved)
+            except Exception:
+                continue  # one unavailable session cannot block the next
+    finally:
+        release_or_close(db)
+    return rows[-1]["session_id"] if len(rows) == limit else ""
 
 
 def fault_fuse(home: Path, lineage: str, reason: str):
@@ -647,6 +694,7 @@ class SelfWakeWorker:
         self._busy = False
         self._next_reconcile = 0.0
         self._batch_cursor = ''
+        self._checkpoint_cursor = ''
         self._mode_seen = None
         self._audit_throttle = {}
         self._sweep_state = None
@@ -738,6 +786,10 @@ class SelfWakeWorker:
                 return  # shadow NEVER admits or dispatches
             self._throttled_audit('sweep-heartbeat', phase='sweep',
                                   reason='worker-alive', trigger='self')
+            # A human message can arrive with NO pending cron intent. The
+            # per-admission gate alone would leave fires stale indefinitely.
+            self._checkpoint_cursor = await asyncio.to_thread(
+                checkpoint_active_chains, self.home, after=self._checkpoint_cursor)
             if now >= self._next_reconcile:
                 await asyncio.to_thread(reconcile, self.home)
                 await self._reconcile_batches()

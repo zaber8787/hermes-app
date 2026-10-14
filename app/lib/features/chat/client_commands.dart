@@ -35,7 +35,8 @@ KeyEventResult decideChatInputKey(
   if (event is! KeyDownEvent && event is! KeyRepeatEvent) {
     return KeyEventResult.ignored;
   }
-  final isEnter = event.logicalKey == LogicalKeyboardKey.enter ||
+  final isEnter =
+      event.logicalKey == LogicalKeyboardKey.enter ||
       event.logicalKey == LogicalKeyboardKey.numpadEnter;
   if (!isEnter) return KeyEventResult.ignored;
   // 中文選字中的 Enter 屬 IME（引擎會提交選字），框架不插手、更不發傳送
@@ -94,7 +95,8 @@ final clientCommandsProvider = Provider<List<ClientCommand>>((ref) {
       if (!context.mounted) return true;
       // 取代而非 push：返回鍵會回列表，不會掉回剛清掉的舊對話。
       Navigator.of(context).pushReplacement(
-          MaterialPageRoute<void>(builder: (_) => ChatPage(session: created)));
+        MaterialPageRoute<void>(builder: (_) => ChatPage(session: created)),
+      );
     } catch (e) {
       messenger?.showSnackBar(
         SnackBar(
@@ -151,10 +153,7 @@ final clientCommandsProvider = Provider<List<ClientCommand>>((ref) {
     final reconnects = chat.reconnects;
     final viewers = ChatViewers.count(chat.sid);
 
-    MessageKey phaseKey(
-      ChatPhase p,
-      bool d,
-    ) => switch ((p, d)) {
+    MessageKey phaseKey(ChatPhase p, bool d) => switch ((p, d)) {
       (ChatPhase.idle, _) => MessageKey.commandsM006,
       (ChatPhase.sending, _) => MessageKey.commandsM007,
       (ChatPhase.recovering, true) => MessageKey.commandsM008,
@@ -165,16 +164,10 @@ final clientCommandsProvider = Provider<List<ClientCommand>>((ref) {
     UiMessage runLine() {
       if (runId == null) return const UiMessage.local(MessageKey.commandsM002);
       if (runLineFinished) {
-        return UiMessage.local(
-          MessageKey.commandsM004,
-          args: {'runId': runId},
-        );
+        return UiMessage.local(MessageKey.commandsM004, args: {'runId': runId});
       }
       if (runLineFailed) {
-        return UiMessage.local(
-          MessageKey.commandsM005,
-          args: {'runId': runId},
-        );
+        return UiMessage.local(MessageKey.commandsM005, args: {'runId': runId});
       }
       return runStatusToken.isEmpty
           ? UiMessage.local(
@@ -193,34 +186,32 @@ final clientCommandsProvider = Provider<List<ClientCommand>>((ref) {
             );
     }
 
-    String activityText(AppStrings strings) =>
-        switch (freshness) {
-          ActivityFreshness.unknown => strings.resolve(MessageKey.commandsM011),
-          ActivityFreshness.unsupported => strings.resolve(
-            MessageKey.commandsM012,
-          ),
-          ActivityFreshness.stale => strings.resolve(
-            // Fixed local HH:mm in both locales (I18N-PLAN §7).
-            MessageKey.commandsActivityStale,
-            args: {
-              'time': lastActivity == null
-                  ? strings.resolve(MessageKey.commonNoneParenthesized)
-                  : formatLocalClock(lastActivity),
-            },
-          ),
-          ActivityFreshness.fresh => remoteRuns.isEmpty
-              ? strings.resolve(MessageKey.commandsM015)
-              : strings.resolve(
-                  MessageKey.commandsM016,
-                  args: {
-                    'lines': remoteRuns
-                        .map(
-                          (r) => ChatController.formatRemoteRunLabel(strings, r),
-                        )
-                        .join('\n'),
-                  },
-                ),
-        };
+    String activityText(AppStrings strings) => switch (freshness) {
+      ActivityFreshness.unknown => strings.resolve(MessageKey.commandsM011),
+      ActivityFreshness.unsupported => strings.resolve(MessageKey.commandsM012),
+      ActivityFreshness.stale => strings.resolve(
+        // Fixed local HH:mm in both locales (I18N-PLAN §7).
+        MessageKey.commandsActivityStale,
+        args: {
+          'time': lastActivity == null
+              ? strings.resolve(MessageKey.commonNoneParenthesized)
+              : formatLocalClock(lastActivity),
+        },
+      ),
+      ActivityFreshness.fresh =>
+        remoteRuns.isEmpty
+            ? strings.resolve(MessageKey.commandsM015)
+            : strings.resolve(
+                MessageKey.commandsM016,
+                args: {
+                  'lines': remoteRuns
+                      .map(
+                        (r) => ChatController.formatRemoteRunLabel(strings, r),
+                      )
+                      .join('\n'),
+                },
+              ),
+    };
 
     if (chat.busy || chat.remoteBusy || chat.activityBlocksSend) {
       // 忙碌（本機或遠端）時不打斷畫面：簡版 SnackBar（長版留給空閒結果卡）。
@@ -247,17 +238,18 @@ final clientCommandsProvider = Provider<List<ClientCommand>>((ref) {
                   : '';
               return Text(
                 strings.resolve(
-                  MessageKey.commandsM017,
-                  count: messageCount,
-                  args: {
-                    'phase': strings.resolve(
-                      phaseKey(chat.phase, chat.detached),
-                    ),
-                    'runId': runId ?? strings.resolve(MessageKey.commonUnknown),
-                    'count': messageCount,
-                  },
-                ) +
-                suffix,
+                      MessageKey.commandsM017,
+                      count: messageCount,
+                      args: {
+                        'phase': strings.resolve(
+                          phaseKey(chat.phase, chat.detached),
+                        ),
+                        'runId':
+                            runId ?? strings.resolve(MessageKey.commonUnknown),
+                        'count': messageCount,
+                      },
+                    ) +
+                    suffix,
               );
             },
           ),
@@ -265,66 +257,121 @@ final clientCommandsProvider = Provider<List<ClientCommand>>((ref) {
       );
       return true;
     }
+    Map<String, dynamic> contextFacts = const {};
+    try {
+      contextFacts = await ref.read(repositoryProvider).sessionContext(sid);
+    } catch (_) {
+      // Older servers and temporarily unavailable metadata remain unknown.
+    }
+    if (!context.mounted) return true;
     await showDialog<void>(
       context: context,
       builder: (context) {
         final strings = AppStrings.of(context);
+        final unknown = strings.resolve(MessageKey.commandsContextUnknown);
+        final model = contextFacts['model'];
+        final used = contextFacts['context_used_tokens'];
+        final limit = contextFacts['context_limit_tokens'];
+        final threshold = contextFacts['compression_threshold_tokens'];
+        final compressedAt = contextFacts['last_compression_at'];
+        final usage = used is int && used > 0
+            ? limit is int && limit > 0
+                  ? '$used / $limit tokens (${(used / limit * 100).clamp(0, 100).toStringAsFixed(0)}%)'
+                  : '$used / $unknown tokens'
+            : unknown;
+        final lastCompression = compressedAt is num && compressedAt > 0
+            ? DateTime.fromMillisecondsSinceEpoch(
+                (compressedAt * 1000).round(),
+              ).toLocal().toString().substring(0, 16)
+            : unknown;
         return AlertDialog(
           title: const Text('/status'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                strings.resolve(
-                  MessageKey.commandsM020,
-                  args: {'sid': sid},
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  strings.resolve(MessageKey.commandsM020, args: {'sid': sid}),
                 ),
-              ),
-              Text(
-                strings.resolve(
-                  MessageKey.commandsM021,
-                  args: {
-                    'phase': UiMessage.local(
-                      phaseKey(chat.phase, chat.detached),
-                    ),
-                  },
+                Text(
+                  strings.resolve(
+                    MessageKey.commandsM021,
+                    args: {
+                      'phase': UiMessage.local(
+                        phaseKey(chat.phase, chat.detached),
+                      ),
+                    },
+                  ),
                 ),
-              ),
-              Text(strings.render(runLine())),
-              Text(
-                strings.resolve(
-                  MessageKey.commandsM022,
-                  args: {'count': messageCount},
+                Text(strings.render(runLine())),
+                Text(
+                  strings.resolve(
+                    MessageKey.commandsM022,
+                    args: {'count': messageCount},
+                  ),
                 ),
-              ),
-              Text(
-                strings.resolve(
-                  MessageKey.commandsM023,
-                  args: {'count': viewers},
-                  count: viewers,
+                Text(
+                  strings.resolve(
+                    MessageKey.commandsM023,
+                    args: {'count': viewers},
+                    count: viewers,
+                  ),
                 ),
-              ),
-              Text(activityText(strings)),
-              if (overflow)
-                Text(strings.resolve(MessageKey.commandsM024)),
-              Text(
-                strings.resolve(
-                  MessageKey.commandsM025,
-                  args: {
-                    'error':
-                        errorDescriptor ??
-                        const UiMessage.local(MessageKey.commonNone),
-                  },
+                Text(activityText(strings)),
+                if (overflow) Text(strings.resolve(MessageKey.commandsM024)),
+                Text(
+                  strings.resolve(
+                    MessageKey.commandsM025,
+                    args: {
+                      'error':
+                          errorDescriptor ??
+                          const UiMessage.local(MessageKey.commonNone),
+                    },
+                  ),
                 ),
-              ),
-              Text(
-                strings.resolve(
-                  MessageKey.commandsM026,
-                  args: {'count': reconnects},
+                Text(
+                  strings.resolve(
+                    MessageKey.commandsM026,
+                    args: {'count': reconnects},
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 12),
+                Text(strings.resolve(MessageKey.commandsContextHeader)),
+                Text(
+                  strings.resolve(
+                    MessageKey.commandsContextModel,
+                    args: {
+                      'value': model is String && model.isNotEmpty
+                          ? model
+                          : unknown,
+                    },
+                  ),
+                ),
+                Text(
+                  strings.resolve(
+                    MessageKey.commandsContextUsage,
+                    args: {'value': usage},
+                  ),
+                ),
+                Text(
+                  strings.resolve(
+                    MessageKey.commandsContextLastCompression,
+                    args: {'value': lastCompression},
+                  ),
+                ),
+                Text(
+                  strings.resolve(
+                    MessageKey.commandsContextThreshold,
+                    args: {
+                      'value': threshold is int && threshold > 0
+                          ? '$threshold tokens'
+                          : unknown,
+                    },
+                  ),
+                ),
+              ],
+            ),
           ),
           actions: [
             TextButton(

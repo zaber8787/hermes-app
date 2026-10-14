@@ -4,6 +4,13 @@
 `CHANGELOG-PRIVATE.md`（不入版本庫）。`<SERVER_ORIGIN>` 代表部署者自設的
 伺服器位址。
 
+## 2026-10-14 — /status 上下文視圖與自我喚醒去重（SELFWAKE4/STATUSCTX）
+
+- `/status` 對話框新增上下文區塊：模型、context 已用／上限 token、上次壓縮時刻。資料源為 gateway 的 last-prompt 測量（反代新增唯讀端點 `GET /api/sessions/{id}/context`），取不到的欄位顯示「不確定」，不用累計 throughput 充數。
+- 自我喚醒去重：同一份排程報告在 15 分鐘冷卻窗內不再因換一次執行身分就二次准入（準入前比對正規化內容＋工作 ID，於 `BEGIN IMMEDIATE` 內）；打包的空閒 heartbeat 內容直接忽略，內容提及 sentinel 的實質報告仍合格。
+- 喚醒鏈計數：鏈上出現後續真正的人類訊息即在週期 tick 歸零（原本只在「准入且已達上限」才檢查，導致上限內靜默不歸零）；fault-fused／離線模式規則不變。
+- 修正 web 反代在 Hermes 本體更新（PM 依賴世代切換）後無法啟動的問題：`web/launch.py` 經 hermes_bootstrap 跳板進入現行依賴世代。
+
 ## 2026-10-13 — 大掃蕩季修復（FIX-A/B/C）
 
 - 安全（server 端，已熱重載上線）：通知事件路由補上鑑權，匿名請求不再列領他人事件；gzip 伴檔與媒體路由的路徑邊界收緊；上傳加累計配額。

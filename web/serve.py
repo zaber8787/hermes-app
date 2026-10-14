@@ -18,6 +18,7 @@ import sys
 from aiohttp import ClientResponse, ClientSession, ClientTimeout, web
 
 _REPO = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(_REPO))
 sys.path.insert(0, str(_REPO / "scripts"))
 import runtime_config  # noqa: E402
 
@@ -494,6 +495,25 @@ async def memories_get(request: web.Request) -> web.Response:
         {"object": "list", "files": [_memory_item(n) for n in MEMORY_FILES]})
 
 
+async def session_context_get(request: web.Request) -> web.Response:
+    """App-only read-only /status context facts, before the gateway catch-all."""
+    if not _authorized(request):
+        return _unauthorized()
+    try:
+        from compat.status_context import read_status_context
+        home = pathlib.Path(_cfg("HERMES_WEB_HOME", str(pathlib.Path.home() / ".hermes")))
+        facts = await asyncio.to_thread(
+            read_status_context, request.match_info["session_id"], home)
+    except Exception:
+        log.exception("session context backend unavailable")
+        return web.json_response(
+            {"error": {"message": "session context unavailable"}}, status=503)
+    if facts is None:
+        return web.json_response(
+            {"error": {"message": "session not found"}}, status=404)
+    return web.json_response({"object": "hermes.session.context", "context": facts})
+
+
 async def memories_put(request: web.Request) -> web.Response:
     if not _authorized(request):
         return _unauthorized()
@@ -710,6 +730,7 @@ def build_app() -> web.Application:
     # R3: management endpoints are matched BEFORE the catch-all proxy.
     app.router.add_patch("/api/skills/{name}", skills_patch)
     app.router.add_get("/api/memories", memories_get)
+    app.router.add_get("/api/sessions/{session_id}/context", session_context_get)
     app.router.add_put("/api/memories/{name}", memories_put)
     app.router.add_route("*", "/health", api_proxy)  # app 的 health 探測走反代
     app.router.add_route("*", "/api/{tail:.*}", api_proxy)
