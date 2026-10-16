@@ -57,15 +57,23 @@ printf '{"version":"%s","build":"%s","published_at":"%s"}\n' \
 # 原子翻轉：暫存 symlink + rename(2)。ln -sfn 直接改 current 不是原子操作
 # （unlink→create 之間存在指向不存在/半狀態的窗口），mv -T 才是 rename。
 ln -sfn "$DEST" "$root/web/.current.tmp.$$"
-mv -Tf "$root/web/.current.tmp.$$" "$root/web/current"
+# macOS/BSD mv 沒有 -T：目標是 symlink（或不存在）時 rename(2) 本身就是原子替換；
+# 目標若意外是實體目錄，先清掉再搬，避免被搬進目錄裡。
+if [ -e "$root/web/current" ] && [ ! -L "$root/web/current" ]; then
+  rm -rf "$root/web/current"
+fi
+mv -f "$root/web/.current.tmp.$$" "$root/web/current"
 
 # 清理：保留 current 與下一個最新的 release 讓 in-flight 請求讀完；其餘
 # 只在「一小時內沒有任何新檔」時才刪除（并发發佈/剛上传的目錄自保）。
 # 路徑一律以 $root/web 為基準（歷史版本混用了 $root 與 $root/web 兩種
 # 相對基準，build_app.sh 之後 cwd 已不在 $root，readlink 失敗直接 set -e 中止）。
 cd "$root/web"
-current_target="$(readlink current)"
-mapfile -t ordered < <(ls -1dt releases/*-web* 2>/dev/null)
+current_target="$(readlink current 2>/dev/null || true)"
+ordered=()
+while IFS= read -r _d; do
+  [ -n "$_d" ] && ordered+=("$_d")
+done < <(ls -1dt releases/*-web* 2>/dev/null)
 if [ -n "$current_target" ]; then
   rest=()
   for d in "${ordered[@]}"; do [ "$d" = "$current_target" ] || rest+=("$d"); done
