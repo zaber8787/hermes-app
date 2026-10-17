@@ -6,9 +6,15 @@ else
   HERMES_APP_ROOT="${0:A:h:h}"
 fi
 export HERMES_APP_ROOT
-export ANDROID_HOME="$HERMES_APP_ROOT/toolchain/android-sdk"
+if [ "$(uname)" = "Darwin" ] && [ -d /opt/homebrew/share/android-commandlinetools ]; then
+  # macOS：SDK/JDK 走 brew（2026-10-18），repo 內 toolchain 屬舊 Linux 機。
+  export ANDROID_HOME="/opt/homebrew/share/android-commandlinetools"
+  export JAVA_HOME="/opt/homebrew/opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+else
+  export ANDROID_HOME="$HERMES_APP_ROOT/toolchain/android-sdk"
+  export JAVA_HOME="$HERMES_APP_ROOT/toolchain/jdk/usr/lib/jvm/java-21-openjdk-amd64"
+fi
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
-export JAVA_HOME="$HERMES_APP_ROOT/toolchain/jdk/usr/lib/jvm/java-21-openjdk-amd64"
 export GRADLE_USER_HOME="$HERMES_APP_ROOT/toolchain/gradle"
 export PUB_CACHE="$HERMES_APP_ROOT/toolchain/pub-cache"
 export PATH="$HERMES_APP_ROOT/toolchain/flutter/bin:$ANDROID_HOME/cmdline-tools/latest/bin:$ANDROID_HOME/platform-tools:$JAVA_HOME/bin:$PATH"
