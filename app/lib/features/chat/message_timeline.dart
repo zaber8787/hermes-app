@@ -18,12 +18,14 @@ class MessageTimeline extends StatelessWidget {
     required this.messages,
     required this.detailed,
     this.remoteRows = const [],
+    this.liveTail = const [],
     this.wakeRowIds = const {},
     this.toolOverrides = const {},
     this.toolExclusions = const {},
     this.slotScope = '',
   });
   final List<Message> messages;
+  final List<Message> liveTail;
   final bool detailed;
 
   /// APPWAKE C: rows projected as "auto-read schedule report" system lines.
@@ -50,6 +52,7 @@ class MessageTimeline extends StatelessWidget {
     var entries = projectMessages([
       ...messages,
       ...remoteRows.map((r) => r.message),
+      ...liveTail,
     ], wakeRowIds: wakeRowIds);
     if (toolExclusions.isNotEmpty) {
       entries = entries
@@ -231,6 +234,7 @@ class MessageTimelineSliver extends StatelessWidget {
     required this.messages,
     required this.detailed,
     this.remoteRows = const [],
+    this.liveTail = const [],
     this.wakeRowIds = const {},
     this.toolOverrides = const {},
     this.toolExclusions = const {},
@@ -238,6 +242,7 @@ class MessageTimelineSliver extends StatelessWidget {
     this.reveal,
   });
   final List<Message> messages;
+  final List<Message> liveTail;
   final bool detailed;
   final Set<String> wakeRowIds;
   final List<RemoteMessageRow> remoteRows;
@@ -257,6 +262,7 @@ class MessageTimelineSliver extends StatelessWidget {
     var entries = projectMessages([
       ...messages,
       ...remoteRows.map((r) => r.message),
+      ...liveTail,
     ], wakeRowIds: wakeRowIds);
     if (toolExclusions.isNotEmpty) {
       entries = entries
@@ -708,11 +714,6 @@ class LiveTurnView extends StatelessWidget {
         slotScope: toolProjection?.scope ?? '',
       );
     }
-    final excludedLive = toolProjection?.liveToolsExcluded ?? const <int>{};
-    final shownTools = [
-      for (var i = 0; i < turn.tools.length; i++)
-        if (!excludedLive.contains(i)) i,
-    ];
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: [
@@ -735,46 +736,6 @@ class LiveTurnView extends StatelessWidget {
                 color: Theme.of(context).colorScheme.onSurfaceVariant,
               ),
             ),
-          ),
-        if (shownTools.isNotEmpty)
-          ExpansionTile(
-            initiallyExpanded: detailed,
-            title: Text(
-              strings.resolve(
-                MessageKey.timelineM010,
-                count: shownTools.length,
-              ),
-            ),
-            children: shownTools
-                .map(
-                  (i) => ExpansionTile(
-                    // Unmatched live steps key off the turn instance +
-                    // ORIGINAL index (plan §3.8): a filtered view must
-                    // never shift one step's expansion state onto another.
-                    key: ValueKey('live:${identityHashCode(turn)}#$i'),
-                    leading: Icon(
-                      turn.tools[i].completed
-                          ? Icons.check_circle_outline
-                          : Icons.hourglass_top,
-                      size: 18,
-                    ),
-                    title: Text(turn.tools[i].name),
-                    children: [
-                      ExpansionTile(
-                        title: Text(
-                          strings.resolve(MessageKey.timelineArguments),
-                        ),
-                        children: [FoldedText(turn.tools[i].arguments)],
-                      ),
-                      if (turn.tools[i].result.isNotEmpty)
-                        Padding(
-                          padding: const EdgeInsets.all(12),
-                          child: FoldedText(turn.tools[i].result),
-                        ),
-                    ],
-                  ),
-                )
-                .toList(),
           ),
         if (turn.delta.isNotEmpty || turn.finalText != null)
           Padding(

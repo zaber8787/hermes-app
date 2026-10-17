@@ -1,3 +1,4 @@
+import 'live_merge_fold.dart';
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -1068,6 +1069,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   /// lazy sliver only takes over where viewport culling pays off.
   Widget _timelineSliver({
     required List<Message> messages,
+    required List<Message> liveTail,
+    required Set<String> toolExclusions,
     required List<RemoteMessageRow> remoteRows,
     required Set<String> wakeRowIds,
     required bool detailed,
@@ -1083,6 +1086,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         sliver: SliverToBoxAdapter(
           child: MessageTimeline(
             messages: messages,
+            liveTail: liveTail,
+            toolExclusions: toolExclusions,
             remoteRows: remoteRows,
             wakeRowIds: wakeRowIds,
             detailed: detailed,
@@ -1096,6 +1101,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
       sliver: MessageTimelineSliver(
         messages: messages,
+        liveTail: liveTail,
+        toolExclusions: toolExclusions,
         remoteRows: remoteRows,
         wakeRowIds: wakeRowIds,
         detailed: detailed,
@@ -1480,6 +1487,47 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       history: c.messages,
       live: c.live,
     );
+    final live = c.live;
+    final liveTail = <Message>[
+      // Same predicate as LiveTurnView's raw branch: an EMPTY (not null)
+      // transcript also falls back to raw tools — T6 branch contract.
+      if (live != null &&
+          (live.transcript == null || live.transcript!.isEmpty) &&
+          live.tools.isNotEmpty)
+        Message(
+          id: 'live-tools',
+          role: 'assistant',
+          content: '',
+          timestamp: 1,
+          toolCalls: [
+            for (var i = 0; i < live.tools.length; i++)
+              if (!toolOverlap.liveToolsExcluded.contains(i))
+                ToolCall(
+                  'live#$i',
+                  live.tools[i].name,
+                  live.tools[i].arguments,
+                ),
+          ],
+        ),
+    ];
+    final foldExclusions = liveMergeFoldExclusions(
+      live: live,
+      activeRuns: c.observedActivity?.activeRuns ?? const [],
+      durableTail: c.messages,
+      projection: toolOverlap,
+      liveTail: liveTail,
+    );
+    final timelineOverrides = {
+      ...toolOverlap.durableOverrides,
+      for (final e in projectMessages(liveTail))
+        if (e.call != null)
+          toolSlotKeyFor(e, toolOverlap.scope): ToolViewPayload(
+            name: e.call!.name,
+            arguments: e.call!.arguments,
+            result: live!.tools[int.parse(e.call!.id.substring(5))].result,
+            timestamp: 1,
+          ),
+    };
     final attachments = ref.watch(attachmentsProvider(widget.session.id));
     final skills = ref.watch(skillsProvider).asData?.value ?? <Skill>[];
     final match = RegExp(r'(?:^|\s)/([^\s]*)$').firstMatch(input.text);
@@ -1945,10 +1993,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                 ),
                                 sliver: _timelineSliver(
                                   messages: c.messages,
+                                  liveTail: liveTail,
+                                  toolExclusions: foldExclusions,
                                   remoteRows: c.remoteRows,
                                   wakeRowIds: c.wakeRowIds,
                                   detailed: c.detailed,
-                                  toolOverrides: toolOverlap.durableOverrides,
+                                  toolOverrides: timelineOverrides,
                                   slotScope: toolOverlap.scope,
                                   revealRevision: _revealRevision,
                                   revealFocus: _revealFocus,

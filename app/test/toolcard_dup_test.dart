@@ -109,18 +109,12 @@ List<Message> durableTurn(
   String Function(int i)? texts,
 }) {
   final calls = [
-    for (var i = 1; i <= n; i++)
-      ToolCall(ids ? 'C$i' : '', 't$i', '{"i":$i}'),
+    for (var i = 1; i <= n; i++) ToolCall(ids ? 'C$i' : '', 't$i', '{"i":$i}'),
   ];
   return [
     const Message(id: '1', role: 'user', content: '舊話', timestamp: 1),
     Message(id: '2', role: 'user', content: q, timestamp: 100),
-    Message(
-      id: '3',
-      role: 'assistant',
-      toolCalls: calls,
-      timestamp: 100,
-    ),
+    Message(id: '3', role: 'assistant', toolCalls: calls, timestamp: 100),
     if (results)
       for (var i = 1; i <= n; i++)
         Message(
@@ -131,12 +125,7 @@ List<Message> durableTurn(
           content: texts?.call(i) ?? 'out$i',
           timestamp: 100,
         ),
-    Message(
-      id: '${4 + n}',
-      role: 'assistant',
-      content: '完成了',
-      timestamp: 100,
-    ),
+    Message(id: '${4 + n}', role: 'assistant', content: '完成了', timestamp: 100),
   ];
 }
 
@@ -149,27 +138,27 @@ List<Map<String, dynamic>> transcriptTurn(
   String Function(int i)? texts,
 }) => [
   wireAssistant([
-    for (var i = 1; i <= n; i++)
-      wireCall(ids ? 'C$i' : null, 't$i', {'i': i}),
+    for (var i = 1; i <= n; i++) wireCall(ids ? 'C$i' : null, 't$i', {'i': i}),
   ]),
   if (results)
     for (var i = 1; i <= n; i++)
-      wireToolResult(
-        'C$i',
-        texts?.call(i) ?? 'out$i',
-        id: 'tx$i',
-      ),
+      wireToolResult('C$i', texts?.call(i) ?? 'out$i', id: 'tx$i'),
 ];
 
 SseEvent completedFrame(List<Map<String, dynamic>> rows) => SseEvent(
   'run.completed',
-  jsonEncode({
-    'run_id': 'r1',
-    'session_id': 's',
-    'seq': 99,
-    'messages': rows,
-  }),
+  jsonEncode({'run_id': 'r1', 'session_id': 's', 'seq': 99, 'messages': rows}),
 );
+
+/// A real mid-run fixture has no finalReply assistant row.
+List<Message> durableMidRun(int n) => durableTurn(n)
+    .where(
+      (m) =>
+          !(m.role == 'assistant' &&
+              m.toolCalls.isEmpty &&
+              m.content.isNotEmpty),
+    )
+    .toList();
 
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
@@ -210,10 +199,7 @@ void main() {
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
-        child: localizedWrap(
-          ChatPage(session: session),
-          locale: AppLocale.en,
-        ),
+        child: localizedWrap(ChatPage(session: session), locale: AppLocale.en),
       ),
     );
     await tester.pump();
@@ -315,10 +301,12 @@ void main() {
       }
       for (var i = 0; i < 4; i++) {
         await tester.tap(
-          find.descendant(
-            of: find.byType(ExpansionTile),
-            matching: find.text(t(MessageKey.timelineArguments)),
-          ).at(i),
+          find
+              .descendant(
+                of: find.byType(ExpansionTile),
+                matching: find.text(t(MessageKey.timelineArguments)),
+              )
+              .at(i),
         );
         await frames(tester);
       }
@@ -380,8 +368,13 @@ void main() {
           .map((f) => f.text)
           .toList();
       for (var i = 1; i <= 4; i++) {
-        expect(shown, contains('out$i'), reason: 'fuller transcript wins '
-            'the slot but the stored rows stay untouched');
+        expect(
+          shown,
+          contains('out$i'),
+          reason:
+              'fuller transcript wins '
+              'the slot but the stored rows stay untouched',
+        );
       }
       // stored data intact — the projection never rewrites history
       expect(ctrl().messages.map((m) => m.id), ['1', '2', '3', '8']);
@@ -399,8 +392,13 @@ void main() {
         durable: durableTurn(4),
         transcript: transcriptTurn(4, texts: (i) => 'other$i'),
       );
-      expect(stepCards(tester, 4), 2, reason: 'conflict → both, no '
-          'longest-string arbitration');
+      expect(
+        stepCards(tester, 4),
+        2,
+        reason:
+            'conflict → both, no '
+            'longest-string arbitration',
+      );
       await settle(tester);
       expect(stepCards(tester, 4), 1);
       await closeAll(tester);
@@ -420,9 +418,7 @@ void main() {
       expect(stepCards(tester, 4), 0);
       expect(stepCards(tester, 2), 2);
       for (final k in [0, 1]) {
-        await tester.tap(
-          find.text(t(MessageKey.timelineM001, count: 2)).at(k),
-        );
+        await tester.tap(find.text(t(MessageKey.timelineM001, count: 2)).at(k));
         await frames(tester);
       }
       // 2 durable + 2 transcript = 4 steps on screen, none lost
@@ -431,10 +427,8 @@ void main() {
       await closeAll(tester);
     });
 
-    testWidgets('raw SSE (no call ids at all): 2+4 deliberately stays '
-        'doubled — identity cannot be proven, steps must not vanish', (
-      tester,
-    ) async {
+    testWidgets('LIVE-MERGE reverses TOOLCARD-DUP: raw SSE mid-run '
+        '2+4 becomes one honest count-4 card', (tester) async {
       repo.history = const [];
       await openPage(tester);
       await sendUi(tester, q);
@@ -442,7 +436,7 @@ void main() {
         const SseEvent('run.started', '{"run_id":"r1","session_id":"s"}'),
       );
       await tester.pump();
-      repo.post(durableTurn(2));
+      repo.post(durableMidRun(2));
       repo.active = [runOf(runId: 'r1', userText: q)];
       await tester.pump(const Duration(seconds: 6));
       await tester.pump();
@@ -456,9 +450,11 @@ void main() {
       }
       await tester.pump();
       await tester.pump();
-      // the 2 already-durable steps + the 2 live-only steps: two cards,
-      // counts honest; no fake call id is smuggled in to fake convergence
-      expect(stepCards(tester, 2), 1);
+      // LIVE-MERGE reverses the dual-card design. In-flight durable tails
+      // cannot include finalReply. finalReply+active remnants are outside
+      // the fold exemption window (see fold rules), naturally cleared by
+      // activity settlement; this test does not guard that transient.
+      expect(stepCards(tester, 2), 0);
       expect(stepCards(tester, 4), 1);
       expect(ctrl().live!.tools.length, 4);
       await closeAll(tester);
@@ -490,14 +486,15 @@ void main() {
       }
       expect(identical(ctrl().live, turn), isTrue);
       repo.events.add(
-        const SseEvent('tool.started', '{"tool_name":"t5","args":{"i":5},"seq":5}'),
+        const SseEvent(
+          'tool.started',
+          '{"tool_name":"t5","args":{"i":5},"seq":5}',
+        ),
       );
       await tester.pump();
       expect(stepCards(tester, 5), 1, reason: 'step 5 immediately visible');
       for (var i = 1; i <= 4; i++) {
-        repo.events.add(
-          const SseEvent('tool.progress', '{"delta":"x"}'),
-        );
+        repo.events.add(const SseEvent('tool.progress', '{"delta":"x"}'));
       }
       await tester.pump();
       expect(stepCards(tester, 5), 1, reason: 'progress never adds a step');
@@ -513,9 +510,14 @@ void main() {
       repo.post(durableTurn(5));
       await tester.pump(const Duration(seconds: 6));
       await tester.pump();
-      expect(stepCards(tester, 5), 2, reason: 'raw SSE without identity '
-          'legitimately stays doubled (documented downgrade), never merged '
-          'by guessing');
+      expect(
+        stepCards(tester, 5),
+        2,
+        reason:
+            'raw SSE without identity '
+            'legitimately stays doubled (documented downgrade), never merged '
+            'by guessing',
+      );
       repo.events.add(completedFrame(transcriptTurn(5)));
       await tester.pump();
       await tester.pump();
@@ -536,11 +538,17 @@ void main() {
           wireAssistant([
             for (var i = 1; i <= 3; i++) wireCall('C$i', 't$i', {'i': i}),
           ]),
-          for (var i = 1; i <= 3; i++) wireToolResult('C$i', 'out$i', id: 'tx$i'),
+          for (var i = 1; i <= 3; i++)
+            wireToolResult('C$i', 'out$i', id: 'tx$i'),
         ],
       );
-      expect(stepCards(tester, 3), 1, reason: 'deduped transcript renders '
-          'empty — the raw fallback may NOT come back');
+      expect(
+        stepCards(tester, 3),
+        1,
+        reason:
+            'deduped transcript renders '
+            'empty — the raw fallback may NOT come back',
+      );
       await settle(tester);
       await closeAll(tester);
     });
@@ -724,7 +732,9 @@ void main() {
           .map((e) => e.key)
           .toList();
       // terminal transcript arrives → same slots, payload may swap
-      repo.events.add(completedFrame(transcriptTurn(2, texts: (i) => 'full$i')));
+      repo.events.add(
+        completedFrame(transcriptTurn(2, texts: (i) => 'full$i')),
+      );
       await tester.pump();
       await tester.pump();
       final keysAfter = tester
@@ -732,15 +742,25 @@ void main() {
           .where((e) => e.entry.kind == EntryKind.tool)
           .map((e) => e.key)
           .toList();
-      expect(keysAfter, keysBefore, reason: 'slot identity survives the '
-          'winning-source swap');
+      expect(
+        keysAfter,
+        keysBefore,
+        reason:
+            'slot identity survives the '
+            'winning-source swap',
+      );
       expect(
         keysAfter.every((k) => k != null),
         isTrue,
         reason: 'HEAD had no slot keys at all — that is the red baseline',
       );
-      expect(find.text('{"i":1}'), findsOneWidget, reason: 'expansion state '
-          'must not jump onto another tool');
+      expect(
+        find.text('{"i":1}'),
+        findsOneWidget,
+        reason:
+            'expansion state '
+            'must not jump onto another tool',
+      );
       await closeAll(tester);
     });
   });
