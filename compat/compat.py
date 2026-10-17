@@ -94,7 +94,18 @@ TARGET_FINGERPRINTS = {
     "_handle_session_chat_stream": "12fc8825a0a994eb71b66f4d723fb569bf99f9b9572f1ac432e1aa924c554115",
     "_run_agent": "1a3ae2b6dd408f31d8a3c6f296739d78d26e8dbc939d0f5e585798b8b76f0840"
 }
-BACKENDS = {"base": BASE_FINGERPRINTS, "target": TARGET_FINGERPRINTS}
+# v022: hermes-agent v0.22.2 (d923a5eb48). Reviewed 2026-10-17: the upload unit's
+# store path is the async variant (same as target), the chat-stream unit's event
+# vocabulary only gained a tool.failed split, and _run_agent added defaulted
+# parameters — every wrapper assumption below still holds. Private seams have
+# separate reviewed backend tables below.
+V022_FINGERPRINTS = {
+    "_handle_artifact_upload": "6be0d300a2c970353e2beacd93835fafadc76f27c0e5f7523fb4c04ed3687042",
+    "_handle_session_chat_stream": "814a13014255e099d694936b1a247b1c03252c362c13daa34edf042b17c59307",
+    "_run_agent": "4ce2cc32292b5691a5f51f80c922ff19ff8b077ce7d0ca1831721bf0a3d905c5",
+}
+BACKENDS = {"base": BASE_FINGERPRINTS, "target": TARGET_FINGERPRINTS, "v022": V022_FINGERPRINTS}
+TARGET_LIKE = ("target", "v022")
 FINGERPRINTS = BASE_FINGERPRINTS  # historical alias: the BASELINE backend table
 _BACKEND = None
 # P5 cron bridge: the reviewed private seams this unit binds inside the cron
@@ -111,10 +122,26 @@ CRON_TARGET_FINGERPRINTS = {
     "append_delegation_delivery": "1f3ae7c407a21ddd0ed1d4381055552a3dd3dfb06113b5c8a2e002a784971757",
     "_execute_write": "62dc49ded38b85d9ab892a6110731dee16363a4bb955820d56d2749840ecba93",
 }
+# Reviewed 2026-10-17, v0.22.2 d923a5eb48: routing still returns the
+# three-part tuple; the writer still binds the matching upstream INSERT SQL.
+# _standalone_send remains present and byte-identical to TARGET.
+CRON_V022_FINGERPRINTS = {
+    **CRON_TARGET_FINGERPRINTS,
+    "_live_route_metadata": "40771f998fd58352f76d92bdec410b1eca8480e6168d6483395a0c53e95b2975",
+    "_message_row_params": "6146e1f4255082c19db1098d1cd7c007459d0393417aaeceb154a5f35396bd94",
+    "_bump_session_counters": "4bfa54a4fdee1247551ca342c2cdf9e99c4b8dca6006ffe2026292d690a18a71",
+    "append_delegation_delivery": "a1e47028944465cef5f5204b4292be4623ef120a5e0a7a45e387a338b09bbaaf",
+}
 # APPWAKE B: the SessionDB read seams the admission ledger consults.
 WAKE_TARGET_FINGERPRINTS = {
     "_read_all": "38ac6ca079f7ea8ce91fd0f0330f28de8b4d7dbd5851cfd50b05e569bfacd2ae",
     "_session_turn_lease_key": "3b82026599a02042f6fb26b65594dd59d2e98a647895f4c47cf7d07ec7e64c45",
+}
+# Reviewed 2026-10-17, v0.22.2 d923a5eb48: retrying reads still return
+# fetchall rows synchronously; the lease-key contract is byte-identical.
+WAKE_V022_FINGERPRINTS = {
+    **WAKE_TARGET_FINGERPRINTS,
+    "_read_all": "a3ef661cdfa3713aff5bb41a6494a51137d77d8a2ba45fca2a4f7ab5e853245c",
 }
 # SELFWAKE S1: the reviewed agent seam that keeps a wake's canonical input from
 # being absorbed (with the prior report's internal_notification display
@@ -123,6 +150,14 @@ WAKE_TARGET_FINGERPRINTS = {
 # breaks strict alternation.
 MERGE_TARGET_FINGERPRINTS = {
     "_merge_consecutive_users": "765e822ddf502fd4b8b5a95b300b2ccc2c950c3f68d167f2a126b55b110cbd87",
+}
+# v022 (hermes-agent v0.22.2): the merge pass gained the plain-text JSON
+# sentinel guard, MERGED_DURABLE_ROWS claims, MERGED_TURN_PREFIX, the
+# display-marker addressability fix (#94486), and a required folded= kwarg on
+# _remember_absorbed_row. Reviewed 2026-10-17; the wake wrapper below mirrors
+# THIS copy plus the SELFWAKE delta, or the pass would regress those fixes.
+MERGE_V022_FINGERPRINTS = {
+    "_merge_consecutive_users": "e44dcc6ea5dc7a606841469f3ef2a000d8e8776699311f25727f248b00820da7",
 }
 
 
@@ -190,15 +225,49 @@ def _fingerprint(target, name):
         raise RuntimeError("unknown source backend")
     actual = hashlib.sha256(inspect.getsource(inspect.unwrap(getattr(target, name))).encode()).hexdigest()
     if actual != table[name]:
-        raise RuntimeError(f"source changed: {name}")
+        # Same reload-window caveat as _detect_backend: a wrapper from a
+        # previous load can still sit on the method. Fall back to the file on
+        # disk — the fingerprint table stays the authority either way.
+        disk = _disk_digest(target, name)
+        if disk != table[name]:
+            raise RuntimeError(f"source changed: {name}")
+
+
+def _disk_digest(target, name):
+    import ast
+    import inspect as _i
+    try:
+        if isinstance(target, type):
+            path = _i.getsourcefile(target)
+        elif _i.ismodule(target):
+            path = _i.getsourcefile(target)
+        else:
+            path = _i.getsourcefile(type(target))
+        src = open(path, encoding="utf-8").read()
+        tree = ast.parse(src)
+        lines = src.splitlines(keepends=True)
+        for node in ast.walk(tree):
+            if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == name):
+                return hashlib.sha256(
+                    "".join(lines[node.lineno - 1:node.end_lineno]).encode()).hexdigest()
+        return None
+    except Exception:
+        return None
 
 
 def _cron_fingerprint(target, name):
-    if _BACKEND != "target":
+    tables = {"target": CRON_TARGET_FINGERPRINTS, "v022": CRON_V022_FINGERPRINTS}
+    table = tables.get(_BACKEND)
+    if table is None:
         raise RuntimeError("cron bridge backend not reviewed for this source")
-    actual = hashlib.sha256(inspect.getsource(inspect.unwrap(getattr(target, name))).encode()).hexdigest()
-    if actual != CRON_TARGET_FINGERPRINTS[name]:
-        raise RuntimeError(f"cron source changed: {name}")
+    actual = hashlib.sha256(
+        inspect.getsource(inspect.unwrap(getattr(target, name))).encode()).hexdigest()
+    if actual != table[name]:
+        # Hot reload may still expose our previous wrapper. The disk source
+        # must match the same reviewed whitelist; no digest is learned here.
+        if _disk_digest(target, name) != table[name]:
+            raise RuntimeError(f"cron source changed: {name}")
 
 
 def _detect_backend(cls):
@@ -208,12 +277,44 @@ def _detect_backend(cls):
         digests = {n: hashlib.sha256(
             inspect.getsource(inspect.unwrap(getattr(cls, n))).encode()).hexdigest()
             for n in BASE_FINGERPRINTS}
+        if not _detect_matches(digests):
+            # A previous load's wrappers may still sit on the class (reload
+            # re-registers before the old load fully unwinds): recompute from
+            # pristine source on disk. Still content-addressed — the table is
+            # the authority either way.
+            disk = _disk_digests(cls)
+            if _detect_matches(disk):
+                return _detect_matches(disk)
+            digests = disk if disk else digests
     except Exception:
         return None
+    log.warning("backend detect no match; live digests=%s", digests)
+    return None
+
+
+def _detect_matches(digests):
     for name, table in BACKENDS.items():
         if all(digests.get(key) == value for key, value in table.items()):
             return name
-    return None
+    return False
+
+
+def _disk_digests(cls):
+    import ast
+    try:
+        path = inspect.getsourcefile(inspect.unwrap(cls))
+        src = open(path, encoding="utf-8").read()
+        tree = ast.parse(src)
+        lines = src.splitlines(keepends=True)
+        out = {}
+        for node in ast.walk(tree):
+            if (isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name in BASE_FINGERPRINTS):
+                out[node.name] = hashlib.sha256(
+                    "".join(lines[node.lineno - 1:node.end_lineno]).encode()).hexdigest()
+        return out if len(out) == len(BASE_FINGERPRINTS) else None
+    except Exception:
+        return None
 
 
 def _abandoned(ctx):
@@ -240,7 +341,7 @@ def install(ctx):
         if state is None:
             state = {"groups": {}, "manifest": {}, "lock": threading.RLock()}
             setattr(api, _STATE, state)
-        if "backend" not in state:
+        if state.get("backend") is None:
             state["backend"] = _detect_backend(api.APIServerAdapter)
         _BACKEND = state["backend"]
         # PluginContext is recreated by loader calls; manager+plugin is the owner.
@@ -663,7 +764,7 @@ def _install_upload(tx):
     from gateway import browser_control_artifacts as artifacts
     from . import artifact_quota
     _fingerprint(api.APIServerAdapter, "_handle_artifact_upload")
-    if _BACKEND == "target":
+    if _BACKEND in TARGET_LIKE:
         _signature(api.APIServerAdapter, "_artifact_store_for_async", "self", "profile")
         tx.set(api.APIServerAdapter, "_handle_artifact_upload", _upload_target)
     else:
@@ -1914,7 +2015,7 @@ def _install_push(tx):
     from . import ntfy_notify  # noqa: F401 (the publish exits live in the helper)
     from gateway.platforms import api_server_runs as runs
     cls = api.APIServerAdapter
-    if _BACKEND != "target":
+    if _BACKEND not in TARGET_LIKE:
         raise RuntimeError("push backend not implemented for this source")
     state = getattr(api, _STATE, None)
     if state is None:
@@ -2122,7 +2223,7 @@ def _install_cron_bridge(tx):
     from hermes_state_messages import _INSERT_MESSAGE_SQL
     import hermes_state_errors as serr
     from hermes_state_messages import SessionMessagesMixin
-    if _BACKEND != "target":
+    if _BACKEND not in TARGET_LIKE:
         raise RuntimeError("cron_bridge backend not implemented for this source")
     state = getattr(api, _STATE, None)
     if state is None:
@@ -2252,11 +2353,17 @@ def _install_cron_bridge(tx):
 
 
 def _wake_fingerprint(target, name):
-    if _BACKEND != "target":
+    tables = {"target": WAKE_TARGET_FINGERPRINTS, "v022": WAKE_V022_FINGERPRINTS}
+    table = tables.get(_BACKEND)
+    if table is None:
         raise RuntimeError("wake backend not reviewed for this source")
-    actual = hashlib.sha256(inspect.getsource(inspect.unwrap(getattr(target, name))).encode()).hexdigest()
-    if actual != WAKE_TARGET_FINGERPRINTS[name]:
-        raise RuntimeError(f"wake source changed: {name}")
+    actual = hashlib.sha256(
+        inspect.getsource(inspect.unwrap(getattr(target, name))).encode()).hexdigest()
+    if actual != table[name]:
+        # Hot reload may still expose our previous wrapper. The disk source
+        # must match the same reviewed whitelist; no digest is learned here.
+        if _disk_digest(target, name) != table[name]:
+            raise RuntimeError(f"wake source changed: {name}")
 
 
 def _install_wake(tx):
@@ -2272,7 +2379,7 @@ def _install_wake(tx):
     """
     from . import auto_wake, auto_wake_store
     from hermes_state import SessionDB
-    if _BACKEND != "target":
+    if _BACKEND not in TARGET_LIKE:
         raise RuntimeError("wake backend not reviewed for this source")
     state = getattr(api, _STATE, None)
     if state is None:
@@ -2607,9 +2714,11 @@ def _install_wake(tx):
     # every other merge behaves verbatim. Wire alternation is unaffected:
     # request assembly merges the API copy regardless.
     from agent import agent_runtime_helpers as arh
+    _merge_table = (MERGE_V022_FINGERPRINTS if _BACKEND == "v022"
+                    else MERGE_TARGET_FINGERPRINTS)
     _merge_src = inspect.getsource(arh._merge_consecutive_users)
     if (hashlib.sha256(_merge_src.encode()).hexdigest()
-            != MERGE_TARGET_FINGERPRINTS["_merge_consecutive_users"]):
+            != _merge_table["_merge_consecutive_users"]):
         raise RuntimeError("wake source changed: _merge_consecutive_users")
 
     def _merge_consecutive_users_wake(pass3_messages):
@@ -2645,12 +2754,74 @@ def _install_wake(tx):
                 continue
             merged.append(msg)
         return merged, repairs
+
+    def _merge_consecutive_users_wake_v022(pass3_messages):
+        # Mirror of the v022 upstream pass (all five reviewed mechanisms)
+        # plus the SELFWAKE canonical-pair delta; see MERGE_V022_FINGERPRINTS.
+        from agent.context_compressor import _DB_PERSISTED_MARKER, split_user_originated_turn
+        from agent.conversation_compression_archive import MERGED_DURABLE_ROWS
+        from agent.message_metadata import MERGED_TURN_PREFIX
+        from hermes_state import SessionDB
+
+        def _plain_text(content):
+            # never rewrite the persisted row around undecodable content
+            return isinstance(content, str) and not content.startswith(SessionDB._CONTENT_JSON_PREFIX)
+
+        repairs = 0
+        merged = []
+        for msg in pass3_messages:
+            prev = merged[-1] if merged and isinstance(merged[-1], dict) else None
+            if (
+                prev is not None and prev.get("role") == "user"
+                and isinstance(msg, dict) and msg.get("role") == "user"
+                and split_user_originated_turn(prev)[0] is None
+                and prev.get("display_kind") != arh.STEER_DISPLAY_KIND
+                and _plain_text(prev.get("content", "")) and _plain_text(msg.get("content", ""))
+                # SELFWAKE S1 delta: a bridge-proven report followed by the
+                # canonical wake input keeps TWO durable rows.
+                and not (auto_wake.provenance_of(prev) is not None
+                         and msg.get("content") == auto_wake.CANONICAL_INPUT)
+            ):
+                prev_content, new_content = prev.get("content", ""), msg.get("content", "")
+                merged_content = (
+                    (prev_content + "\n\n" + new_content)
+                    if prev_content and new_content else (prev_content or new_content)
+                )
+                had_api_sidecar = "api_content" in prev
+                # Read before the marker is popped below. An unpersisted turn
+                # folded in ends the claim.
+                if (prev.get(_DB_PERSISTED_MARKER) or prev.get(MERGED_DURABLE_ROWS)) and msg.get(_DB_PERSISTED_MARKER):
+                    prev[MERGED_DURABLE_ROWS] = int(prev.get(MERGED_DURABLE_ROWS) or 1) + 1
+                else:
+                    prev.pop(MERGED_DURABLE_ROWS, None)
+                prev["content"] = merged_content
+                if prev_content:
+                    prev[MERGED_TURN_PREFIX] = prev_content
+                arh.drop_stale_api_content(prev)
+                if prev.get("display_kind") and not msg.get("display_kind"):
+                    marker_row_id = prev.get("_row_id")
+                    prev.pop("display_kind", None)
+                    if msg.get("_row_id") is not None:
+                        if isinstance(marker_row_id, int) and not isinstance(marker_row_id, bool):
+                            absorbed_ids = prev.setdefault("_absorbed_row_ids", [])
+                            if marker_row_id not in absorbed_ids:
+                                absorbed_ids.append(marker_row_id)
+                        prev["_row_id"] = msg["_row_id"]
+                    prev.pop(_DB_PERSISTED_MARKER, None)
+                if merged_content != prev_content or had_api_sidecar:
+                    prev.pop(_DB_PERSISTED_MARKER, None)
+                arh._remember_absorbed_row(prev, msg, folded=True)
+                repairs += 1
+                continue
+            merged.append(msg)
+        return merged, repairs
     merge_passes = list(arh._SEQUENCE_REPAIR_PASSES)
     if merge_passes[3] is not arh._merge_consecutive_users:
         raise RuntimeError("wake source changed: _SEQUENCE_REPAIR_PASSES")
-    merge_passes[3] = _merge_consecutive_users_wake
+    merge_passes[3] = (_merge_consecutive_users_wake_v022 if _BACKEND == "v022"
+                       else _merge_consecutive_users_wake)
     tx.set(arh, "_SEQUENCE_REPAIR_PASSES", tuple(merge_passes))
-    state["wake"]["merge_pass"] = _merge_consecutive_users_wake
+    state["wake"]["merge_pass"] = merge_passes[3]
 
 
 def _install_selfwake(tx):
@@ -2778,7 +2949,7 @@ class _Bridge:
 
 
 def _install_approval(tx):
-    if _BACKEND == "target":
+    if _BACKEND in TARGET_LIKE:
         return _install_approval_target(tx)
     if _BACKEND != "base":
         raise RuntimeError("approval backend not implemented for this source")
@@ -3452,7 +3623,7 @@ def _install_approval_inbox(tx):
     from tools import approval
     from gateway.platforms import api_server_runs as runs
     cls = api.APIServerAdapter
-    if _BACKEND != "target":
+    if _BACKEND not in TARGET_LIKE:
         raise RuntimeError("approval_inbox backend not implemented for this source")
     state = getattr(api, _STATE, None)
     if state is None:
@@ -3772,17 +3943,29 @@ STEER_TARGET_FINGERPRINTS = {
     "apply_pending_steer_to_tool_results":
         "082070fe6d4056f3d1d69becfec796fbd4aeaf309769cfa32592ed7cc4457f29",
 }
+# Reviewed 2026-10-17, v0.22.2 d923a5eb48: injection remains after
+# budget enforcement; flush returns only after atomic append and marker sync.
+STEER_V022_FINGERPRINTS = {
+    **STEER_TARGET_FINGERPRINTS,
+    "_finalize_tool_batch": "af2471bf1a1bc60c91f39dff52aed4e83cdaf01d2d97be6a630e96ec79d0d16c",
+    "_db_flush_write": "0af0426546434680de5d50e4e8f3b34e82476ccf0bfd2e47a15aec10a5c2db1f",
+}
 STEER_BODY_CAP = 64 * 1024
 STEER_INPUT_CAP = 8 * 1024
 
 
 def _steer_fingerprint(module, name):
-    if _BACKEND != "target":
+    tables = {"target": STEER_TARGET_FINGERPRINTS, "v022": STEER_V022_FINGERPRINTS}
+    table = tables.get(_BACKEND)
+    if table is None:
         raise RuntimeError("steer_inbox backend not reviewed for this source")
     actual = hashlib.sha256(
         inspect.getsource(inspect.unwrap(getattr(module, name))).encode()).hexdigest()
-    if actual != STEER_TARGET_FINGERPRINTS[name]:
-        raise RuntimeError(f"steer source changed: {name}")
+    if actual != table[name]:
+        # Hot reload may still expose our previous wrapper. The disk source
+        # must match the same reviewed whitelist; no digest is learned here.
+        if _disk_digest(module, name) != table[name]:
+            raise RuntimeError(f"steer source changed: {name}")
 
 
 def _steer_config_enabled() -> bool:
@@ -3805,7 +3988,7 @@ def _install_steer_inbox(tx):
     from . import steer_inbox, steer_store
     from gateway.platforms import api_server_runs as runs
     cls = api.APIServerAdapter
-    if _BACKEND != "target":
+    if _BACKEND not in TARGET_LIKE:
         raise RuntimeError("steer_inbox backend not implemented for this source")
     state = getattr(api, _STATE, None)
     if state is None:
@@ -4183,7 +4366,7 @@ def _install_notification_events(tx):
     from . import notification_events, notification_store
     from gateway.platforms import api_server_runs as runs
     cls = api.APIServerAdapter
-    if _BACKEND != "target":
+    if _BACKEND not in TARGET_LIKE:
         raise RuntimeError("notification_events backend not implemented for this source")
     state = getattr(api, _STATE, None)
     if state is None:
