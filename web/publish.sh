@@ -54,15 +54,15 @@ bash "$root/web/compress-release.sh" "$root/web/$DEST"
 printf '{"version":"%s","build":"%s","published_at":"%s"}\n' \
   "$VERSION" "$STAMP" "$(date -u +%FT%TZ)" > "$root/web/$DEST/version.json"
 
-# 原子翻轉：暫存 symlink + rename(2)。ln -sfn 直接改 current 不是原子操作
-# （unlink→create 之間存在指向不存在/半狀態的窗口），mv -T 才是 rename。
-ln -sfn "$DEST" "$root/web/.current.tmp.$$"
-# macOS/BSD mv 沒有 -T：目標是 symlink（或不存在）時 rename(2) 本身就是原子替換；
-# 目標若意外是實體目錄，先清掉再搬，避免被搬進目錄裡。
+# 翻轉：ln -sfn（-n＝no-dereference）。macOS 的 rename(2) 在 new 是
+# 「指向存在目錄的 symlink」時會把來源**搬進目錄**而不是取代連結
+# （實測於 APFS，2026-10-18），所以暫存連結＋mv 的「原子翻轉」在 Mac 上
+# 無聲失效。ln -sfn 的 unlink→symlink 窗口只有微秒級，serve.py 每請求
+# stat，最壞一個 404，遠好過永不翻轉。
 if [ -e "$root/web/current" ] && [ ! -L "$root/web/current" ]; then
   rm -rf "$root/web/current"
 fi
-mv -f "$root/web/.current.tmp.$$" "$root/web/current"
+ln -sfn "$DEST" "$root/web/current"
 
 # 清理：保留 current 與下一個最新的 release 讓 in-flight 請求讀完；其餘
 # 只在「一小時內沒有任何新檔」時才刪除（并发發佈/剛上传的目錄自保）。
