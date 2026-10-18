@@ -32,6 +32,11 @@ mkdir -p "$root/web/$DEST"
 # 只寫新目錄：rsync 無 --delete、目標恆為剛建立的空目錄——覆寫在服務檔案
 # 在這條路徑上不可能發生。
 rsync -a build/web/ "$root/web/$DEST/"
+# WEBSYNC F5 修訂（2026-10-18）：無條件覆蓋成持久 passthrough SW。flutter
+# build 產的是快取型；上一版手工換的自毀型會跟 bootstrap 的 activation
+# 等待赛跑（4s 超時＝整頁載入失敗，就是「網頁偶爾掛」的根因）。模板見
+# web/sw-passthrough.js 註解。
+cp "$root/web/sw-passthrough.js" "$root/web/$DEST/flutter_service_worker.js"
 # Embed the identity of THIS loaded bundle before the release is visible.
 # version.json is fetched later and may already belong to the NEXT release.
 python3 - "$root/web/$DEST/index.html" "$STAMP" <<'PY'
