@@ -1498,7 +1498,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           id: 'live-tools',
           role: 'assistant',
           content: '',
-          timestamp: 1,
+          // No server timestamp exists for this provisional tools row.
+          // Zero is the existing unknown-time sentinel (renders no time).
+          timestamp: 0,
           toolCalls: [
             for (var i = 0; i < live.tools.length; i++)
               if (!toolOverlap.liveToolsExcluded.contains(i))
@@ -1525,7 +1527,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
             name: e.call!.name,
             arguments: e.call!.arguments,
             result: live!.tools[int.parse(e.call!.id.substring(5))].result,
-            timestamp: 1,
+            timestamp: 0,
           ),
     };
     final attachments = ref.watch(attachmentsProvider(widget.session.id));

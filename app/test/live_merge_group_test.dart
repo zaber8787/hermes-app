@@ -1,5 +1,3 @@
-import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -48,11 +46,12 @@ ActivityRun runOf({String? runId, String status = 'running', String? userText}) 
 /// Durable MID-run shape: user row + one assistant with n calls + result
 /// rows — and NO final assistant row (the run is still going).
 List<Message> durableMidRun(int n) {
+  final ts = DateTime.now().millisecondsSinceEpoch / 1000.0 - 120;
   final calls = [for (var i = 1; i <= n; i++) ToolCall('C$i', 't$i', '{"i":$i}')];
   return [
-    const Message(id: '1', role: 'user', content: '舊話', timestamp: 1),
-    Message(id: '2', role: 'user', content: q, timestamp: 100),
-    Message(id: '3', role: 'assistant', toolCalls: calls, timestamp: 100),
+    Message(id: '1', role: 'user', content: '舊話', timestamp: ts - 100),
+    Message(id: '2', role: 'user', content: q, timestamp: ts),
+    Message(id: '3', role: 'assistant', toolCalls: calls, timestamp: ts),
     for (var i = 1; i <= n; i++)
       Message(
         id: '${3 + i}',
@@ -60,7 +59,7 @@ List<Message> durableMidRun(int n) {
         toolCallId: 'C$i',
         toolName: 't$i',
         content: 'out$i',
-        timestamp: 100,
+        timestamp: ts,
       ),
   ];
 }

@@ -978,7 +978,12 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                                   value: showHidden,
                                   onChanged: applying
                                       ? null
-                                      : (v) => setState(() => showHidden = v),
+                                      : (v) {
+                                          setState(() => showHidden = v);
+                                          if (v) {
+                                            ref.invalidate(sessionsProvider);
+                                          }
+                                        },
                                 ),
                                 Expanded(
                                   child: Text(

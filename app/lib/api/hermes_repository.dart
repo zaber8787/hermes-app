@@ -297,7 +297,12 @@ class HermesRepository {
       final json = await _json(
         'GET',
         '/api/sessions',
-        query: {'limit': '500', 'offset': '$offset', 'order': 'latest'},
+        query: {
+          'limit': '500',
+          'offset': '$offset',
+          'order': 'latest',
+          'include_hidden': 'true',
+        },
         deadline: metadataTimeout,
       );
       final page = (json['data'] as List).cast<Map>();

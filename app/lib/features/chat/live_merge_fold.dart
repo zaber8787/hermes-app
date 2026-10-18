@@ -31,8 +31,9 @@ Set<String> liveMergeFoldExclusions({
   if (!anchor.isUserTurn || user == null) return const {};
   if (user.afterId != null
       ? user.afterId.toString() != anchor.id
-      : user.text != anchor.content)
+      : user.text != anchor.content) {
     return const {};
+  }
   final entries = projectMessages(durableTail.sublist(anchorIndex));
   final tools = entries.where((e) => e.kind == EntryKind.tool).toList();
   if (tools.isEmpty) return const {};
