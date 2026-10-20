@@ -13,7 +13,10 @@ import logging
 import mimetypes
 import os
 import pathlib
+import re
 import sys
+import tempfile
+import time
 
 from aiohttp import ClientResponse, ClientSession, ClientTimeout, web
 
@@ -719,6 +722,135 @@ async def on_cleanup(_: web.Application) -> None:
         await session.close()
 
 
+# ---- ARTIFACT-PERSIST: the gateway keeps uploads as single-use artifacts
+# with a 5-minute TTL, so every history message that references one rots into
+# a 404 (dead preview, dead download button) minutes after it was sent. The
+# proxy mirrors uploaded bytes into ~/.hermes/media-archive/<id> (+ a .json
+# sidecar with filename/content-type) and serves the archive whenever the
+# gateway's own download misses. Same-origin, same Bearer gate; ids are
+# pinned to ^[0-9a-f]{32}$ so the archive path can never traverse.
+ARTIFACT_ARCHIVE = pathlib.Path(_cfg(
+    "HERMES_WEB_HOME", str(pathlib.Path.home() / ".hermes"))) / "media-archive"
+_ARTIFACT_ID = re.compile(r"^[0-9a-f]{32}$")
+# uploads also age out; 180 days keeps one school term of history honest
+# while bounding the disk.
+ARCHIVE_MAX_AGE_SECONDS = 180 * 24 * 3600
+
+
+def _archive_gc() -> None:
+    # opportunistic, runs inline on upload (single writer per file, stat-only
+    # for the rest) — no cron, no daemon, no new failure surface.
+    try:
+        cutoff = time.time() - ARCHIVE_MAX_AGE_SECONDS
+        for entry in ARTIFACT_ARCHIVE.iterdir():
+            try:
+                if entry.stat().st_mtime < cutoff:
+                    entry.unlink()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+async def artifact_upload(request: web.Request) -> web.StreamResponse:
+    if not _authorized(request):
+        return _unauthorized()
+    declared = request.content_length
+    if declared is not None and declared > MAX_BODY_BYTES:
+        return web.Response(status=413, text="request body too large",
+                            headers={"Connection": "close"})
+    ARTIFACT_ARCHIVE.mkdir(parents=True, exist_ok=True)
+    # tee to disk first, replay to the gateway from the file: the proxy never
+    # buffers a whole upload in RAM (MAX_BODY_BYTES caps the temp file too).
+    fd, tmp_name = tempfile.mkstemp(dir=ARTIFACT_ARCHIVE, prefix=".tee-")
+    total = 0
+    try:
+        with os.fdopen(fd, "wb") as tee:
+            while True:
+                chunk = await request.content.read(65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_BODY_BYTES:
+                    os.unlink(tmp_name)
+                    return web.Response(status=413, text="request body too large",
+                                        headers={"Connection": "close"})
+                tee.write(chunk)
+        headers = {k: v for k, v in request.headers.items()
+                   if k.lower() not in HOP_BY_HOP | {"content-length"}}
+        with open(tmp_name, "rb") as replay:
+            async with _client().post(API + "/v1/artifacts/upload",
+                                      data=replay, headers=headers) as up:
+                payload = await up.read()
+        if up.status == 201:
+            aid = ""
+            try:
+                meta = json.loads(payload)
+                aid = meta.get("artifact_id", "")
+            except (ValueError, AttributeError):
+                aid = ""
+            if _ARTIFACT_ID.match(aid):
+                sidecar = {"content_type": request.headers.get("Content-Type",
+                                                               "application/octet-stream"),
+                           "filename": meta.get("filename") or "",
+                           "size": total}
+                pathlib.Path(tmp_name).rename(ARTIFACT_ARCHIVE / aid)
+                (ARTIFACT_ARCHIVE / (aid + ".json")).write_text(
+                    json.dumps(sidecar), encoding="utf-8")
+                _archive_gc()
+            return web.Response(status=up.status, body=payload,
+                                content_type="application/json")
+        os.unlink(tmp_name)
+        return web.Response(status=up.status, body=payload,
+                            content_type="application/json")
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
+
+
+async def artifact_download(request: web.Request) -> web.StreamResponse:
+    if not _authorized(request):
+        return _unauthorized()
+    aid = request.match_info.get("artifact_id", "")
+    if not _ARTIFACT_ID.match(aid):
+        return web.json_response(
+            {"error": {"message": "invalid artifact id"}}, status=400)
+    # gateway first — the fresh-upload path stays byte-for-byte the old
+    # contract (single-use receipt semantics untouched).
+    headers = {k: v for k, v in request.headers.items()
+               if k.lower() not in HOP_BY_HOP}
+    async with _client().get(API + request.path_qs, headers=headers) as up:
+        if up.status == 200:
+            resp = web.StreamResponse(status=200, headers={
+                k: v for k, v in up.headers.items()
+                if k.lower() not in HOP_BY_HOP | {"transfer-encoding"}})
+            await resp.prepare(request)
+            async for chunk in up.content.iter_any():
+                await resp.write(chunk)
+            return resp
+    blob = ARTIFACT_ARCHIVE / aid
+    if not blob.is_file():
+        return web.json_response(
+            {"error": {"message": "artifact not found or expired"}}, status=404)
+    meta = {}
+    try:
+        meta = json.loads((ARTIFACT_ARCHIVE / (aid + ".json")).read_text(
+            encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    resp = web.FileResponse(blob, headers={
+        "Content-Type": meta.get("content_type") or "application/octet-stream",
+        "Cache-Control": "private, max-age=86400"})
+    if meta.get("filename"):
+        from urllib.parse import quote
+        resp.headers["Content-Disposition"] = (
+            "attachment; filename*=UTF-8''" + quote(meta["filename"]))
+    return resp
+
+
 def build_app() -> web.Application:
     # client_max_size=0：附件上傳最大 500MB，aiohttp 預設 1MB 會 413。
     # （AUDIT-18：大小閘門改由 api_proxy 在讀前自己把守——MAX_BODY_BYTES
@@ -733,6 +865,9 @@ def build_app() -> web.Application:
     app.router.add_get("/api/sessions/{session_id}/context", session_context_get)
     app.router.add_put("/api/memories/{name}", memories_put)
     app.router.add_route("*", "/health", api_proxy)  # app 的 health 探測走反代
+    # ARTIFACT-PERSIST：專用路由必須註冊在 /v1/* 泛Route之前
+    app.router.add_post("/v1/artifacts/upload", artifact_upload)
+    app.router.add_get("/v1/artifacts/download/{artifact_id}", artifact_download)
     app.router.add_route("*", "/api/{tail:.*}", api_proxy)
     app.router.add_route("*", "/v1/{tail:.*}", api_proxy)
     app.router.add_get("/", static_handler)
