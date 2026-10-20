@@ -436,7 +436,15 @@ class HermesRepository {
     final json = await _json(
       'GET',
       '/api/sessions/${Uri.encodeComponent(sid)}/messages',
-      query: {'order': 'latest', 'limit': '$limit', 'offset': '$offset'},
+      // History scroll-to-top must reach pre-compaction rows: get_messages
+      // hides compacted lineage by default, so the whole stored history is
+      // invisible without this flag (zaber: "scroll to top loads nothing").
+      query: {
+        'order': 'latest',
+        'limit': '$limit',
+        'offset': '$offset',
+        'include_compacted': 'true',
+      },
       deadline: metadataTimeout,
     );
     return (json['data'] as List)
