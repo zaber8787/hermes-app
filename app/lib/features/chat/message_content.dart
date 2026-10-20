@@ -101,9 +101,15 @@ class _ServerPathImageState extends ConsumerState<ServerPathImage> {
     }
     _repo = repo;
     _path = widget.path;
+    // IMGVIEW-DEDUP: artifact ids already dedupe through cachedArtifact;
+    // plain server paths went straight to the wire, so a state rebuild
+    // (list virtualization) re-fired the download on every pass — a wedged
+    // path (file gone) turned each rebuild wave into a request storm. Same
+    // in-flight memory: concurrent identities share one GET, late rebuilds
+    // never stampede.
     _future = artifactIdPattern.hasMatch(widget.path)
         ? cachedArtifact(repo, widget.path)
-        : repo.downloadServerFile(widget.path);
+        : cachedServerFile(repo, widget.path);
   }
 
   @override
@@ -655,6 +661,47 @@ Future<Uint8List> cachedArtifact(
       _downloads.remove(key);
     }
   });
+}
+
+/// IMGVIEW-DEDUP: in-flight + short failure-cooldown dedupe for
+/// /v1/media/download fetches. In-flight state hangs on the repository
+/// INSTANCE (Expando), so an identity swap always re-fetches (IMGPERF A1
+/// contract) while rebuilds of one identity share a single GET. A path that
+/// just failed cools down for 30s globally instead of re-firing on every
+/// list rebuild — vanished files were a request storm.
+final Expando<Map<String, Future<Uint8List>>> _serverInflight =
+    Expando('serverFileInflight');
+final Map<String, DateTime> _serverFileCooldown = {};
+
+Future<Uint8List> cachedServerFile(HermesRepository repo, String path) {
+  final key = '${sha256.convert(utf8.encode(repo.baseUrl)).toString()}#file#$path';
+  final failedAt = _serverFileCooldown[key];
+  if (failedAt != null &&
+      DateTime.now().difference(failedAt) < const Duration(seconds: 30)) {
+    return Future.error(StateError('recent download failure: $path'));
+  }
+  var slot = _serverInflight[repo];
+  if (slot == null) {
+    slot = <String, Future<Uint8List>>{};
+    _serverInflight[repo] = slot;
+  }
+  final inflight = slot;
+  final existing = inflight[path];
+  if (existing != null) return existing;
+  final future = () async {
+    try {
+      final bytes = await repo.downloadServerFile(path);
+      _serverFileCooldown.remove(key);
+      return bytes;
+    } catch (_) {
+      _serverFileCooldown[key] = DateTime.now();
+      rethrow;
+    } finally {
+      inflight.remove(path);
+    }
+  }();
+  inflight[path] = future;
+  return future;
 }
 
 class AttachmentTile extends ConsumerStatefulWidget {
