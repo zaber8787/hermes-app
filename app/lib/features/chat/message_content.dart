@@ -1,4 +1,7 @@
 import 'dart:collection';
+import 'dart:typed_data';
+import 'package:http/http.dart' as http;
+import 'image_viewer.dart';
 import 'dart:convert';
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -98,7 +101,9 @@ class _ServerPathImageState extends ConsumerState<ServerPathImage> {
     }
     _repo = repo;
     _path = widget.path;
-    _future = repo.downloadServerFile(widget.path);
+    _future = artifactIdPattern.hasMatch(widget.path)
+        ? cachedArtifact(repo, widget.path)
+        : repo.downloadServerFile(widget.path);
   }
 
   @override
@@ -128,26 +133,45 @@ class _ServerPathImageState extends ConsumerState<ServerPathImage> {
             child: Center(child: CircularProgressIndicator()),
           );
         }
-        return MessageImageMemory(snapshot.data!);
+        return MessageImageMemory(
+          snapshot.data!,
+          source: widget.path,
+          filename: widget.filename,
+        );
       },
     );
   }
 }
 
-/// Bytes-from-download rendering sharing MessageImage's chrome is overkill
-/// here: the tile-level tap-to-zoom lives in AttachmentTile; inline is
-/// contain-fit like every other image in the timeline.
+/// Reuse downloaded pixels when opening the full-screen viewer.
 class MessageImageMemory extends StatelessWidget {
-  const MessageImageMemory(this.bytes, {super.key});
+  const MessageImageMemory(
+    this.bytes, {
+    super.key,
+    this.source = '',
+    this.filename,
+  });
   final Uint8List bytes;
+  final String source;
+  final String? filename;
   @override
   Widget build(BuildContext context) => Padding(
     padding: const EdgeInsets.symmetric(vertical: 4),
-    child: Image.memory(
-      bytes,
-      fit: BoxFit.contain,
-      errorBuilder: (c, e, s) =>
-          LocalizedText(UiMessage.local(MessageKey.contentM005)),
+    child: GestureDetector(
+      onTap: () => openImageViewer(
+        context,
+        source,
+        ViewerImage(
+          safeFilename(filename ?? source.split('/').last),
+          () async => bytes,
+        ),
+      ),
+      child: Image.memory(
+        bytes,
+        fit: BoxFit.contain,
+        errorBuilder: (c, e, s) =>
+            LocalizedText(UiMessage.local(MessageKey.contentM005)),
+      ),
     ),
   );
 }
@@ -210,73 +234,178 @@ Future<void> openMessageLink(BuildContext context, String value) async {
   }
 }
 
-class MessageContent extends StatelessWidget {
+class MessageContent extends ConsumerWidget {
   const MessageContent(this.text, {super.key});
   final String text;
   @override
-  Widget build(BuildContext context) => SelectionArea(
-    child: Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: splitMessageContent(text).map((part) {
-        if (part.media) {
-          if (isImageReference(part.value)) return MessageImage(part.value);
-          // OPENPERF P3 (定案2): history ships MEDIA REFERENCES. An image
-          // reference renders inline through the download endpoint (one
-          // file per view — never 13 MB of JSON on the list GET); a miss
-          // (old gateway 404, deleted file) degrades to the download tile.
-          if (looksLikeServerPath(part.value) &&
-              _serverImagePath.hasMatch(part.value)) {
-            return ServerPathImage(part.value, filename: part.filename);
-          }
-          return AttachmentTile(part.value, filename: part.filename);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final repo = ref.watch(repositoryProvider);
+    final sources = <String>[];
+    final filenames = <String, String>{};
+    for (final part in splitMessageContent(text)) {
+      if (part.media &&
+          (isImageReference(part.value) ||
+              _serverImagePath.hasMatch(part.value) ||
+              (artifactIdPattern.hasMatch(part.value) &&
+                  _serverImagePath.hasMatch(part.filename ?? '')))) {
+        sources.add(part.value);
+        if (part.filename != null) {
+          filenames[part.value] = safeFilename(part.filename!);
         }
-        final value = part.value.trim();
-        if (value.isEmpty) return const SizedBox.shrink();
-        if (value.startsWith('data:image/') && !value.contains(RegExp(r'\s'))) {
-          return MessageImage(value);
+      } else if (!part.media) {
+        if (part.value.trim().startsWith('data:image/')) {
+          sources.add(part.value.trim());
         }
-        return GptMarkdown(
-          linkifyBareUrls(value),
-          onLinkTap: (url, _) => openMessageLink(context, url),
-          imageBuilder: (context, url, width, height) => MessageImage(url),
-          codeBuilder: (context, language, code, closed) => Container(
-            width: double.infinity,
-            margin: const EdgeInsets.symmetric(vertical: 8),
-            padding: const EdgeInsets.all(12),
-            color: Theme.of(context).colorScheme.surfaceContainerHighest,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Row(
+        for (final match in RegExp(
+          r'!\[[^\]]*\]\(([^\s)]+)(?:\s+[^)]*)?\)',
+        ).allMatches(part.value)) {
+          sources.add(match.group(1)!);
+        }
+      }
+    }
+    return MessageGallery(
+      images: {
+        for (final source in sources)
+          source: ViewerImage(
+            filenames[source] ?? _imageName(source),
+            () => _loadImage(repo, source),
+          ),
+      },
+      child: SelectionArea(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: splitMessageContent(text).map((part) {
+            if (part.media) {
+              if (isImageReference(part.value)) return MessageImage(part.value);
+              // OPENPERF P3 (定案2): history ships MEDIA REFERENCES. An image
+              // reference renders inline through the download endpoint (one
+              // file per view — never 13 MB of JSON on the list GET); a miss
+              // (old gateway 404, deleted file) degrades to the download tile.
+              if ((looksLikeServerPath(part.value) &&
+                      _serverImagePath.hasMatch(part.value)) ||
+                  (artifactIdPattern.hasMatch(part.value) &&
+                      _serverImagePath.hasMatch(part.filename ?? ''))) {
+                return ServerPathImage(part.value, filename: part.filename);
+              }
+              return AttachmentTile(part.value, filename: part.filename);
+            }
+            final value = part.value.trim();
+            if (value.isEmpty) return const SizedBox.shrink();
+            if (value.startsWith('data:image/') &&
+                !value.contains(RegExp(r'\s'))) {
+              return MessageImage(value);
+            }
+            return GptMarkdown(
+              linkifyBareUrls(value),
+              onLinkTap: (url, _) => openMessageLink(context, url),
+              imageBuilder: (context, url, width, height) => MessageImage(url),
+              codeBuilder: (context, language, code, closed) => Container(
+                width: double.infinity,
+                margin: const EdgeInsets.symmetric(vertical: 8),
+                padding: const EdgeInsets.all(12),
+                color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Expanded(child: Text(language)),
-                    IconButton(
-                      tooltip: AppStrings.of(
-                        context,
-                      ).resolve(MessageKey.contentM002),
-                      icon: const Icon(Icons.copy, size: 18),
-                      onPressed: () => copyWithFeedback(
-                        context,
+                    Row(
+                      children: [
+                        Expanded(child: Text(language)),
+                        IconButton(
+                          tooltip: AppStrings.of(
+                            context,
+                          ).resolve(MessageKey.contentM002),
+                          icon: const Icon(Icons.copy, size: 18),
+                          onPressed: () => copyWithFeedback(
+                            context,
+                            code,
+                            const UiMessage.local(MessageKey.contentM002),
+                          ),
+                        ),
+                      ],
+                    ),
+                    SingleChildScrollView(
+                      scrollDirection: Axis.horizontal,
+                      child: SelectableText(
                         code,
-                        const UiMessage.local(MessageKey.contentM002),
+                        style: const TextStyle(fontFamily: 'monospace'),
                       ),
                     ),
                   ],
                 ),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: SelectableText(
-                    code,
-                    style: const TextStyle(fontFamily: 'monospace'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      }).toList(),
-    ),
-  );
+              ),
+            );
+          }).toList(),
+        ),
+      ),
+    );
+  }
+}
+
+String _imageName(String source) {
+  try {
+    if (source.startsWith('data:')) {
+      final type = UriData.parse(
+        source,
+      ).mimeType.split('/').last.split('+').first;
+      return safeFilename('hermes-image.$type');
+    }
+    return safeFilename(
+      Uri.tryParse(source)?.pathSegments.lastOrNull ?? 'hermes-image.png',
+    );
+  } catch (_) {
+    return 'hermes-image.png';
+  }
+}
+
+Future<Uint8List> _loadImage(HermesRepository repo, String source) async {
+  if (source.startsWith('data:image/')) {
+    if (source.length > 32 * 1024 * 1024) throw const FormatException();
+    final decoded = _decodeDataUrl(source);
+    if (decoded == null) throw const FormatException();
+    return decoded.bytes;
+  }
+  if (artifactIdPattern.hasMatch(source)) return cachedArtifact(repo, source);
+  final uri = Uri.parse(source);
+  final base = Uri.parse(repo.baseUrl);
+  final own = !uri.hasScheme || uri.origin == base.origin;
+  final artifact = RegExp(
+    r'^/v1/artifacts/download/([0-9a-f]{32})$',
+  ).firstMatch(uri.path);
+  if (own && artifact != null) {
+    return repo.downloadAttachment(artifact.group(1)!);
+  }
+  if (own &&
+      uri.path == '/v1/media/download' &&
+      uri.queryParameters['path'] != null) {
+    return repo.downloadServerFile(uri.queryParameters['path']!);
+  }
+  if (!uri.hasScheme && looksLikeServerPath(source)) {
+    return repo.downloadServerFile(source);
+  }
+  if (!['http', 'https'].contains(uri.scheme) || uri.userInfo.isNotEmpty) {
+    throw const FormatException();
+  }
+  final client = http.Client();
+  try {
+    final request = http.Request('GET', uri)..followRedirects = false;
+    if (own) request.headers['Authorization'] = 'Bearer ${repo.key}';
+    final response = await client
+        .send(request)
+        .timeout(const Duration(seconds: 30));
+    if (response.statusCode != 200) throw const FormatException();
+    final bytes = BytesBuilder(copy: false);
+    await for (final chunk in response.stream.timeout(
+      const Duration(seconds: 30),
+    )) {
+      if (bytes.length + chunk.length > attachmentMaxBytes) {
+        throw const FormatException();
+      }
+      bytes.add(chunk);
+    }
+    return bytes.takeBytes();
+  } finally {
+    client.close();
+  }
 }
 
 // IMGPERF A2: an inline data URL's base64→bytes conversion is pure CPU on the
@@ -339,6 +468,9 @@ class MessageImage extends ConsumerStatefulWidget {
 }
 
 class _MessageImageState extends ConsumerState<MessageImage> {
+  Future<Uint8List>? _remote;
+  String? _remoteSource;
+  HermesRepository? _remoteRepo;
   bool _saving = false;
   UiMessage? _notice;
 
@@ -415,14 +547,31 @@ class _MessageImageState extends ConsumerState<MessageImage> {
       }
       final uri = Uri.tryParse(widget.source);
       if (uri == null ||
-          !['http', 'https'].contains(uri.scheme) ||
+          (!['http', 'https'].contains(uri.scheme) && uri.scheme.isNotEmpty) ||
           uri.userInfo.isNotEmpty) {
         return local(MessageKey.contentM008);
       }
-      return Image.network(
-        widget.source,
-        fit: BoxFit.contain,
-        errorBuilder: failure,
+      final repo = ref.read(repositoryProvider);
+      if (_remote == null ||
+          _remoteSource != widget.source ||
+          !identical(_remoteRepo, repo)) {
+        _remoteSource = widget.source;
+        _remoteRepo = repo;
+        _remote = _loadImage(repo, widget.source);
+      }
+      return FutureBuilder<Uint8List>(
+        future: _remote,
+        builder: (context, snapshot) {
+          if (snapshot.hasError) return local(MessageKey.contentM005);
+          if (!snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          return Image.memory(
+            snapshot.data!,
+            fit: BoxFit.contain,
+            errorBuilder: failure,
+          );
+        },
       );
     } catch (_) {
       return local(MessageKey.contentM007);
@@ -440,33 +589,14 @@ class _MessageImageState extends ConsumerState<MessageImage> {
           button: true,
           child: GestureDetector(
             behavior: HitTestBehavior.opaque,
-            onTap: () => Navigator.push(
+            onTap: () => openImageViewer(
               context,
-              MaterialPageRoute<void>(
-                builder: (context) => Scaffold(
-                  appBar: AppBar(
-                    title: Text(
-                      AppStrings.of(context).resolve(MessageKey.contentM010),
-                    ),
-                    actions: [
-                      if (_isDataUrl)
-                        IconButton(
-                          tooltip: AppStrings.of(
-                            context,
-                          ).resolve(MessageKey.contentM011),
-                          onPressed: _saving ? null : _save,
-                          icon: Icon(
-                            _saving
-                                ? Icons.hourglass_top
-                                : Icons.download_outlined,
-                          ),
-                        ),
-                    ],
-                  ),
-                  body: Center(
-                    child: InteractiveViewer(maxScale: 5, child: _image()),
-                  ),
-                ),
+              widget.source,
+              ViewerImage(
+                _imageName(widget.source),
+                () =>
+                    _remote ??
+                    _loadImage(ref.read(repositoryProvider), widget.source),
               ),
             ),
             child: SizedBox(

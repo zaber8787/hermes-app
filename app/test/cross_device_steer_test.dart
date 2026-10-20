@@ -125,11 +125,7 @@ ActivityRun remoteRun(String runId, String status) => ActivityRun(
   source: 'runs_api',
 );
 
-Future<void> until(
-  bool Function() cond,
-  String why, {
-  int tries = 800,
-}) async {
+Future<void> until(bool Function() cond, String why, {int tries = 800}) async {
   for (var i = 0; i < tries && !cond(); i++) {
     await Future<void>.delayed(const Duration(milliseconds: 2));
   }
@@ -178,59 +174,12 @@ void main() {
 
   MessageKey keyOf(UiMessage? m) => (m! as UiLocal).key;
 
-  test('R2 decision table: running/approval steerable, queued/stopping/terminal not', () {
-    final running = classifyRemoteSteer(
-      remoteRun('r', 'running'),
-      now: t,
-      lastActivitySuccess: t,
-      syncInterval: const Duration(seconds: 60),
-      requestedSessionId: sid,
-      snapshotSessionId: sid,
-      resolvedSessionId: sid,
-      epoch: 'e1',
-      isLocallyRepresented: false,
-    );
-    final approval = classifyRemoteSteer(
-      remoteRun('r', 'waiting_for_approval'),
-      now: t,
-      lastActivitySuccess: t,
-      syncInterval: const Duration(seconds: 60),
-      requestedSessionId: sid,
-      snapshotSessionId: sid,
-      resolvedSessionId: sid,
-      epoch: 'e1',
-      isLocallyRepresented: false,
-    );
-    expect(running, RemoteRunSteerKind.steerable);
-    expect(approval, RemoteRunSteerKind.approvalWait);
-    for (final status in ['queued', 'stopping', 'completed', 'failed']) {
-      expect(
-        classifyRemoteSteer(
-          remoteRun('r', status),
-          now: t,
-          lastActivitySuccess: t,
-          syncInterval: const Duration(seconds: 60),
-          requestedSessionId: sid,
-          snapshotSessionId: sid,
-          resolvedSessionId: sid,
-          epoch: 'e1',
-          isLocallyRepresented: false,
-        ).toString().contains(status == 'queued'
-            ? 'queued'
-            : status == 'stopping'
-            ? 'stopping'
-            : 'terminal'),
-        isTrue,
-        reason: '$status must not be steerable',
-      );
-    }
-  });
-
-  test('stale evidence or missing identity proves NOTHING (invalidIdentity)', () {
-    expect(
-      classifyRemoteSteer(
+  test(
+    'R2 decision table: running/approval steerable, queued/stopping/terminal not',
+    () {
+      final running = classifyRemoteSteer(
         remoteRun('r', 'running'),
-        now: t.add(const Duration(minutes: 5)),
+        now: t,
         lastActivitySuccess: t,
         syncInterval: const Duration(seconds: 60),
         requestedSessionId: sid,
@@ -238,58 +187,165 @@ void main() {
         resolvedSessionId: sid,
         epoch: 'e1',
         isLocallyRepresented: false,
-      ),
-      RemoteRunSteerKind.invalidIdentity,
-    );
-    expect(
-      classifyRemoteSteer(
-        remoteRun('r', 'running'),
+      );
+      final approval = classifyRemoteSteer(
+        remoteRun('r', 'waiting_for_approval'),
         now: t,
         lastActivitySuccess: t,
         syncInterval: const Duration(seconds: 60),
         requestedSessionId: sid,
         snapshotSessionId: sid,
-        resolvedSessionId: '', // empty resolved = incomplete identity
+        resolvedSessionId: sid,
         epoch: 'e1',
         isLocallyRepresented: false,
-      ),
-      RemoteRunSteerKind.invalidIdentity,
-    );
-  });
+      );
+      expect(running, RemoteRunSteerKind.steerable);
+      expect(approval, RemoteRunSteerKind.approvalWait);
+      for (final status in ['queued', 'stopping', 'completed', 'failed']) {
+        expect(
+          classifyRemoteSteer(
+            remoteRun('r', status),
+            now: t,
+            lastActivitySuccess: t,
+            syncInterval: const Duration(seconds: 60),
+            requestedSessionId: sid,
+            snapshotSessionId: sid,
+            resolvedSessionId: sid,
+            epoch: 'e1',
+            isLocallyRepresented: false,
+          ).toString().contains(
+            status == 'queued'
+                ? 'queued'
+                : status == 'stopping'
+                ? 'stopping'
+                : 'terminal',
+          ),
+          isTrue,
+          reason: '$status must not be steerable',
+        );
+      }
+    },
+  );
 
-  test('capability off: no submit, honest notReady, legacy untouched', () async {
-    repo.feature = null;
-    final c = await attached(scripted());
-    final outcome = await c.submitRemoteSteer(c.steerTargets.first, 'go left');
-    expect(outcome.kind, RemoteSteerKind.notReady);
-    expect(repo.submits, isEmpty);
-    c.dispose();
-  });
+  test(
+    'stale evidence or missing identity proves NOTHING (invalidIdentity)',
+    () {
+      expect(
+        classifyRemoteSteer(
+          remoteRun('r', 'running'),
+          now: t.add(const Duration(minutes: 5)),
+          lastActivitySuccess: t,
+          syncInterval: const Duration(seconds: 60),
+          requestedSessionId: sid,
+          snapshotSessionId: sid,
+          resolvedSessionId: sid,
+          epoch: 'e1',
+          isLocallyRepresented: false,
+        ),
+        RemoteRunSteerKind.invalidIdentity,
+      );
+      expect(
+        classifyRemoteSteer(
+          remoteRun('r', 'running'),
+          now: t,
+          lastActivitySuccess: t,
+          syncInterval: const Duration(seconds: 60),
+          requestedSessionId: sid,
+          snapshotSessionId: sid,
+          resolvedSessionId: '', // empty resolved = incomplete identity
+          epoch: 'e1',
+          isLocallyRepresented: false,
+        ),
+        RemoteRunSteerKind.invalidIdentity,
+      );
+    },
+  );
 
-  test('running remote: accepted receipt, no chat traffic, card tracked', () async {
-    final c = await attached(scripted());
-    final outcome = await c.submitRemoteSteer(c.steerTargets.first, 'go left');
-    expect(outcome.kind, RemoteSteerKind.accepted);
-    expect(c.steerReceipts, hasLength(1));
-    expect(c.steerReceipts.single.state, SteerState.accepted);
-    expect(repo.submits.single['client_request_id'], isNotNull);
-    expect(repo.chatCalls, 0);
-    c.dispose();
-  });
+  test(
+    'STEERVIS: stale evidence keeps remote rows visible but blocks steer',
+    () async {
+      var now = t;
+      final c = await attached(
+        ChatController(
+          repo,
+          store,
+          sid,
+          now: () => now,
+          connectivity: () => ConnectivityHint.online,
+        ),
+      );
+      addTearDown(c.dispose);
+      expect(c.remoteBusy, isTrue);
+      expect(c.steerTargets, isNotEmpty);
+      now = now.add(ChatController.syncInterval + const Duration(seconds: 1));
+      expect(c.activityEvidenceFreshNow, isFalse);
+      expect(c.remoteBusy, isTrue);
+      expect(c.steerTargets, isEmpty);
+      expect(repo.submits, isEmpty);
+    },
+  );
 
-  test('socket-unknown keeps the SAME id for the retry and never chat-sends', () async {
-    final c = await attached(scripted());
-    repo.submitError = const SocketErrorish();
-    final first = await c.submitRemoteSteer(c.steerTargets.first, 'go left');
-    expect(first.kind, RemoteSteerKind.unconfirmed);
-    expect(repo.submits, hasLength(1));
-    final key = repo.submits.single['client_request_id'];
-    final retry = await c.retrySteerDraft('r1');
-    expect(retry.kind, RemoteSteerKind.accepted);
-    expect(repo.submits[1]['client_request_id'], key);
-    expect(repo.chatCalls, 0);
-    c.dispose();
-  });
+  test(
+    'STEERVIS: empty API observation cannot supply a background steer target',
+    () async {
+      repo.active = [];
+      final c = await attached(scripted());
+      addTearDown(c.dispose);
+      expect(c.remoteBusy, isFalse);
+      expect(c.steerTargets, isEmpty);
+      expect(repo.submits, isEmpty);
+      expect(repo.chatCalls, 0);
+    },
+  );
+
+  test(
+    'capability off: no submit, honest notReady, legacy untouched',
+    () async {
+      repo.feature = null;
+      final c = await attached(scripted());
+      final outcome = await c.submitRemoteSteer(
+        c.steerTargets.first,
+        'go left',
+      );
+      expect(outcome.kind, RemoteSteerKind.notReady);
+      expect(repo.submits, isEmpty);
+      c.dispose();
+    },
+  );
+
+  test(
+    'running remote: accepted receipt, no chat traffic, card tracked',
+    () async {
+      final c = await attached(scripted());
+      final outcome = await c.submitRemoteSteer(
+        c.steerTargets.first,
+        'go left',
+      );
+      expect(outcome.kind, RemoteSteerKind.accepted);
+      expect(c.steerReceipts, hasLength(1));
+      expect(c.steerReceipts.single.state, SteerState.accepted);
+      expect(repo.submits.single['client_request_id'], isNotNull);
+      expect(repo.chatCalls, 0);
+      c.dispose();
+    },
+  );
+
+  test(
+    'socket-unknown keeps the SAME id for the retry and never chat-sends',
+    () async {
+      final c = await attached(scripted());
+      repo.submitError = const SocketErrorish();
+      final first = await c.submitRemoteSteer(c.steerTargets.first, 'go left');
+      expect(first.kind, RemoteSteerKind.unconfirmed);
+      expect(repo.submits, hasLength(1));
+      final key = repo.submits.single['client_request_id'];
+      final retry = await c.retrySteerDraft('r1');
+      expect(retry.kind, RemoteSteerKind.accepted);
+      expect(repo.submits[1]['client_request_id'], key);
+      expect(repo.chatCalls, 0);
+      c.dispose();
+    },
+  );
 
   test('offline: the draft is kept, NOTHING is sent anywhere', () async {
     hint = ConnectivityHint.offline;
@@ -306,116 +362,145 @@ void main() {
     c.dispose();
   });
 
-  test('two runs mint distinct first-attempt ids (never one id reused)', () async {
-    repo.active = [remoteRun('r1', 'running'), remoteRun('r2', 'running')];
-    final c = await attached(scripted());
-    await c.submitRemoteSteer(c.steerTargetForRun('r1')!, 'left');
-    await c.submitRemoteSteer(c.steerTargetForRun('r2')!, 'right');
-    expect(
-      repo.submits.map((e) => e['client_request_id']).toSet(),
-      hasLength(2),
-    );
-    c.dispose();
-  });
+  test(
+    'two runs mint distinct first-attempt ids (never one id reused)',
+    () async {
+      repo.active = [remoteRun('r1', 'running'), remoteRun('r2', 'running')];
+      final c = await attached(scripted());
+      await c.submitRemoteSteer(c.steerTargetForRun('r1')!, 'left');
+      await c.submitRemoteSteer(c.steerTargetForRun('r2')!, 'right');
+      expect(
+        repo.submits.map((e) => e['client_request_id']).toSet(),
+        hasLength(2),
+      );
+      c.dispose();
+    },
+  );
 
-  test('run_not_ready / queue_full / conflict keep the draft, no new id', () async {
-    final c = await attached(scripted());
-    repo.accepting = false;
-    repo.acceptingReason = 'run_not_ready';
-    var outcome = await c.submitRemoteSteer(c.steerTargets.first, 'go left');
-    expect(outcome.kind, RemoteSteerKind.notReady);
-    expect(keyOf(outcome.message), MessageKey.steerUnavailable);
-    repo.accepting = true;
-    repo.acceptingReason = '';
-    outcome = await c.retrySteerDraft('r1');
-    expect(outcome.kind, RemoteSteerKind.accepted);
-    expect(repo.submits, hasLength(1)); // the precheck path never POSTed
-    c.dispose();
-  });
+  test(
+    'run_not_ready / queue_full / conflict keep the draft, no new id',
+    () async {
+      final c = await attached(scripted());
+      repo.accepting = false;
+      repo.acceptingReason = 'run_not_ready';
+      var outcome = await c.submitRemoteSteer(c.steerTargets.first, 'go left');
+      expect(outcome.kind, RemoteSteerKind.notReady);
+      expect(keyOf(outcome.message), MessageKey.steerUnavailable);
+      repo.accepting = true;
+      repo.acceptingReason = '';
+      outcome = await c.retrySteerDraft('r1');
+      expect(outcome.kind, RemoteSteerKind.accepted);
+      expect(repo.submits, hasLength(1)); // the precheck path never POSTed
+      c.dispose();
+    },
+  );
 
-  test('closed race: notReady/closed wording, durable draft retained, never "read"', () async {
-    final c = await attached(scripted());
-    await c.submitRemoteSteer(c.steerTargets.first, 'go left');
-    expect(repo.submits, hasLength(1));
-    repo.accepting = false;
-    repo.acceptingReason = 'run_closed';
-    final second = await c.submitRemoteSteer(c.steerTargets.first, 'again');
-    expect(second.kind, RemoteSteerKind.closed);
-    expect(keyOf(second.message), MessageKey.steerNotDelivered);
-    c.dispose();
-  });
+  test(
+    'closed race: notReady/closed wording, durable draft retained, never "read"',
+    () async {
+      final c = await attached(scripted());
+      await c.submitRemoteSteer(c.steerTargets.first, 'go left');
+      expect(repo.submits, hasLength(1));
+      repo.accepting = false;
+      repo.acceptingReason = 'run_closed';
+      final second = await c.submitRemoteSteer(c.steerTargets.first, 'again');
+      expect(second.kind, RemoteSteerKind.closed);
+      expect(keyOf(second.message), MessageKey.steerNotDelivered);
+      c.dispose();
+    },
+  );
 
-  test('poll failure NEVER reads as empty: receipts stay unconfirmed', () async {
-    final c = await attached(scripted());
-    await c.submitRemoteSteer(c.steerTargets.first, 'go left');
-    repo.listingError = ApiException('listing down', 500);
-    await c.refreshActivity();
-    await until(() => c.steerUnconfirmedRuns.isNotEmpty, 'unconfirmed');
-    expect(c.steerReceipts, hasLength(1)); // not laundered away
-    c.dispose();
-  });
+  test(
+    'poll failure NEVER reads as empty: receipts stay unconfirmed',
+    () async {
+      final c = await attached(scripted());
+      await c.submitRemoteSteer(c.steerTargets.first, 'go left');
+      repo.listingError = ApiException('listing down', 500);
+      await c.refreshActivity();
+      await until(() => c.steerUnconfirmedRuns.isNotEmpty, 'unconfirmed');
+      expect(c.steerReceipts, hasLength(1)); // not laundered away
+      c.dispose();
+    },
+  );
 
-  test('delivered receipt retires when the exact batch row is in history', () async {
-    final c = await attached(scripted());
-    await c.submitRemoteSteer(c.steerTargets.first, 'go left');
-    final steerId = repo.receipts['r1']!.single['steer_id'];
-    repo.receipts['r1']![0]['state'] = 'delivered';
-    repo.receipts['r1']![0]['batch_id'] = 'b1';
-    await c.refreshActivity(); // poll merges delivered
-    await until(() => c.steerReceipts.isEmpty, 'delivered retire');
-    expect(steerId, isNotNull);
-    c.dispose();
-  });
+  test(
+    'delivered receipt retires when the exact batch row is in history',
+    () async {
+      final c = await attached(scripted());
+      await c.submitRemoteSteer(c.steerTargets.first, 'go left');
+      final steerId = repo.receipts['r1']!.single['steer_id'];
+      repo.receipts['r1']![0]['state'] = 'delivered';
+      repo.receipts['r1']![0]['batch_id'] = 'b1';
+      await c.refreshActivity(); // poll merges delivered
+      await until(() => c.steerReceipts.isEmpty, 'delivered retire');
+      expect(steerId, isNotNull);
+      c.dispose();
+    },
+  );
 
-  test('history provenance identity retires the matching receipt card', () async {
-    final c = await attached(scripted());
-    await c.submitRemoteSteer(c.steerTargets.first, 'go left');
-    // The batch row lands in history with its SERVER-MINTED identity.
-    final batchId = 'batch-xyz';
-    c.messages = [
-      Message(
-        id: 'row1',
-        role: 'user',
-        content: 'go left',
-        displayKind: 'steer',
-        steerProvenance: SteerProvenance(
-          runId: 'r1',
-          batchId: batchId,
-          items: const [
-            SteerProvenanceItem(steerId: 'st_x', sequence: 1, input: 'go left'),
-          ],
+  test(
+    'history provenance identity retires the matching receipt card',
+    () async {
+      final c = await attached(scripted());
+      await c.submitRemoteSteer(c.steerTargets.first, 'go left');
+      // The batch row lands in history with its SERVER-MINTED identity.
+      final batchId = 'batch-xyz';
+      c.messages = [
+        Message(
+          id: 'row1',
+          role: 'user',
+          content: 'go left',
+          displayKind: 'steer',
+          steerProvenance: SteerProvenance(
+            runId: 'r1',
+            batchId: batchId,
+            items: const [
+              SteerProvenanceItem(
+                steerId: 'st_x',
+                sequence: 1,
+                input: 'go left',
+              ),
+            ],
+          ),
         ),
-      ),
-    ];
-    repo.receipts['r1']![0]['batch_id'] = batchId;
-    await c.refreshActivity();
-    await until(() => c.steerReceipts.isEmpty, 'batch-identity retire');
-    expect(repo.chatCalls, 0);
-    c.dispose();
-  });
+      ];
+      repo.receipts['r1']![0]['batch_id'] = batchId;
+      await c.refreshActivity();
+      await until(() => c.steerReceipts.isEmpty, 'batch-identity retire');
+      expect(repo.chatCalls, 0);
+      c.dispose();
+    },
+  );
 
-  test('text similarity NEVER retires: same words, different batch stays', () async {
-    final c = await attached(scripted());
-    await c.submitRemoteSteer(c.steerTargets.first, 'go left');
-    c.messages = [
-      Message(
-        id: 'row1',
-        role: 'user',
-        content: 'go left', // identical TEXT
-        steerProvenance: SteerProvenance(
-          runId: 'r1',
-          batchId: 'a-different-batch',
-          items: const [
-            SteerProvenanceItem(steerId: 'st_other', sequence: 9, input: 'go left'),
-          ],
+  test(
+    'text similarity NEVER retires: same words, different batch stays',
+    () async {
+      final c = await attached(scripted());
+      await c.submitRemoteSteer(c.steerTargets.first, 'go left');
+      c.messages = [
+        Message(
+          id: 'row1',
+          role: 'user',
+          content: 'go left', // identical TEXT
+          steerProvenance: SteerProvenance(
+            runId: 'r1',
+            batchId: 'a-different-batch',
+            items: const [
+              SteerProvenanceItem(
+                steerId: 'st_other',
+                sequence: 9,
+                input: 'go left',
+              ),
+            ],
+          ),
         ),
-      ),
-    ];
-    await c.refreshActivity();
-    await Future<void>.delayed(const Duration(milliseconds: 30));
-    expect(c.steerReceipts, hasLength(1));
-    c.dispose();
-  });
+      ];
+      await c.refreshActivity();
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      expect(c.steerReceipts, hasLength(1));
+      c.dispose();
+    },
+  );
 
   test('target identity drift: stale target refuses before any POST', () async {
     final c = await attached(scripted());

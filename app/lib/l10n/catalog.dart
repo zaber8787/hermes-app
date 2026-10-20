@@ -232,6 +232,10 @@ const Map<MessageKey, String> catalogEn = {
       'Stop this run started by another device or source',
   MessageKey.chatStopRemoteRequested: 'Stop requested; checking status',
   MessageKey.steerAction: 'Steer',
+  MessageKey.steerActivityHelp: 'Steering and run status',
+  MessageKey.steerActivityCoverage:
+      'No remote run is currently reported. Scheduled jobs and background workers may not report their status here. A Steer button appears when a run target is available.',
+  MessageKey.steerActivityRefresh: 'Check run status',
   MessageKey.steerPickRun: 'Choose a run to steer',
   MessageKey.steerNextBoundary:
       'Applied after the next tool step; if the run ends first, it remains undelivered.',
@@ -762,6 +766,10 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatStopRemoteHelp: '停止其他裝置或來源啟動的此項運行',
   MessageKey.chatStopRemoteRequested: '已送出停止請求，正在核對狀態',
   MessageKey.steerAction: '插話',
+  MessageKey.steerActivityHelp: '插話與執行狀態',
+  MessageKey.steerActivityCoverage:
+      '目前未收到遠端執行回報。排程或背景工作可能尚未回報狀態；有可用的執行目標時，這裡會顯示「插話」按鈕。',
+  MessageKey.steerActivityRefresh: '重新確認執行狀態',
   MessageKey.steerPickRun: '選擇要插話的執行',
   MessageKey.steerNextBoundary: '將在下一個工具步驟處理；若先結束，插話會保留為未送達。',
   MessageKey.steerAccepted: '插話 #{sequence}：待處理',

@@ -22,6 +22,7 @@ import '../settings/management_page.dart';
 import 'approval_inbox_view.dart';
 import 'notification_inbox.dart';
 import 'remote_steer.dart';
+import 'remote_activity_notice.dart';
 import 'run_link.dart';
 import 'chat_controller.dart';
 import 'client_commands.dart';
@@ -690,11 +691,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
         ),
       );
     }
-    return IconButton(
+    return TextButton.icon(
       key: ValueKey('chat.remoteSteer.$runId'),
       onPressed: () => unawaited(_steerDialog(c, runId)),
-      tooltip: strings.resolve(MessageKey.steerAction),
-      icon: const Icon(Icons.chat_bubble_outline),
+      label: Text(strings.resolve(MessageKey.steerAction)),
+      icon: const Icon(Icons.chat_bubble_outline, size: 18),
     );
   }
 
@@ -1687,6 +1688,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   Padding(
                     padding: const EdgeInsets.all(12),
                     child: Text(strings.resolve(MessageKey.chatM015)),
+                  ),
+                if (!c.busy && !c.remoteBusy && c.steerInboxEnabled)
+                  RemoteActivityNotice(
+                    strings: strings,
+                    onRefresh: c.refreshActivity,
                   ),
                 if (c.remoteBusy)
                   Padding(

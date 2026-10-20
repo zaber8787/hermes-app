@@ -447,6 +447,9 @@ enum MessageKey {
 
   // ---- STEERWEB R8: cross-device steer + notification events ----
   steerAction,
+  steerActivityHelp,
+  steerActivityCoverage,
+  steerActivityRefresh,
   steerPickRun,
   steerNextBoundary,
   steerAccepted,
