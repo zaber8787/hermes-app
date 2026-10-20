@@ -140,6 +140,7 @@ enum MessageKey {
   // ---- SILENCE-DROP §3.3: quiet-stream waiting / neutral check / unconfirmed
   chatStreamWaiting,
   chatStreamQuiet,
+  chatStreamPolling,
   chatStreamChecking,
   chatStreamUnconfirmed,
 

@@ -203,6 +203,8 @@ const Map<MessageKey, String> catalogEn = {
   // ---- SILENCE-DROP §3.3: quiet-stream waiting / neutral check / unconfirmed
   MessageKey.chatStreamWaiting:
       'Waiting for a reply (no output for {seconds}s)',
+  MessageKey.chatStreamPolling:
+      'Stream interrupted; checking progress periodically. Your message will not be resent.',
   MessageKey.chatStreamQuiet:
       'No stream updates for 30s. The connection may be interrupted; status will be checked if silence continues. The message will not be resent.',
   MessageKey.chatStreamChecking:
@@ -740,6 +742,7 @@ const Map<MessageKey, String> catalogZhHant = {
 
   // ---- SILENCE-DROP §3.3: quiet-stream waiting / neutral check / unconfirmed
   MessageKey.chatStreamWaiting: '等待回覆（無輸出 {seconds} 秒）',
+  MessageKey.chatStreamPolling: '串流暫時中斷，已改用定期更新；訊息不會重送。',
   MessageKey.chatStreamQuiet: '30 秒未收到串流更新，連線可能中斷；若持續靜默將核對狀態，不會重送訊息。',
   MessageKey.chatStreamChecking: '暫未收到串流更新，{seconds} 秒後核對歷史；不會重送訊息。',
   MessageKey.chatStreamUnconfirmed: '尚無法確認這回合的結果。請使用「重新核對」確認。',

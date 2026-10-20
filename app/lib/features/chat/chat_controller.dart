@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/widgets.dart';
+import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import '../../diagnostics/diagnostics.dart';
 import '../../api/hermes_repository.dart';
 import '../../api/transport.dart' show DispatchObservation, TransportStage;
@@ -216,8 +217,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     DateTime Function()? now,
     ConnectivityHint Function()? connectivity,
     StoreTxCapability Function()? txCapability,
+    @visibleForTesting bool? webStreamRecovery,
   }) : wait = wait ?? ((duration) => Future<void>.delayed(duration)),
        serverUrl = serverUrl ?? repo.baseUrl,
+       _webStreamRecovery = webStreamRecovery ?? kIsWeb,
        _now = now ?? DateTime.now,
        _connectivity = connectivity ?? currentConnectivityHint,
        _txCapability = txCapability ?? (() => storeTxCapability),
@@ -1416,6 +1419,25 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// run as having no viewer (that arms its ntfy push and the run keeps
   /// executing); a poll timer replaces the stream until a terminal status.
   final Duration watchInterval;
+  final bool _webStreamRecovery;
+  bool _streamPolling = false;
+  bool get streamPolling => _streamPolling;
+
+  // N=1: a failed POST may already have started a run. Never retry it.
+  void _beginStreamPolling() {
+    if (_streamPolling) return;
+    _streamPolling = true;
+    _dispatchInFlight = false;
+    ++_recoveryEpoch;
+    _recovery = null;
+    _silenceWatch?.cancel();
+    repo.releaseStreamKeepalive(sid);
+    phase = ChatPhase.recovering;
+    _ensurePollTimer();
+    unawaited(_pollRun(fresh: true));
+    notifyListeners();
+  }
+
   bool _detached = false;
   bool _pollCapped = false;
   bool _pollTickBusy = false; // single-flight guard for _pollRun (AUDIT-11)
@@ -2026,6 +2048,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final runId = turn?.runId;
     _pollTickBusy = true;
     try {
+      if (_streamPolling && !_detached) {
+        await _activityTick(); // same revision-driven livemerge, even hidden
+        if (!_owns(token)) return;
+      }
       await _pollRunBody(turn, token, runId);
     } finally {
       if (!_disposed) _pollTickBusy = false;
@@ -2156,6 +2182,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     if (!_owns(token) || !identical(live, turn)) return;
     _pollFails = 0;
     final state = status['status'];
+    if (_streamPolling &&
+        turn != null &&
+        state is String &&
+        _knownTerminalStatuses.contains(state)) {
+      await _convergeKnownTerminal(token, turn, state: state, status: status);
+      return;
+    }
     if (state == 'completed' || state == 'cancelled') {
       _watchTimer?.cancel();
       _watchTimer = null;
@@ -2849,8 +2882,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// A missing transport heartbeat is distinct from a live stream with no
   /// business output. Warn at 30s; the read-only watchdog still runs at 75s.
-  UiMessage? get streamQuietNotice =>
-      phase == ChatPhase.sending && !backgrounded && !_detached && _quietStream
+  UiMessage? get streamQuietNotice => _streamPolling
+      ? const UiMessage.local(MessageKey.chatStreamPolling)
+      : phase == ChatPhase.sending &&
+            !backgrounded &&
+            !_detached &&
+            _quietStream
       ? const UiMessage.local(MessageKey.chatStreamQuiet)
       : null;
 
@@ -4653,6 +4690,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _stopRunId = null;
     _stopFails = 0;
     _detached = false;
+    _streamPolling = false;
     _pollCapped = false;
     _pollTickBusy = false;
     stopBusy = false;
@@ -4812,6 +4850,15 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // behind it (_settleCore already cleared _recovery while busy is still
     // true mid-publish).
     if (identical(_settledTurn, _turnToken)) return Future.value();
+    if (_webStreamRecovery &&
+        live != null &&
+        (cause == RecoveryCause.streamEnded ||
+            cause == RecoveryCause.streamError ||
+            _streamPolling)) {
+      _noteRecoveryCause(cause);
+      _beginStreamPolling();
+      return Future.value();
+    }
     if (_recovery != null) {
       _noteRecoveryCause(cause); // upgrade wording, never fork a loop
       return _recovery!;
