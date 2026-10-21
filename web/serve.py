@@ -851,6 +851,15 @@ async def artifact_download(request: web.Request) -> web.StreamResponse:
     return resp
 
 
+async def assetlinks(request: web.Request) -> web.StreamResponse:
+    # Android App Links 驗證檔：必須在靜態回退之前由專屬路由服務，
+    # 否則會被 SPA 回退餵成 index.html（Google 驗證收 HTML 直接失敗）。
+    # 內容是 debug key 指紋；換 signing key 就要同步更新此檔。
+    body = (_REPO / "web" / "assetlinks.json").read_bytes()
+    return web.Response(body=body, content_type="application/json",
+                        headers={"Cache-Control": "no-cache"})
+
+
 def build_app() -> web.Application:
     # client_max_size=0：附件上傳最大 500MB，aiohttp 預設 1MB 會 413。
     # （AUDIT-18：大小閘門改由 api_proxy 在讀前自己把守——MAX_BODY_BYTES
@@ -859,6 +868,8 @@ def build_app() -> web.Application:
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
     app.router.add_get("/healthz", healthz)
+    # App Links 驗證檔優先於靜態回退（见 assetlinks handler 註解）
+    app.router.add_get("/.well-known/assetlinks.json", assetlinks)
     # R3: management endpoints are matched BEFORE the catch-all proxy.
     app.router.add_patch("/api/skills/{name}", skills_patch)
     app.router.add_get("/api/memories", memories_get)

@@ -1,0 +1,1 @@
+[{"relation": ["delegate_permission/common.handle_all_urls"], "target": {"namespace": "android_app", "package_name": "dev.hermes.hermes_app", "sha256_cert_fingerprints": ["CC:61:7A:92:2B:F8:26:93:CD:02:7C:20:DB:43:A9:EA:93:31:4D:D7:77:3E:CB:80:4A:72:4B:0F:F2:9B:BC:8F"]}}]
