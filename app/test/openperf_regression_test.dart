@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_app/l10n/app_locale.dart';
@@ -104,23 +105,32 @@ void main() {
     tester,
   ) async {
     repo.history = heavy;
-    final sw = Stopwatch()..start();
+    // Keep the existing application shell while opening a cold session.
+    // No history/markdown/ChatPage is constructed before the stopwatch.
+    final page = ValueNotifier<Widget>(const SizedBox());
     await tester.pumpWidget(
       UncontrolledProviderScope(
         container: container,
         child: localizedWrap(
-          ChatPage(session: sessionA),
+          ValueListenableBuilder<Widget>(
+            valueListenable: page,
+            builder: (_, child, _) => child,
+          ),
           locale: AppLocale.zhHant,
         ),
       ),
     );
+    await tester.pumpAndSettle();
+    final sw = Stopwatch()..start();
+    page.value = ChatPage(session: sessionA);
     await tester.pump();
     await tester.pump();
-    await tester.pumpAndSettle(const Duration(milliseconds: 100));
+    await tester.pumpAndSettle(const Duration(milliseconds: 16));
     sw.stop();
+    debugPrint('RENDERX coldInteractiveMs=${sw.elapsedMilliseconds}');
     // Relaxed from the ~1.9s/4.9s baseline; the ceiling only has to stay
     // clearly below an eager full page.
-    expect(sw.elapsedMilliseconds, lessThan(2500));
+    expect(sw.elapsedMilliseconds, lessThan(300));
     // The HARD structural pin: a first build that builds every row fails
     // here even on a machine fast enough to pass the timing gate.
     // Viewport + cacheExtent never needs more than a few dozen rows.
@@ -132,6 +142,8 @@ void main() {
         .map((e) => e.entry.message.id)
         .toList();
     expect(built, contains('m199'));
+    await tester.pumpWidget(const SizedBox());
+    page.dispose();
   });
 
   testWidgets('content of swept-but-unrevealed rows stays unbuilt (P4 pin)', (

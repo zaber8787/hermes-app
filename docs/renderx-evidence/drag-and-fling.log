@@ -1,0 +1,9 @@
+00:00 +0: loading /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart
+00:00 +0: fling toward history keeps a smooth trajectory (no per-frame teleports), drag=40.0
+RENDERX motion: frames=70 peakWidgets=63 peakRows=1 peakPumpUs=3997
+RENDERX maxStep=40.0 maxExtentStep=203.38760000015827
+00:00 +1: fling toward history keeps a smooth trajectory (no per-frame teleports), drag=120.0
+RENDERX motion: frames=70 peakWidgets=121 peakRows=2 peakPumpUs=5205
+RENDERX maxStep=120.0 maxExtentStep=203.38760000015827
+00:00 +2: load-older converges without oscillation
+00:01 +3: All tests passed!

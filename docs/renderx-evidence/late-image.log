@@ -1,0 +1,5 @@
+00:00 +0: loading /Users/zaber/hermes-app/app/test/renderx_instruments/row_geometry_test.dart
+00:00 +0: late downloaded pixels keep viewport row height until scroll idle
+00:00 +1: descendant-only layout publishes height without ancestor rebuild
+00:00 +2: extent memory follows ExpansionTile animation and collapse
+00:00 +3: All tests passed!

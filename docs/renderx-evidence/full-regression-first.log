@@ -1,0 +1,995 @@
+Resolving dependencies...
+Downloading packages...
+  android_file_picker 1.1.1 (2.1.1 available)
+  code_assets 1.2.1 (2.1.0 available)
+  cross_file 0.3.5+5 (0.4.0 available)
+  dbus 0.7.15 (0.8.0 available)
+  file_picker 12.3.0 (13.1.0 available)
+  file_picker_darwin 1.2.0 (2.3.2 available)
+  file_picker_linux 1.1.0 (2.0.2 available)
+  file_picker_platform_interface 3.4.0 (4.2.0 available)
+  file_picker_web 3.1.0 (4.2.0 available)
+  flutter_secure_storage 10.3.3 (11.2.0 available)
+  flutter_secure_storage_darwin 0.3.2 (0.4.3 available)
+  flutter_secure_storage_platform_interface 2.1.0 (2.1.1 available)
+  hooks 2.0.2 (2.2.0 available)
+  jni 1.0.3 (1.1.0 available)
+  jni_flutter 1.0.3 (1.0.4+1 available)
+  material_color_utilities 0.13.0 (0.13.1 available)
+  objective_c 9.5.0 (9.6.2 available)
+  record_use 0.6.0 (1.1.1 available)
+  shared_preferences 2.5.5 (2.5.6 available)
+  shared_preferences_android 2.4.28 (2.5.2 available)
+  shared_preferences_foundation 2.5.7 (2.6.0 available)
+  test_api 0.7.12 (0.7.15 available)
+  url_launcher 6.3.2 (6.3.3 available)
+  val_highlight 0.1.0 (0.1.1 available)
+  val_highlight_flutter 0.1.0 (0.1.1 available)
+  val_latex 0.1.1 (0.1.3 available)
+  val_latex_flutter 0.1.2 (0.1.3 available)
+  vector_math 2.4.0 (2.4.3 available)
+  vm_service 15.3.0 (15.4.0 available)
+  windows_file_picker 1.3.0 (2.0.1 available)
+Got dependencies!
+30 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+00:00 +0: loading /Users/zaber/hermes-app/app/test/i18n_notification_test.dart
+00:00 +0: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: syncLocale dispatch shape: map with canonical tag only
+[dbg] _setLocale running zh-Hant
+00:00 +1: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: initial sync is queued BEFORE the first start
+[dbg] _setLocale running en
+00:00 +2: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: changed-locale command serializes with stop/start, never reorders
+[dbg] _setLocale running zh-Hant
+00:00 +3: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: rapid en -> zh -> en: last committed tag wins, two calls max queued
+[dbg] _setLocale running en
+[dbg] _setLocale running zh-Hant
+[dbg] _setLocale running en
+00:00 +4: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: failure does not poison the queue: a later start still dispatches
+[dbg] _setLocale running zh-Hant
+00:00 +5: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: non-Android skips the channel entirely (web seam)
+00:00 +6: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: UI switch commits zh-Hant in place; the channel seam is the direct dispatch tests above
+[dbg] _setLocale running zh-Hant
+00:00 +7: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: mirror failure warns without reverting the committed UI
+[dbg] _setLocale running zh-Hant
+00:00 +8: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: locale bookkeeping: token stream commands unchanged by a switch
+[dbg] _setLocale running zh-Hant
+00:00 +9: loading /Users/zaber/hermes-app/app/test/repository_p2_test.dart
+00:00 +9: /Users/zaber/hermes-app/app/test/repository_p2_test.dart: renameSession sends PATCH with raw JSON title
+00:00 +10: /Users/zaber/hermes-app/app/test/repository_p2_test.dart: setSessionModel POSTs model to the session model route
+00:00 +11: /Users/zaber/hermes-app/app/test/repository_p2_test.dart: deleteSession issues DELETE
+00:00 +12: /Users/zaber/hermes-app/app/test/repository_p2_test.dart: modelOptions flattens providers with current flag
+00:00 +13: loading /Users/zaber/hermes-app/app/test/chat_controller_test.dart
+00:01 +13: /Users/zaber/hermes-app/app/test/chat_controller_test.dart: foreground bypasses recovery delay and stale SSE cannot overwrite new turn
+00:01 +14: /Users/zaber/hermes-app/app/test/chat_controller_test.dart: foreground keeps live SSE open when history is incomplete
+00:01 +15: /Users/zaber/hermes-app/app/test/chat_controller_test.dart: explicit stop remains local even when server says completed
+00:01 +16: /Users/zaber/hermes-app/app/test/chat_controller_test.dart: disconnect reconnects reads without replaying chat POST
+00:01 +17: /Users/zaber/hermes-app/app/test/chat_controller_test.dart: ambiguous disconnect is bounded, 1→30s, and prevents duplicate send
+00:01 +18: /Users/zaber/hermes-app/app/test/chat_controller_test.dart: history narration followed by another tool call is not recovered as final
+00:01 +19: loading /Users/zaber/hermes-app/app/test/ghost_dup_test.dart
+00:01 +19: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 1 — claim ledger is idempotent (B2) R3 an active claim survives repeated identical ticks
+00:02 +20: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 1 — claim ledger is idempotent (B2) R6 a claimed observation never re-takes another row; old same-text turns stay visible
+00:02 +21: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 1 — claim ledger is idempotent (B2) R8 a claim stands when its row leaves the loaded window
+00:02 +22: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 1 — identity retire on the same tick (B3 refresh) R2a run.started retires the local preview immediately, with no extra activity/history tick
+00:02 +23: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — history commits publish projections together (B1) R1 local send, run confirmed, history already carries the row: exactly ONE user entry, still sending
+00:02 +24: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — history commits publish projections together (B1) R2b listener hole: the history GET landing repaints by itself — no tick, no SSE, no manual notify
+00:02 +25: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — history commits publish projections together (B1) R9a loadOlder merges rows the remote observation can claim: the preview retires on the merge
+00:02 +26: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — history commits publish projections together (B1) R9b a bootstrap-adopted pending run never previews itself
+00:02 +27: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — unknown-identity preview arbitration (B3) R4/R7a an unknown same-text observation for THIS send is held while the pending bubble shows; durable settles it
+00:02 +28: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — unknown-identity preview arbitration (B3) R7b a different runId revealed later restores the independent preview
+00:02 +29: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — unknown-identity preview arbitration (B3) R7c/d out-of-window or different-source observations are never swallowed by the local pending
+00:02 +30: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — renderer boundaries (B4) R5 Discord observation: preview once, durable once, no resurrection while running, terminal-without-row retires
+00:02 +31: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — renderer boundaries (B4) R10 renderer identity: copy everywhere, timestamps only where durable, EntryView ids prove the source
+00:02 +32: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — renderer boundaries (B4) R11 a completed transcript never doubles the turn’s user row while history is still landing
+00:02 +33: loading /Users/zaber/hermes-app/app/test/bulk_hide_test.dart
+00:03 +33: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: SessionSelection (pure model) enter/toggle/union/clear semantics
+00:03 +34: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: SessionSelection (pure model) retainExisting drops only vanished ids and reports them
+00:03 +35: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:03 +36: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page long-press enters selection with the row picked; the menu button keeps the single-item sheet
+00:03 +37: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page select-all covers the whole filtered set across lazy rows, and filters never clear the selection (M-outside note)
+00:03 +38: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page refresh: reorder/refetch keeps ids selected; a vanished id leaves the selection with a notice
+00:04 +39: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page Escape and Back exit the selection; Back never pops the list page
+00:04 +40: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 2 — the page writes through the shared pipeline single hide from the row menu dual-writes (server PATCH + local mirror), not local-only anymore
+00:04 +41: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 2 — the page writes through the shared pipeline DELETE cleanup is pure-local: no hidden PATCH for a deleted id
+00:04 +42: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:04 +43: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar one 503 among three: summary, failed row stays selected, retry PATCHes ONLY it, then exits
+00:04 +44: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar unhide batch touches hidden=false only; pins survive untouched (incl. pinned-hidden)
+00:04 +45: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar already-at-target rows are NO-OPs: counted, not PATCHed
+00:04 +46: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar applying freezes order and controls; progress updates
+00:04 +47: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar legacy banner persists until synced; its select-then-hide pipeline retires it
+00:04 +48: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar English summary renders through the same typed catalog
+00:04 +49: loading /Users/zaber/hermes-app/app/test/auto_wake_test.dart
+00:05 +49: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: first arm baselines: existing reports never queue
+00:05 +50: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: five-condition gate: nothing else is ever a candidate
+00:05 +51: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: repeated commits + restart never double-queue
+00:05 +52: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: non-numeric ids stop auto-processing without touching the queue
+00:05 +53: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: gap: cursor never jumps ahead of proven coverage
+00:05 +54: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: NO_REPLY/HEARTBEAT_OK and empty are ignored-consumed; mentions survive
+00:05 +55: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: debounce + batch cap: <=10 per batch, ascending, remainder keeps queue
+00:05 +56: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: disable clears the queue; re-enable never replays the gap
+00:05 +57: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: lineage move keeps the delivery_key queue
+00:05 +58: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: anchor projection: receipts map their canonical row to a system line
+00:05 +59: loading /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart
+00:05 +59: /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart: /status when idle shows the long card, zero chat POSTs
+00:05 +60: /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart: /status shows measured prompt occupancy without cumulative totals
+00:05 +61: /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart: /status during bootstrap observation: SnackBar names runId
+00:06 +62: /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart: stop button is live during bootstrap observation
+00:06 +63: /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart: /stop without a runId surfaces why, never hits the model
+00:06 +64: loading /Users/zaber/hermes-app/app/test/sse_test.dart
+00:06 +64: /Users/zaber/hermes-app/app/test/sse_test.dart: UTF8 byte chunks, BOM, CRLF, comments, multiline data and frame IDs
+00:06 +65: /Users/zaber/hermes-app/app/test/sse_test.dart: multiple events per chunk and trailing frame; empty/comments ignored
+00:06 +66: /Users/zaber/hermes-app/app/test/sse_test.dart: keepalive comments survive byte/CRLF splits and stay liveness-only
+00:06 +67: /Users/zaber/hermes-app/app/test/sse_test.dart: a plain comment yields no event and never corrupts a data frame
+00:06 +68: /Users/zaber/hermes-app/app/test/sse_test.dart: keepalive-only stream produces heartbeats, nothing else
+00:06 +69: /Users/zaber/hermes-app/app/test/sse_test.dart: progress reasoning does not split delta; completed payload corrects it
+00:06 +70: /Users/zaber/hermes-app/app/test/sse_test.dart: tool start/result are paired without counting progress as a step
+00:06 +71: /Users/zaber/hermes-app/app/test/sse_test.dart: different session frames are rejected
+00:06 +72: loading /Users/zaber/hermes-app/app/test/cron_bridge_display_test.dart
+00:06 +72: /Users/zaber/hermes-app/app/test/cron_bridge_display_test.dart: internal_notification parses to a catalogued collapsed system kind
+00:06 +73: /Users/zaber/hermes-app/app/test/cron_bridge_display_test.dart: cron row renders as a system entry and never steals the turn final
+00:06 +74: /Users/zaber/hermes-app/app/test/cron_bridge_display_test.dart: consecutive user-role reports merge without inventing fake busy turns
+00:06 +75: loading /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart
+00:07 +75: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:07 +76: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: total extent stays stable while browsing (thumb does not jump wildly)
+00:07 +77: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: no placeholder band inside the settled viewport
+00:07 +78: loading /Users/zaber/hermes-app/app/test/repository_test.dart
+00:08 +78: /Users/zaber/hermes-app/app/test/repository_test.dart: messages GET has a short body deadline independent of long SSE reads
+00:08 +79: /Users/zaber/hermes-app/app/test/repository_test.dart: first session page appears before bounded legacy timestamp probe
+00:08 +80: /Users/zaber/hermes-app/app/test/repository_test.dart: HTTP session paging advances raw offset and deduplicates overlapping IDs
+00:08 +81: /Users/zaber/hermes-app/app/test/repository_test.dart: HTTP errors never expose a reflected API key
+00:08 +82: /Users/zaber/hermes-app/app/test/repository_test.dart: recent activity uses last message timestamp, not session creation time
+00:08 +83: /Users/zaber/hermes-app/app/test/repository_test.dart: stop ignores metadataTimeout while stopWithDeadline bounds the same POST
+00:08 +84: loading /Users/zaber/hermes-app/app/test/copy_feedback_test.dart
+00:09 +84: /Users/zaber/hermes-app/app/test/copy_feedback_test.dart: clipboard failure shows feedback after choosing whole message
+00:09 +85: loading /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart
+00:09 +85: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: offline hint: zero POSTs, blockedBeforeDispatch, input untouched
+00:09 +86: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: synchronous before-dispatch failure: notDispatched, zero POSTs
+00:09 +87: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: dispatchInvoked then transport throw: outcomeUnknown, never notDispatched
+00:09 +88: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: SSE-shaped headers, garbage body until EOF: unknown with status kept
+00:09 +89: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: headers 200 but NOT event-stream: unknown, status kept, no draft loss
+00:09 +90: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: heartbeat-only stream then EOF: firstEvent recorded, ack NOT set
+00:09 +91: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: business ack then drop: acknowledged + runId; observation never re-POSTs
+00:09 +92: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: one journal exception does not poison later evidence merges
+00:09 +93: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: 400 whose body drain throws: rejected with the recorded status kept
+00:09 +94: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: plain 400: rejected through the existing M023 path, status recorded
+00:09 +95: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: reload of a dispatchIntent-only record: unknown, never notDispatched
+00:09 +96: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: persist-ack failure keeps the in-memory positive evidence + notice
+00:09 +97: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: cancel/detach AFTER dispatch is never before-dispatch evidence
+00:09 +98: /Users/zaber/hermes-app/app/test/offline_delivery_evidence_test.dart: ledger-visible chat body is the contract POST, dispatched exactly once
+00:09 +99: loading /Users/zaber/hermes-app/app/test/silence_drop_ui_test.dart
+00:10 +99: /Users/zaber/hermes-app/app/test/silence_drop_ui_test.dart: waiting + silence-check ride secondary tones, never error red (en)
+00:10 +100: /Users/zaber/hermes-app/app/test/silence_drop_ui_test.dart: the same descriptors switch zh-Hant live, streams untouched
+00:10 +101: /Users/zaber/hermes-app/app/test/silence_drop_ui_test.dart: a heartbeat clears the 30s transport warning without a resend
+00:10 +102: /Users/zaber/hermes-app/app/test/silence_drop_ui_test.dart: an OBSERVED stream interruption keeps the error red
+00:11 +103: loading /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart
+00:11 +103: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:11 +104: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1 control: quiet activity without a local turn fetches nothing
+00:11 +105: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: per-run single-flight coalesces overlapping reconciles (dirty replay)
+00:11 +106: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a bumped connection generation fences a late approvals GET
+00:11 +107: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote terminal settles the inbox without fake rows
+00:11 +108: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: an answered-elsewhere pending reconciles away on the next tick
+00:11 +109: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a failed snapshot marks unconfirmed and the bounded re-poll repairs it
+00:12 +110: loading /Users/zaber/hermes-app/app/test/audit01_pick_test.dart
+00:12 +110: /Users/zaber/hermes-app/app/test/audit01_pick_test.dart: pick() stages every selected file: draft, blob and prefs each get one
+00:12 +111: /Users/zaber/hermes-app/app/test/audit01_pick_test.dart: two picked files both stage under ONE busy window
+00:12 +112: /Users/zaber/hermes-app/app/test/audit01_pick_test.dart: cancel (empty result) is a clean no-op
+00:12 +113: /Users/zaber/hermes-app/app/test/audit01_pick_test.dart: second file failing mid-read keeps the first and surfaces an error
+00:12 +114: /Users/zaber/hermes-app/app/test/audit01_pick_test.dart: oversize stream is rejected while spooling (no re-open needed)
+00:12 +115: loading /Users/zaber/hermes-app/app/test/settings_wake_test.dart
+00:12 +115: /Users/zaber/hermes-app/app/test/settings_wake_test.dart: auto-wake ships OFF: no stored preference means disabled
+00:12 +116: /Users/zaber/hermes-app/app/test/settings_wake_test.dart: settings toggle: default off; enabling persists
+00:13 +117: /Users/zaber/hermes-app/app/test/settings_wake_test.dart: pure server: toggle is OFF, inert, and says why
+00:13 +118: /Users/zaber/hermes-app/app/test/settings_wake_test.dart: session menu offers the opt-out only when offered
+00:13 +119: /Users/zaber/hermes-app/app/test/settings_wake_test.dart: pure server session menu stays silent
+00:13 +120: /Users/zaber/hermes-app/app/test/settings_wake_test.dart: queued reports surface the waiting hint
+00:13 +121: /Users/zaber/hermes-app/app/test/settings_wake_test.dart: session opt-out hides the hint
+00:13 +122: loading /Users/zaber/hermes-app/app/test/openperf_bootstrap_test.dart
+00:13 +122: /Users/zaber/hermes-app/app/test/openperf_bootstrap_test.dart: cold open reads history WITHOUT waiting for activity (P2)
+00:13 +123: /Users/zaber/hermes-app/app/test/openperf_bootstrap_test.dart: warm re-entry keeps rows, shows no spinner, refetches no page
+00:13 +124: /Users/zaber/hermes-app/app/test/openperf_bootstrap_test.dart: pending recovery settles the page with ONE latest-page GET
+00:13 +125: loading /Users/zaber/hermes-app/app/test/offline_attempt_identity_test.dart
+00:14 +125: /Users/zaber/hermes-app/app/test/offline_attempt_identity_test.dart: matcher unit — strict candidacy only for attempt-backed records M18 timestamp-0 rows: legacy may anchor, an attempt-backed hard attribution may NOT
+00:14 +126: /Users/zaber/hermes-app/app/test/offline_attempt_identity_test.dart: matcher unit — strict candidacy only for attempt-backed records M18 epoch moved: the stale numeric watermark stops excluding — repeated same text surfaces as ambiguous, never a silent pick
+00:14 +127: /Users/zaber/hermes-app/app/test/offline_attempt_identity_test.dart: matcher unit — strict candidacy only for attempt-backed records fold is candidate filtering only: attachments/tags never settle a turn on text alone
+00:14 +128: /Users/zaber/hermes-app/app/test/offline_attempt_identity_test.dart: CP face — two durable rows, one honest bubble M18: TWO durable same-text rows both render — no text match may delete or silence either real row
+00:14 +129: /Users/zaber/hermes-app/app/test/offline_attempt_identity_test.dart: CP face — two durable rows, one honest bubble M18 contrast: the UNIQUE row above the watermark retires the bubble exactly once and never respawns
+00:15 +130: /Users/zaber/hermes-app/app/test/offline_attempt_identity_test.dart: M14 — an old attempt never mutates the newer child a late business frame confirms ONLY the attempt it belongs to: A stays untouched while B runs
+00:15 +131: loading /Users/zaber/hermes-app/app/test/draft_ghost_test.dart
+00:15 +131: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:15 +132: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry after the run finished while away shows an empty box
+00:15 +133: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: unsent typed text is preserved across re-entry
+00:16 +134: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: delivered draft whose stream never surfaced is dropped
+00:16 +135: loading /Users/zaber/hermes-app/app/test/audit_wave3_admin_ui_test.dart
+00:16 +135: /Users/zaber/hermes-app/app/test/audit_wave3_admin_ui_test.dart: management page skills: switches real, essential locked, lag note
+00:16 +136: /Users/zaber/hermes-app/app/test/audit_wave3_admin_ui_test.dart: management page skills: server 400 (essential) locks the row
+00:16 +137: /Users/zaber/hermes-app/app/test/audit_wave3_admin_ui_test.dart: management page memory rows show chars/limit and mtime; model shows global
+00:16 +138: /Users/zaber/hermes-app/app/test/audit_wave3_admin_ui_test.dart: management page memory editor: save PUTs content and pops
+00:16 +139: loading /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart
+00:17 +139: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: viewer ledger: acquire/release 1->0 and the opening claim
+00:17 +140: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:17 +141: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 two routes for one sid: first pop must NOT detach
+00:17 +142: loading /Users/zaber/hermes-app/app/test/live_merge_group_test.dart
+00:18 +142: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: mid-run partial durable: EXACTLY ONE step-summary row (count 4)
+00:18 +143: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: the merged row grows honestly with each new step.started
+00:18 +144: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: detailed toggle over the merged window shows every step once
+00:18 +145: loading /Users/zaber/hermes-app/app/test/websync_f9_pending_tx_test.dart
+00:19 +145: /Users/zaber/hermes-app/app/test/websync_f9_pending_tx_test.dart: F9 authoritative re-read inside the lock second tab with a pre-claim cache cannot double-claim
+00:19 +146: /Users/zaber/hermes-app/app/test/websync_f9_pending_tx_test.dart: F9 authoritative re-read inside the lock racing claims from two tabs elect exactly one owner
+00:19 +147: /Users/zaber/hermes-app/app/test/websync_f9_pending_tx_test.dart: F9 authoritative re-read inside the lock stale-cache clear cannot delete a claim that landed after the snapshot
+00:19 +148: /Users/zaber/hermes-app/app/test/websync_f9_pending_tx_test.dart: F9 authoritative re-read inside the lock heartbeat is decided from the re-read record, not the cached one
+00:19 +149: /Users/zaber/hermes-app/app/test/websync_f9_pending_tx_test.dart: F9 authoritative re-read inside the lock recovery stamping compares against the re-read token
+00:19 +150: loading /Users/zaber/hermes-app/app/test/i18n_catalog_test.dart
+00:19 +150: /Users/zaber/hermes-app/app/test/i18n_catalog_test.dart: both locales cover every key with nonempty strings
+00:19 +151: /Users/zaber/hermes-app/app/test/i18n_catalog_test.dart: placeholders match between locales
+00:19 +152: /Users/zaber/hermes-app/app/test/i18n_catalog_test.dart: every enum key is reachable from both catalogs
+00:19 +153: /Users/zaber/hermes-app/app/test/i18n_catalog_test.dart: representative literal translations
+00:19 +154: /Users/zaber/hermes-app/app/test/i18n_catalog_test.dart: count rules: 0 and >1 plural, 1 singular (zh invariant)
+00:19 +155: /Users/zaber/hermes-app/app/test/i18n_catalog_test.dart: nested descriptors resolve recursively; raw stays byte-exact
+00:19 +156: /Users/zaber/hermes-app/app/test/i18n_catalog_test.dart: list separators are locale-specific
+00:19 +157: /Users/zaber/hermes-app/app/test/i18n_catalog_test.dart: delegate load is synchronous and locale-correct
+00:19 +158: /Users/zaber/hermes-app/app/test/i18n_catalog_test.dart: unknown resolution throws StateError, never falls back silently
+00:19 +159: loading /Users/zaber/hermes-app/app/test/audit_wave3_admin_test.dart
+00:19 +159: /Users/zaber/hermes-app/app/test/audit_wave3_admin_test.dart: R3a: mixed string/dict model entries parse; global current surfaces
+00:19 +160: /Users/zaber/hermes-app/app/test/audit_wave3_admin_test.dart: R3b: skills map parse (enabled absent = on) + PATCH toggle
+00:19 +161: /Users/zaber/hermes-app/app/test/audit_wave3_admin_test.dart: R3c: memories list parse + saveMemory PUT body
+00:19 +162: /Users/zaber/hermes-app/app/test/audit_wave3_admin_test.dart: R4: resolveApproval POSTs the choice to the run approval route
+00:19 +163: loading /Users/zaber/hermes-app/app/test/messages_compacted_param_test.dart
+00:20 +163: /Users/zaber/hermes-app/app/test/messages_compacted_param_test.dart: messages() requests the compacted lineage
+00:20 +164: loading /Users/zaber/hermes-app/app/test/audit21_pending_tabs_test.dart
+00:20 +164: /Users/zaber/hermes-app/app/test/audit21_pending_tabs_test.dart: a second tab must not POST onto a live claim
+00:20 +165: /Users/zaber/hermes-app/app/test/audit21_pending_tabs_test.dart: A completing must never wipe B's (takeover) pending
+00:20 +166: /Users/zaber/hermes-app/app/test/audit21_pending_tabs_test.dart: pre-D2 records adopt and settle unchanged (migration)
+00:20 +167: /Users/zaber/hermes-app/app/test/audit21_pending_tabs_test.dart: the recovery retry allowance is shared and single-shot across tabs
+00:20 +168: loading /Users/zaber/hermes-app/app/test/deep_link_focus_test.dart
+00:21 +168: /Users/zaber/hermes-app/app/test/deep_link_focus_test.dart: applyDeepLink: event read once, approval + run focused
+00:21 +169: loading /Users/zaber/hermes-app/app/test/p3_attachments_test.dart
+00:21 +169: /Users/zaber/hermes-app/app/test/p3_attachments_test.dart: raw upload receipt persists before message assembly; retry reuses id
+00:21 +170: /Users/zaber/hermes-app/app/test/p3_attachments_test.dart: disabled capabilities preserves draft and sends no upload
+00:21 +171: /Users/zaber/hermes-app/app/test/p3_attachments_test.dart: HTTP 400 is translated and does not echo response body
+00:21 +172: /Users/zaber/hermes-app/app/test/p3_attachments_test.dart: HTTP 404 is translated and does not echo response body
+00:21 +173: /Users/zaber/hermes-app/app/test/p3_attachments_test.dart: HTTP 413 is translated and does not echo response body
+00:21 +174: /Users/zaber/hermes-app/app/test/p3_attachments_test.dart: HTTP 415 is translated and does not echo response body
+00:21 +175: /Users/zaber/hermes-app/app/test/p3_attachments_test.dart: expired saved receipt uploads again and invalid receipt cannot compose
+00:21 +176: /Users/zaber/hermes-app/app/test/p3_attachments_test.dart: download authenticates and verifies bytes checksum
+00:21 +177: /Users/zaber/hermes-app/app/test/p3_attachments_test.dart: one-shot download is cached across concurrent taps and later saves
+00:21 +178: /Users/zaber/hermes-app/app/test/p3_attachments_test.dart: upload cannot accept a truncated receipt
+00:21 +179: /Users/zaber/hermes-app/app/test/p3_attachments_test.dart: bad download checksum rejected
+00:21 +180: loading /Users/zaber/hermes-app/app/test/sweepfixb_notification_test.dart
+00:21 +180: /Users/zaber/hermes-app/app/test/sweepfixb_notification_test.dart: temporary capability failure retries after backoff and enables inbox
+00:21 +181: /Users/zaber/hermes-app/app/test/sweepfixb_notification_test.dart: explicit watch failure is reported and can be retried
+00:21 +182: loading /Users/zaber/hermes-app/app/test/slash_test.dart
+00:22 +182: /Users/zaber/hermes-app/app/test/slash_test.dart: exact contract skill rewrite and stacked skills
+00:22 +183: /Users/zaber/hermes-app/app/test/slash_test.dart: gateway passthrough commands reach the model verbatim
+00:22 +184: /Users/zaber/hermes-app/app/test/slash_test.dart: core and unknown commands never go to the model
+00:22 +185: loading /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart
+00:22 +185: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: keepalive comments become heartbeat events
+00:22 +186: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:38 +187: loading /Users/zaber/hermes-app/app/test/session_visibility_test.dart
+00:38 +187: /Users/zaber/hermes-app/app/test/session_visibility_test.dart: applyVisibility three picked rows: exactly 3 PATCHes (set, not toggle), all mirrored, auto-clean report
+00:38 +188: /Users/zaber/hermes-app/app/test/session_visibility_test.dart: applyVisibility budgeted run: 5 in flight, release opens the 6th, error does not abort, 50 ids land exactly once
+00:38 +189: /Users/zaber/hermes-app/app/test/session_visibility_test.dart: applyVisibility one 503 among three: per-item results, mirror untouched for it, retry restates the SAME bool
+00:38 +190: /Users/zaber/hermes-app/app/test/session_visibility_test.dart: applyVisibility 404 is an explicit failure — never "hidden success"
+00:38 +191: /Users/zaber/hermes-app/app/test/session_visibility_test.dart: applyVisibility 2xx without any flag (even after readback) stays UNKNOWN: local untouched; a confirming readback retry converges without a new PATCH
+00:38 +192: /Users/zaber/hermes-app/app/test/session_visibility_test.dart: applyVisibility timeout-shaped error (no status) is UNKNOWN, local unchanged
+00:38 +193: /Users/zaber/hermes-app/app/test/session_visibility_test.dart: applyVisibility server ok + mirror refusal = localSyncFailure: NO reverse PATCH; readback retry syncs the mirror only
+00:38 +194: /Users/zaber/hermes-app/app/test/session_visibility_test.dart: applyVisibility readback-first retry with a FOREIGN server value demands a re-apply instead of silently re-PATCHing
+00:38 +195: /Users/zaber/hermes-app/app/test/session_visibility_test.dart: applyVisibility a confirmed batch records server confirmations for the resolver
+00:38 +196: loading /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart
+00:39 +196: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: successful open starts; run completion stops before socket EOF
+00:39 +197: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: two sessions use distinct leases and release independently
+00:39 +198: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: HTTP rejection never starts service
+00:39 +199: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: SSE error event and early EOF each release service exactly once
+00:39 +200: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: transport parse failure releases service
+00:39 +201: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: recovering stops service; history polling never restarts it
+00:39 +202: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: foreground final reconciled to idle releases an open stream
+00:39 +203: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: failed service start logs fgs.error and chat continues
+00:39 +204: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: stop before open suppresses start; stop during promotion is ordered
+00:39 +205: loading /Users/zaber/hermes-app/app/test/websync_f1_states_test.dart
+00:39 +205: /Users/zaber/hermes-app/app/test/websync_f1_states_test.dart: EOF mid-stream with the user row already in history: DELIVERED, never the resend bait
+00:39 +206: /Users/zaber/hermes-app/app/test/websync_f1_states_test.dart: EOF before run.started with empty history: stream unavailable — the ONLY exhausted path allowed to offer a resend
+00:39 +207: /Users/zaber/hermes-app/app/test/websync_f1_states_test.dart: neutral silence exhaustion without a runId stays unconfirmed (not delivered, not resend-baited)
+00:39 +208: /Users/zaber/hermes-app/app/test/websync_f1_states_test.dart: a KNOWN run alone is acceptance even while every history read comes back empty
+00:39 +209: /Users/zaber/hermes-app/app/test/websync_f1_states_test.dart: F1 catalog literals (bilingual)
+00:39 +210: loading /Users/zaber/hermes-app/app/test/remote_activity_notice_test.dart
+00:40 +210: /Users/zaber/hermes-app/app/test/remote_activity_notice_test.dart: empty observation explains coverage and offers a read-only check
+00:40 +211: loading /Users/zaber/hermes-app/app/test/message_projection_test.dart
+00:40 +211: /Users/zaber/hermes-app/app/test/message_projection_test.dart: three synthetic transcript shapes: final IDs and tool/result pairing
+00:40 +212: /Users/zaber/hermes-app/app/test/message_projection_test.dart: narration with tool_calls survives; hidden row never renders
+00:40 +213: /Users/zaber/hermes-app/app/test/message_projection_test.dart: only last contentful tool-free assistant per turn is final
+00:40 +214: /Users/zaber/hermes-app/app/test/message_projection_test.dart: whitelisted and future display kinds are collapsed system events
+00:40 +215: /Users/zaber/hermes-app/app/test/message_projection_test.dart: oldest/latest overlapping pages deduplicate by id, preserve equal texts
+00:40 +216: loading /Users/zaber/hermes-app/app/test/silence_drop_test.dart
+00:40 +216: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: silence beyond 75s fires the read-only recover exactly once (§4.1)
+00:41 +217: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: exactly 75s is NOT past the limit (strict >)
+00:41 +218: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: quiet-but-live stream: neutral ladder, neutral exhaustion, never a second POST (§4.2)
+00:41 +219: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: heartbeats alone keep a 20-minute run alive, silent-but-waiting (§4.3)
+00:41 +220: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: two clocks: heartbeats refresh freshness but age the waiting notice (§4.4)
+00:41 +221: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: unfinished EOF recovers as an OBSERVED interruption (§4.5)
+00:41 +222: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: non-4xx stream error recovers as an interruption (§4.5)
+00:41 +223: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: 4xx still settles with rejection — never recovery (§4.5)
+00:41 +224: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: EOF during a silence backoff upgrades the cause without a second loop (§4.5)
+00:41 +225: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: completing before the limit leaves nothing to recover (§4.6)
+00:41 +226: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: a late final during a recovery wait settles the turn (§4.6)
+00:41 +227: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: backgrounded ticks show nothing and arm no recover (§4.6)
+00:41 +228: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: detach, dispose and a new turn never inherit the notice (§4.6)
+00:41 +229: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: detach and dispose clear the notice; stale events no-op (§4.6)
+00:41 +230: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: settling retires the waiting clock for the next turn (§4.6)
+00:41 +231: /Users/zaber/hermes-app/app/test/silence_drop_test.dart: silence-drop catalog literals (§4.8)
+00:41 +232: loading /Users/zaber/hermes-app/app/test/reload_recovery_test.dart
+00:41 +232: /Users/zaber/hermes-app/app/test/reload_recovery_test.dart: tail user without pending/lost stays idle with zero polling
+00:41 +233: /Users/zaber/hermes-app/app/test/reload_recovery_test.dart: pending without runId waits on history then lands exactly one final
+00:41 +234: /Users/zaber/hermes-app/app/test/reload_recovery_test.dart: stopped run + leftover pending settles idle on first 404 (zombie fix)
+00:41 +235: /Users/zaber/hermes-app/app/test/reload_recovery_test.dart: 404 without a stop record keeps history observation (no regression)
+00:41 +236: /Users/zaber/hermes-app/app/test/reload_recovery_test.dart: stop keeps the pending evidence until the terminal settles it
+00:41 +237: /Users/zaber/hermes-app/app/test/reload_recovery_test.dart: pending with runId polls status to completion with zero POSTs
+00:41 +238: /Users/zaber/hermes-app/app/test/reload_recovery_test.dart: stale lost + final clears the persisted flag AND the banner
+00:41 +239: /Users/zaber/hermes-app/app/test/reload_recovery_test.dart: stop during bootstrap observation POSTs the pending runId and settles
+00:41 +240: /Users/zaber/hermes-app/app/test/reload_recovery_test.dart: stop 409 is treated as already-requested, polls to terminal, no error
+00:41 +241: /Users/zaber/hermes-app/app/test/reload_recovery_test.dart: stop 404 settles immediately from history without claiming a kill
+00:41 +242: /Users/zaber/hermes-app/app/test/reload_recovery_test.dart: stop without any runId is a visible no-op, never a chat POST
+00:41 +243: loading /Users/zaber/hermes-app/app/test/browser_claim_test.dart
+00:42 +243: /Users/zaber/hermes-app/app/test/browser_claim_test.dart: granted permission: claim once, show, report shown; show is NOT read
+00:42 +244: /Users/zaber/hermes-app/app/test/browser_claim_test.dart: a device that loses the claim converges locally without showing
+00:42 +245: /Users/zaber/hermes-app/app/test/browser_claim_test.dart: denied permission: panel-only, zero claims
+00:42 +246: /Users/zaber/hermes-app/app/test/browser_claim_test.dart: ntfy channel + granted permission: claim, show, report shown once
+00:42 +247: /Users/zaber/hermes-app/app/test/browser_claim_test.dart: ntfy channel + denied permission: no show, no claim, no throw
+00:42 +248: loading /Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart
+00:42 +248: /Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart: reader away from tail can return to latest without approval
+00:42 +249: /Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart: 200-message first build stays viewport-sized (P1 pin)
+RENDERX coldFirstMs=36
+00:43 +250: /Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart: load-older keeps the rows under the reader anchored
+00:43 +251: loading /Users/zaber/hermes-app/app/test/enter_send_test.dart
+00:43 +251: /Users/zaber/hermes-app/app/test/enter_send_test.dart: Enter sends, Shift+Enter and IME-composing Enter do not
+00:43 +252: /Users/zaber/hermes-app/app/test/enter_send_test.dart: desktop (macOS): plain Enter sends, numpad too, Shift/composing not
+00:43 +253: /Users/zaber/hermes-app/app/test/enter_send_test.dart: desktop (Windows): plain Enter sends, numpad too, Shift/composing not
+00:43 +254: /Users/zaber/hermes-app/app/test/enter_send_test.dart: desktop (Linux): plain Enter sends, numpad too, Shift/composing not
+00:43 +255: /Users/zaber/hermes-app/app/test/enter_send_test.dart: TargetPlatform.android: Enter inserts a newline (never sends) in any combo
+00:43 +256: /Users/zaber/hermes-app/app/test/enter_send_test.dart: TargetPlatform.iOS: Enter inserts a newline (never sends) in any combo
+00:43 +257: /Users/zaber/hermes-app/app/test/enter_send_test.dart: chatInputPlatform resolves on the native side of the split
+00:43 +258: loading /Users/zaber/hermes-app/app/test/widget_test.dart
+00:43 +258: /Users/zaber/hermes-app/app/test/widget_test.dart: unconfigured startup shows settings and hides key
+00:44 +259: /Users/zaber/hermes-app/app/test/widget_test.dart: saved zh-Hant startup shows the Chinese settings page
+00:44 +260: /Users/zaber/hermes-app/app/test/widget_test.dart: unknown system text and hidden content do not leak into timeline
+00:44 +261: loading /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart
+00:44 +261: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: classify: all four live statuses stoppable, stopping is NOT
+00:44 +262: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: classify: all four known terminal statuses
+00:44 +263: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: classify: unknown status never becomes a target
+00:44 +264: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: classify: null / empty / whitespace-only runId never POST-targetable
+00:44 +265: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: classify: session / resolved / epoch identity must be complete
+00:44 +266: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: classify: local representation outranks the status view
+00:44 +267: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: classify: expired evidence authenticates nothing (age boundary)
+00:44 +268: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: RemoteStopTarget: blank ids invalid, verbatim ids equal verbatim
+00:44 +269: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: RemoteStopTarget: toString is log-safe (no keys, no previews)
+00:44 +270: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller fresh SSE remote run: exact target, zero POSTs, gates unchanged
+00:44 +271: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller STOP freshness ages out on the injected clock at exactly 6s+1ms
+00:44 +272: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller stopping rows are 核对-only: shown separately, never POST targets
+00:44 +273: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller overflow: rows stay individually valid, generalization flagged
+00:44 +274: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller no targets for terminal-only, unknown status, null/empty runId
+00:44 +275: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller identity moves kill the targets: snapshot session, empty epoch / resolved
+00:44 +276: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller opaque non-numeric serverEpoch is tolerated verbatim
+00:44 +277: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller local class 1 — bootstrap-adopted pending (_bootRunId): excluded, zero POSTs
+00:44 +278: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller local class 2 — live SSE turn (activeRunId + _localOwnedRunId): excluded; only the remote row is a target
+00:44 +279: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller local class 3 — stopping watch (_stopping/_stopRunId): excluded, canStop false as baseline
+00:44 +280: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller out-of-order: older request landing LAST never overwrites the newer epoch (real quiet-round overlap)
+00:44 +281: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller out-of-order via raw overlap: seq guard alone rejects the late one
+00:44 +282: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller late response after dispose never applies (and never notifies)
+00:44 +283: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller late response after a turn/session identity handover never applies
+00:44 +284: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller late response after detach (activity epoch move) never applies
+00:44 +285: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller connection (URL/key) move: in-flight old-generation answer dies; targets carry the NEW generation
+00:44 +286: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller refresh issues a NEW request above every prior seq
+00:44 +287: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller refresh waits for the in-flight flight then FAILS honestly — the pre-click snapshot is never laundered as this click's success
+00:44 +288: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller a pre-call flight rejected by an identity move never counts as this refresh's evidence — its own re-issue decides
+00:44 +289: /Users/zaber/hermes-app/app/test/cross_device_stop_target_test.dart: controller unsupported gateway and cold-unknown read as blocks, never as stopppable silence
+00:44 +290: loading /Users/zaber/hermes-app/app/test/diagnostics_test.dart
+00:45 +290: /Users/zaber/hermes-app/app/test/diagnostics_test.dart: SSE file includes heartbeat, version, EOF and export snapshot without secrets
+00:45 +291: /Users/zaber/hermes-app/app/test/diagnostics_test.dart: rotation preserves previous file and write errors do not escape
+00:45 +292: loading /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart
+00:45 +292: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: begin-once migration table watermark-only record (id 77) is NOT a budget: begins 60s once
+00:45 +293: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: begin-once migration table empty pending begins 60s from FIRST recovery, not startedAt
+00:45 +294: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: begin-once migration table valid deadline kept verbatim; missing started back-computed
+00:45 +295: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: begin-once migration table started-only migrates to started+60 — expired stays expired
+00:45 +296: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: begin-once migration table retry-used WITHOUT deadline migrates EXPIRED, never a fresh 30s
+00:45 +297: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: begin-once migration table consume without any valid budget never mints a window
+00:45 +298: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: begin-once migration table two stores consuming the allowance: exactly one wins
+00:45 +299: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: begin-once migration table missing record / foreign token: no write, old observation ends
+00:45 +300: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: bounded waits with injected clock 60.000s expires, 59.999s does not; late 200 dies; zero POSTs
+00:45 +301: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: bounded waits with injected clock GET black hole: without runId still expires on schedule
+00:45 +302: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: bounded waits with injected clock reload adopts the REMAINING budget (20s left), then expires
+00:45 +303: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: bounded waits with injected clock started-only expired record lands uncertain immediately
+00:45 +304: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: bounded waits with injected clock retry-used broken record: immediate EXHAUSTED, no second 30s
+00:45 +305: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: bounded waits with injected clock fresh active defers the deadline; no zero-delay spin
+00:46 +306: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: bounded waits with injected clock unknown status string is NOT active: expires on schedule
+00:46 +307: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: bounded waits with injected clock foreground refresh consumes NOTHING (uncertain stays spent)
+00:46 +308: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: bounded waits with injected clock stop watch is bounded: landed stop cannot mean endless busy
+00:46 +309: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: bounded waits with injected clock bootstrap publishes local state BEFORE any GET completes
+00:46 +310: /Users/zaber/hermes-app/app/test/offline_recovery_budget_test.dart: watermark M06 end-to-end claim77 -> begin -> reload -> expire keeps deadline & water mark
+00:46 +311: loading /Users/zaber/hermes-app/app/test/audit_wave4_collapse_test.dart
+00:46 +311: /Users/zaber/hermes-app/app/test/audit_wave4_collapse_test.dart: LocalStore: defaults false; persists under the exact §3.7 key
+00:46 +312: /Users/zaber/hermes-app/app/test/audit_wave4_collapse_test.dart: collapsed Skills shows header+summary only, body offstage
+00:47 +313: /Users/zaber/hermes-app/app/test/audit_wave4_collapse_test.dart: collapse costs ZERO extra provider requests
+00:47 +314: /Users/zaber/hermes-app/app/test/audit_wave4_collapse_test.dart: Offstage preserves block state (_lockedByServer survives)
+00:47 +315: /Users/zaber/hermes-app/app/test/audit_wave4_collapse_test.dart: keyboard Enter toggles; collapse persists across a new page
+00:47 +316: /Users/zaber/hermes-app/app/test/audit_wave4_collapse_test.dart: rapid taps serialize: the LAST choice lands on disk
+00:47 +317: /Users/zaber/hermes-app/app/test/audit_wave4_collapse_test.dart: persist failure reverts the visible value and warns
+00:47 +318: /Users/zaber/hermes-app/app/test/audit_wave4_collapse_test.dart: Memory section has no fold affordance
+00:47 +319: loading /Users/zaber/hermes-app/app/test/audit05_poll_owner_test.dart
+00:47 +319: /Users/zaber/hermes-app/app/test/audit05_poll_owner_test.dart: attach first poll failing re-arms the schedule and settles
+00:48 +320: /Users/zaber/hermes-app/app/test/audit05_poll_owner_test.dart: approval after attach keeps polling and settles on answer
+00:49 +321: /Users/zaber/hermes-app/app/test/audit05_poll_owner_test.dart: transport cap lands in uncertain and retry resumes polling
+00:50 +322: /Users/zaber/hermes-app/app/test/audit05_poll_owner_test.dart: terminal with failing history settles idle and stays retryable
+00:50 +323: /Users/zaber/hermes-app/app/test/audit05_poll_owner_test.dart: attach + failing history read keeps polling until settle
+00:50 +324: /Users/zaber/hermes-app/app/test/audit05_poll_owner_test.dart: uncertain phase surfaces the 重新核對 button
+00:50 +325: loading /Users/zaber/hermes-app/app/test/audit02_media_permission_test.dart
+00:51 +325: /Users/zaber/hermes-app/app/test/audit02_media_permission_test.dart: denied: spinner closes and the 去開權限 entry is visible
+00:51 +326: /Users/zaber/hermes-app/app/test/audit02_media_permission_test.dart: denied → authorized via 去開權限 renders the grid
+00:51 +327: /Users/zaber/hermes-app/app/test/audit02_media_permission_test.dart: limited → authorized removes the stale limited banner
+00:51 +328: /Users/zaber/hermes-app/app/test/audit02_media_permission_test.dart: read error → 重試 → success shows grid, not spinner
+00:51 +329: /Users/zaber/hermes-app/app/test/audit02_media_permission_test.dart: a retried load that comes back denied sheds the stale grant
+00:51 +330: loading /Users/zaber/hermes-app/app/test/deep_link_test.dart
+00:51 +330: /Users/zaber/hermes-app/app/test/deep_link_test.dart: resolveDeepLink (exact identity) the exact session opens, carrying run/event/request verbatim
+00:51 +331: /Users/zaber/hermes-app/app/test/deep_link_test.dart: resolveDeepLink (exact identity) a deleted or other-profile session is refused, never guessed
+00:51 +332: /Users/zaber/hermes-app/app/test/deep_link_test.dart: resolveDeepLink (exact identity) hidden sessions are refused (flag AND caller rule)
+00:51 +333: /Users/zaber/hermes-app/app/test/deep_link_test.dart: resolveDeepLink (exact identity) a secret-carrying link never reaches the resolver at all
+00:51 +334: /Users/zaber/hermes-app/app/test/deep_link_test.dart: launch capture + login handoff native Uri.base never captures
+00:51 +335: /Users/zaber/hermes-app/app/test/deep_link_test.dart: launch capture + login handoff the stash spends a link exactly once
+00:51 +336: loading /Users/zaber/hermes-app/app/test/offline_send_ui_test.dart
+00:52 +336: /Users/zaber/hermes-app/app/test/offline_send_ui_test.dart: M01: offline hint blocks BEFORE dispatch — zero POSTs, draft kept, the honest not-sent card with an enabled retry affordance
+00:52 +337: /Users/zaber/hermes-app/app/test/offline_send_ui_test.dart: M14: retry of a notDispatched attempt dispatches EXACTLY ONE child (double-tap joins the same flight); the parent is consumed forever
+00:52 +338: /Users/zaber/hermes-app/app/test/offline_send_ui_test.dart: red line 1/3: an outcome-UNKNOWN attempt has NO retry affordance — retryUnsent is a structured no-op, never a POST
+00:52 +339: /Users/zaber/hermes-app/app/test/offline_send_ui_test.dart: §4.5 degradation: without RESOLVED Web Locks the retry stays DISABLED and retryUnsent refuses to post
+00:52 +340: /Users/zaber/hermes-app/app/test/offline_send_ui_test.dart: M11/§5.3: the derived presentation — pre-ack send is `dispatching` (never 發言中), acked work is `activeConfirmed`, idle is silent
+00:52 +341: /Users/zaber/hermes-app/app/test/offline_send_ui_test.dart: §5.3 failed card: a journal-only notDispatched attempt (reload shape) renders its card + an ENABLED retry button through the real ChatPage
+00:52 +342: loading /Users/zaber/hermes-app/app/test/sweepfixb_sessions_preview_test.dart
+00:52 +342: /Users/zaber/hermes-app/app/test/sweepfixb_sessions_preview_test.dart: directory renders first page while complete list is pending
+00:53 +343: loading /Users/zaber/hermes-app/app/test/approval_catchup_gate_test.dart
+00:53 +343: /Users/zaber/hermes-app/app/test/approval_catchup_gate_test.dart: X2: a transient snapshot outage is repaired READ-ONLY by the status poll
+00:54 +344: /Users/zaber/hermes-app/app/test/approval_catchup_gate_test.dart: X2: an empty-choices replay must NOT wipe populated choices
+00:54 +345: /Users/zaber/hermes-app/app/test/approval_catchup_gate_test.dart: X2: legal choices carried by status poll merge into the card (read-only)
+00:54 +346: /Users/zaber/hermes-app/app/test/approval_catchup_gate_test.dart: X2: an unconfirmed card exposes a working 「重新核對」 entry
+00:54 +347: /Users/zaber/hermes-app/app/test/approval_catchup_gate_test.dart: X2 guard: an unknown-choices pending shows state-unknown, never invented buttons
+00:54 +348: loading /Users/zaber/hermes-app/app/test/session_sort_test.dart
+00:54 +348: /Users/zaber/hermes-app/app/test/session_sort_test.dart: sortSessionRows pinned floats to the top even when older than unpinned rows
+00:54 +349: /Users/zaber/hermes-app/app/test/session_sort_test.dart: sortSessionRows within pinned group activity still decides order
+00:54 +350: /Users/zaber/hermes-app/app/test/session_sort_test.dart: sortSessionRows real pinned+hidden flags together: pinned group keeps its non-hidden-first order, plain rows last
+00:54 +351: /Users/zaber/hermes-app/app/test/session_sort_test.dart: sortSessionRows hidden sinks below active but pinned-hidden still floats top
+00:54 +352: loading /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart
+00:55 +352: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: capability is resolved on the VM before any transaction
+00:55 +353: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: identity newAttemptId is 32 lowercase hex and unique
+00:55 +354: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: identity LocalAttempt.fromJson tolerates optionals, rejects corrupt
+00:55 +355: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: identity listAttempts skips corrupt entries without throwing
+00:55 +356: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: attempt_id through the pending writers human claim mints once; every rewrite preserves the SAME id
+00:55 +357: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: attempt_id through the pending writers autoWake claims and legacy autoWake records never mint
+00:55 +358: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: attempt_id through the pending writers legacy human record migrates exactly once, on the first begin
+00:55 +359: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: listAttempts prefix only the exact server+sid+attempt prefix is listed
+00:55 +360: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: listAttempts prefix abandoned tombstones stay listed (no TTL drop)
+00:55 +361: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: endLocalAttempt ordering tombstone lands BEFORE the pending delete; crash keeps both
+00:55 +362: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: endLocalAttempt ordering refused journal write = journalFailed, pending untouched, no tombstone
+00:55 +363: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: endLocalAttempt ordering token or attemptId mismatch writes absolutely nothing
+00:55 +364: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: endLocalAttempt ordering double end: ended then missing, tombstone still listed
+00:55 +365: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: endLocalAttempt ordering two tabs racing one settlement: at most one ended
+00:55 +366: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: draft CAS revision starts at 0 and every accepted write bumps it once
+00:55 +367: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: removeAttempt removes; missing is false-safe; tombstones of others survive
+00:55 +368: /Users/zaber/hermes-app/app/test/offline_attempt_store_test.dart: saveAttempt reports a refused write as false
+00:55 +369: loading /Users/zaber/hermes-app/app/test/approval_inbox_ui_test.dart
+00:55 +369: /Users/zaber/hermes-app/app/test/approval_inbox_ui_test.dart: U1: capability on — ONE inbox card, exact-id POST, busy once
+00:56 +370: /Users/zaber/hermes-app/app/test/approval_inbox_ui_test.dart: local deny shows its own result, not another-device receipt
+00:56 +371: /Users/zaber/hermes-app/app/test/approval_inbox_ui_test.dart: U2: GET-only pending renders too — same run, unique cards, no fake rows
+00:56 +372: /Users/zaber/hermes-app/app/test/approval_inbox_ui_test.dart: U3: approval.responded clears ONLY the matching request
+00:56 +373: /Users/zaber/hermes-app/app/test/approval_inbox_ui_test.dart: U3: resolved-on-another-device echo names the reason
+00:56 +374: /Users/zaber/hermes-app/app/test/approval_inbox_ui_test.dart: U3: POST conflict reconciles with ONE fresh GET, never re-posts
+00:56 +375: /Users/zaber/hermes-app/app/test/approval_inbox_ui_test.dart: U4: old server — legacy card stays + honest unavailable notice
+00:56 +376: /Users/zaber/hermes-app/app/test/approval_inbox_ui_test.dart: U4: expired card disables choices and asks to reconfirm — never auto-denies
+00:56 +377: /Users/zaber/hermes-app/app/test/approval_inbox_ui_test.dart: U4: en locale renders the catalog labels
+00:56 +378: loading /Users/zaber/hermes-app/app/test/imgperf_data_url_test.dart
+00:57 +378: /Users/zaber/hermes-app/app/test/imgperf_data_url_test.dart: S1/A2 one data URL source decodes once across rebuilds
+00:57 +379: /Users/zaber/hermes-app/app/test/imgperf_data_url_test.dart: S1/A2 the decode cache is bounded and evicts
+00:57 +380: loading /Users/zaber/hermes-app/app/test/live_owner_queued_test.dart
+00:57 +380: /Users/zaber/hermes-app/app/test/live_owner_queued_test.dart: LiveTurn: run.queued keeps delivery id and is never completion
+00:57 +381: /Users/zaber/hermes-app/app/test/live_owner_queued_test.dart: queued EOF reconciles read-only, settles on history, never re-POSTs
+00:57 +382: /Users/zaber/hermes-app/app/test/live_owner_queued_test.dart: queued EOF exhaustion stays neutral (unconfirmed), never re-POSTs
+00:57 +383: /Users/zaber/hermes-app/app/test/live_owner_queued_test.dart: tool.failed payload fixture closes the pending tool row (§4 A4)
+00:57 +384: /Users/zaber/hermes-app/app/test/live_owner_queued_test.dart: run.completed without messages keeps the finalText outcome
+00:57 +385: loading /Users/zaber/hermes-app/app/test/settings_connection_feedback_test.dart
+00:58 +385: /Users/zaber/hermes-app/app/test/settings_connection_feedback_test.dart: connection test shows typed authentication failure
+00:58 +386: loading /Users/zaber/hermes-app/app/test/turn_history_match_test.dart
+00:58 +386: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: foldTurnText (moved semantics, untouched) trim + collapse whitespace + drop attachment tags
+00:58 +387: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: foldTurnText (moved semantics, untouched) foldedTurnTextEquals: exact first, folded second
+00:58 +388: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: foldTurnText (moved semantics, untouched) folded-empty rows may only match raw-exact (no empty-collapse)
+00:58 +389: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory final after anchor: hasFinal true, tail assistant
+00:58 +390: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory tool-tail (the incident shape) is NOT final
+00:58 +391: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory user-only turn: no rows after anchor, no final
+00:58 +392: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory folded Discord text anchors the same as raw
+00:58 +393: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory turn ends at the NEXT user row, even without a final
+00:58 +394: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory legacy unknown text can never anchor
+00:58 +395: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory genuinely empty pending text anchors an empty user row only raw-exact
+00:58 +396: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory time floor drops older duplicates (stale same-text)
+00:58 +397: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory zero-timestamp (no server time) rows are never dropped by floor
+00:58 +398: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory multiple qualifying candidates are ambiguous, never picked
+00:58 +399: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory excluded ids (before-send watermark) leave the newer row unique
+00:58 +400: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory historyAfterId watermark drops older numeric rows
+00:58 +401: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: inspectPendingHistory displayKind rows are filtered before the final/tail check
+00:58 +402: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: evaluateRecoveryEvidence (B2 priorities) explicit terminal statuses settle; completed+no-final is incomplete
+00:58 +403: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: evaluateRecoveryEvidence (B2 priorities) positive-active statuses can never be called terminal
+00:58 +404: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: evaluateRecoveryEvidence (B2 priorities) unknown statuses and missing evidence are unknown
+00:58 +405: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: evaluateRecoveryEvidence (B2 priorities) quiet + unique anchor + no final is incompleteTerminal
+00:58 +406: /Users/zaber/hermes-app/app/test/turn_history_match_test.dart: evaluateRecoveryEvidence (B2 priorities) recentTerminal identity match settles without an anchor
+00:58 +407: loading /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart
+00:59 +407: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T1 — terminal transcript of already-durable calls equal completeness: EXACTLY ONE 4-step card while live and after settle; every step once, full results
+00:59 +408: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T1 — terminal transcript of already-durable calls durable strictly fuller (transcript results missing): still one durable-owned card
+01:00 +409: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T1 — terminal transcript of already-durable calls missing/different transcript message ids still pair
+01:00 +410: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T2 — transcript strictly fuller: durable slot shows it durable calls without result rows, transcript complete: one card, results rendered at the durable slot
+01:00 +411: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T3 — non-covering duplicates stay doubled transcript results contradict durable: both cards stay while live; settle leaves the durable truth
+01:00 +412: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T4 — partial persistence and raw SSE durable 2 + transcript 4 with real ids: provable 2 converge, the other 2 stay expandable
+01:00 +413: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T4 — partial persistence and raw SSE LIVE-MERGE reverses TOOLCARD-DUP: raw SSE mid-run 2+4 becomes one honest count-4 card
+01:00 +414: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T5 — dynamic steps on one LiveTurn the 5th tool.started is visible on the next frame; progress never adds; no sticky hide when the terminal pairs up
+01:00 +415: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T6 — branch contracts transcript containing ONLY fully-covered tool rows must not resurrect the raw tool list
+01:00 +416: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T6 — branch contracts empty transcript keeps the raw fallback; completed is never a hide condition
+01:00 +417: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T7 — identity counter-cases duplicate call ids in the transcript prove nothing: both cards stay, no arbitrary pick
+01:00 +418: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T7 — identity counter-cases different non-empty call ids never pair despite same row shape
+01:00 +419: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T8 — projection completeness narration, system and final rows are untouched; orphan results never resurrect
+01:00 +420: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T9 — detailed mode shares the projection T1/T2 detailed: same convergence, per-tool once, toggle twice changes nothing
+01:00 +421: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T10 — settle integration recovery overlap → run.completed with a gated GET: converged while the GET waits, durable-only after release
+01:00 +422: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T11 — stable slots source swap keeps the slot key and the expanded args
+01:00 +423: /Users/zaber/hermes-app/app/test/toolcard_dup_test.dart: T12 — user contracts untouched a transcript re-carrying a represented user row never duplicates the user bubble even when its tools converge
+01:01 +424: loading /Users/zaber/hermes-app/app/test/stuck_busy_ui_test.dart
+01:01 +424: /Users/zaber/hermes-app/app/test/stuck_busy_ui_test.dart: recovering shows the countdown and never typing dots (zh)
+01:01 +425: /Users/zaber/hermes-app/app/test/stuck_busy_ui_test.dart: uncertain with allowance left offers BOTH actions
+DBG phase=ChatPhase.uncertain err=UiMessage.local(MessageKey.chatRecoveryUncertain) dl=2014-12-31 23:59:59.000Z
+01:01 +426: /Users/zaber/hermes-app/app/test/stuck_busy_ui_test.dart: spent allowance hides 重新核對; clear lands idle, no POSTs (en)
+01:01 +427: /Users/zaber/hermes-app/app/test/stuck_busy_ui_test.dart: another-tab prompt renders via the error row (zh)
+01:01 +428: /Users/zaber/hermes-app/app/test/stuck_busy_ui_test.dart: LiveTurnView dots follow showTyping, never the bare turn
+01:01 +429: /Users/zaber/hermes-app/app/test/stuck_busy_ui_test.dart: recovering with NULL deadline says nothing (zh, live==null)
+01:01 +430: /Users/zaber/hermes-app/app/test/stuck_busy_ui_test.dart: history throw on first read still shows the local exit (zh)
+01:01 +431: loading /Users/zaber/hermes-app/app/test/offline_transport_io_test.dart
+01:02 +431: /Users/zaber/hermes-app/app/test/offline_transport_io_test.dart: connection refused: dispatch WAS invoked — never "not dispatched"
+01:02 +432: /Users/zaber/hermes-app/app/test/offline_transport_io_test.dart: live SSE: dispatchInvoked -> headersReceived(200) -> firstEvent, in order; rewinds and restatements are no-ops
+01:02 +433: /Users/zaber/hermes-app/app/test/offline_transport_io_test.dart: empty-host URL: the SYNCHRONOUS throw is the only provable never-dispatched failure on IO
+01:02 +434: /Users/zaber/hermes-app/app/test/offline_transport_io_test.dart: observation is optional: a null sink changes nothing (contract bytes still flow)
+01:02 +435: loading /Users/zaber/hermes-app/app/test/offline_local_settlement_test.dart
+01:02 +435: /Users/zaber/hermes-app/app/test/offline_local_settlement_test.dart: local end: journal-first, zero POSTs, abandoned tombstone, verbatim draft
+01:02 +436: /Users/zaber/hermes-app/app/test/offline_local_settlement_test.dart: stop during claim ends its OWN claim before any repo.chat
+01:02 +437: /Users/zaber/hermes-app/app/test/offline_local_settlement_test.dart: crash between journal and delete: cleanup-only residue, one retry clears it
+01:02 +438: /Users/zaber/hermes-app/app/test/offline_local_settlement_test.dart: journal refusal writes NOTHING and stays retryable
+01:02 +439: /Users/zaber/hermes-app/app/test/offline_local_settlement_test.dart: takeover mid-flight: M021, the moved record survives untouched
+01:02 +440: /Users/zaber/hermes-app/app/test/offline_local_settlement_test.dart: autoWake record without a run: human local end never consumes it
+01:02 +441: /Users/zaber/hermes-app/app/test/offline_local_settlement_test.dart: stop with nothing outstanding: noTurn, zero writes
+01:02 +442: loading /Users/zaber/hermes-app/app/test/audit10_deadline_test.dart
+01:03 +442: /Users/zaber/hermes-app/app/test/audit10_deadline_test.dart: headers that never arrive: PortTimeout in bounded time, socket cut
+01:03 +443: /Users/zaber/hermes-app/app/test/audit10_deadline_test.dart: repository surfaces the header deadline as a retryable ApiException
+01:03 +444: /Users/zaber/hermes-app/app/test/audit10_deadline_test.dart: body frozen mid-flight lands as a retryable timeout, not a spinner
+01:04 +445: /Users/zaber/hermes-app/app/test/audit10_deadline_test.dart: SSE keeps the long budget: late headers survive short defaults
+01:04 +446: /Users/zaber/hermes-app/app/test/audit10_deadline_test.dart: port-level deadlines stay finite for everything else (no regress)
+01:04 +447: loading /Users/zaber/hermes-app/app/test/run_link_notification_test.dart
+01:05 +447: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: run_link (R7) parses the canonical server form verbatim
+01:05 +448: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: run_link (R7) round-trips through toUrl without secrets
+01:05 +449: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: run_link (R7) a link carrying a credential NEVER parses
+01:05 +450: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: notification ledger (R7) replayed pages dedup by EXACT event id (no second card)
+01:05 +451: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: notification ledger (R7) a replayed UNREAD glimpse never resurrects a read event
+01:05 +452: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: notification ledger (R7) read wins in merge order: read item after unread lands read
+01:05 +453: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: notification ledger (R7) cursor moves forward only (server clock never rewinds the UI)
+01:05 +454: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: notification ledger (R7) an approval event link locates the exact request
+01:05 +455: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: notification ledger (R7) fromJson prefers next_cursor over head_seq (no head jump)
+01:05 +456: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: notification ledger (R7) an old server answer still parses (head fallback)
+01:05 +457: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: notification ledger (R7) overflow continuation lands every event exactly once
+01:05 +458: /Users/zaber/hermes-app/app/test/run_link_notification_test.dart: notification ledger (R7) a converged read reappears and lands read (phantom-unread fix)
+01:05 +459: loading /Users/zaber/hermes-app/app/test/audit_r2_typing_test.dart
+01:05 +459: /Users/zaber/hermes-app/app/test/audit_r2_typing_test.dart: idle: no typing row
+01:05 +460: /Users/zaber/hermes-app/app/test/audit_r2_typing_test.dart: bootstrap recovering (busy, live==null): row + pending bubble
+01:05 +461: /Users/zaber/hermes-app/app/test/audit_r2_typing_test.dart: sending: bubble + row; once history carries the row: no duplication
+01:05 +462: /Users/zaber/hermes-app/app/test/audit_r2_typing_test.dart: stopping drain (busy, live==null, no pending text): row without bubble
+01:05 +463: loading /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart
+01:06 +463: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: idle dispatch: admit -> batch persisted -> wake POST -> acks
+01:06 +464: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: typing pauses dispatch; putting the editor down resumes
+01:06 +465: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: a manual turn wins; the wake runs after it settles
+01:06 +466: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: no capability -> never admit, never POST (pure server)
+01:06 +467: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: hidden app never auto-sends; resume re-checks
+01:06 +468: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: no viewer on screen -> silent
+01:06 +469: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: quota: honest hint + server retry_after backoff
+01:06 +470: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: busy verdict retries after retry_after_s, queue intact
+01:06 +471: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: POST 409 + unreadable receipt + no anchor -> uncertain, no replay
+01:06 +472: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: POST 409 + receipt dispatching -> accepted, observed read-only
+01:06 +473: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: POST 410 released -> rows return to the queue and may be re-claimed
+01:06 +474: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: two clients, one ledger: exactly one wake POST total
+01:06 +475: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: overflow: >10 queued -> one capped batch, remainder waits
+01:06 +476: /Users/zaber/hermes-app/app/test/wake_dispatch_test.dart: wake turn never clears a draft and never shows a bubble
+01:06 +477: loading /Users/zaber/hermes-app/app/test/approval_viewport_nav_test.dart
+01:06 +477: /Users/zaber/hermes-app/app/test/approval_viewport_nav_test.dart: explicit same-page link reveals its exact actionable card
+01:07 +478: /Users/zaber/hermes-app/app/test/approval_viewport_nav_test.dart: X3: a mid-timeline reader reaches the pending card through the pinned CTA
+01:07 +479: /Users/zaber/hermes-app/app/test/approval_viewport_nav_test.dart: X3 control: at the panel the CTA is absent (no yank, no duplicate affordance)
+01:07 +480: loading /Users/zaber/hermes-app/app/test/picker_session_test.dart
+01:08 +480: /Users/zaber/hermes-app/app/test/picker_session_test.dart: H1 focus is never terminal (legacy 500ms focus-cancel replay) focus storms before a late change still end in picked, once
+01:08 +481: /Users/zaber/hermes-app/app/test/picker_session_test.dart: H2 lifecycle no release while waiting, exactly one at terminal, abandon is idempotent
+01:08 +482: /Users/zaber/hermes-app/app/test/picker_session_test.dart: H2 lifecycle each driver instance is independent (fresh input per pick)
+01:08 +483: /Users/zaber/hermes-app/app/test/picker_session_test.dart: H3 real cancel cancel event wins, late change after cancel adds nothing
+01:08 +484: /Users/zaber/hermes-app/app/test/picker_session_test.dart: H4 anomalous empty is not a cancel change with an empty FileList maps to emptyUnexpected
+01:08 +485: /Users/zaber/hermes-app/app/test/picker_session_test.dart: H4 anomalous empty is not a cancel null FileList change maps to emptyUnexpected
+01:08 +486: /Users/zaber/hermes-app/app/test/picker_session_test.dart: H4 anomalous empty is not a cancel DOM faults settle as typed failures
+01:08 +487: loading /Users/zaber/hermes-app/app/test/hidden_toggle_test.dart
+01:08 +487: /Users/zaber/hermes-app/app/test/hidden_toggle_test.dart: show hidden reloads an inclusive list and reveals hidden session
+01:08 +488: loading /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart
+01:09 +488: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: slot keys call entry keys by row + call index
+01:09 +489: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: slot keys orphan result keys by its own row
+01:09 +490: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: coversToolDetails equal content covers both ways
+01:09 +491: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: coversToolDetails JSON object key order is irrelevant, array order is strict
+01:09 +492: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: coversToolDetails unparseable args compare as raw bytes
+01:09 +493: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: coversToolDetails a full result may byte-prefix-cover a PREVIEW, never a result
+01:09 +494: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: coversToolDetails an existing result proves completion even when empty
+01:09 +495: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: coversToolDetails missing timestamp borrows the matched slot time; conflicting timestamps cover nothing
+01:09 +496: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: coversToolDetails args the other side lacks block coverage; {} is a real value
+01:09 +497: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: coversToolDetails name contradiction never covers
+01:09 +498: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — call id (first priority) unique real call ids pair across sides
+01:09 +499: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — call id (first priority) same call id with different names does not pair
+01:09 +500: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — call id (first priority) duplicate ids prove nothing — no first/last wins
+01:09 +501: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — call id (first priority) ids repeated across turns never pair
+01:09 +502: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — call id (first priority) a segment straddling two durable turns gives up its matches
+01:09 +503: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — call id (first priority) call/result orphans pair through the real tool_call_id
+01:09 +504: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — row id + call index (second priority) same numeric row and index with consistent args pairs
+01:09 +505: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — row id + call index (second priority) synthetic row ids (live-N, remote:, pending) are not identity
+01:09 +506: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — row id + call index (second priority) different non-empty call ids are counter-evidence even on the same row+index
+01:09 +507: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — row id + call index (second priority) multi-call rows never pair row-wide
+01:09 +508: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — closed-interval fallback pinned complete aligned interval pairs (user-row anchor)
+01:09 +509: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — closed-interval fallback a missing segment breaks interval completeness
+01:09 +510: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — closed-interval fallback swapped order inside the interval never pairs
+01:09 +511: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — closed-interval fallback repeated same-signature calls cannot be picked by ordinal
+01:09 +512: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — closed-interval fallback no positive pin → no interval pairing even for identical lists
+01:09 +513: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — closed-interval fallback call-id anchor pins the interval for the id-less middle
+01:09 +514: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: identity — closed-interval fallback hidden rows are barriers
+01:09 +515: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: projectToolOverlap T1 equal completeness: one set of exclusions, no overrides
+01:09 +516: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: projectToolOverlap durable strictly fuller (transcript lacks results) still converges to durable
+01:09 +517: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: projectToolOverlap T2 transcript strictly fuller: durable slot carries the payload
+01:09 +518: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: projectToolOverlap T3 contradicting content stays doubled
+01:09 +519: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: projectToolOverlap T4 partial durable: only the provable two converge
+01:09 +520: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: projectToolOverlap T4 raw SSE without any identity keeps 2+4
+01:09 +521: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: projectToolOverlap T6 terminal transcript with all tools covered yields exclusions, never a fall-through flag
+01:09 +522: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: projectToolOverlap empty transcript → empty projection
+01:09 +523: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: projectToolOverlap raw inputs are never mutated
+01:09 +524: /Users/zaber/hermes-app/app/test/tool_timeline_projection_test.dart: projectToolOverlap narration/system rows never participate (T8 core)
+01:09 +525: loading /Users/zaber/hermes-app/app/test/stream_resilience_test.dart
+01:09 +525: /Users/zaber/hermes-app/app/test/stream_resilience_test.dart: eof falls back once, merges and settles on resume
+01:09 +526: /Users/zaber/hermes-app/app/test/stream_resilience_test.dart: error falls back once, merges and settles on resume
+01:09 +527: /Users/zaber/hermes-app/app/test/stream_resilience_test.dart: empty falls back once, merges and settles on resume
+01:09 +528: /Users/zaber/hermes-app/app/test/stream_resilience_test.dart: native EOF retains bounded recovery
+01:09 +529: loading /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart
+01:10 +529: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V02: null/empty runId and unknown status → no target, no POST, no local settle, honest block reasons
+01:10 +530: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V03: aged-out evidence never POSTs; a failed NEW preflight never POSTs; only a successful fresh preflight may
+01:10 +531: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V03/unsupported: legacy gateway never offers a remote target
+01:10 +532: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V04: two stoppable rows → chooser kind, NOTHING auto-picked
+01:10 +533: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V04: overflow with one listed row → chooser + may-be-incomplete flag
+01:10 +534: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V04: mixed local+remote → /stop stops the LOCAL run only; the remote row action stops the named remote run
+01:10 +535: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V05: preflight shows the target in recentTerminal → ended, zero POSTs
+01:10 +536: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V05: POST 200 then status terminal → observer ends (history failure cannot block it)
+01:10 +537: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V06: POST 404 → chatStopRemoteUnavailable path, other runs and the local machine untouched, nothing claimed
+01:10 +538: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V07: POST 409 → checkingConflict; status terminal ends without ever claiming a confirmed stop
+01:10 +539: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V07: 409 + status still running → bounded checking; 60s cap → unconfirmed, NO further POSTs
+01:10 +540: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V07: 409 + unreadable status (503) until the cap → unconfirmed, never a claim
+01:10 +541: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V10: reload after a request — zero auto POSTs, no pending/journal/StopRecord; the stopping row reconciles from activity only
+01:10 +542: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V11: epoch moves before the POST → targetChanged, ZERO POSTs, no retarget onto the new run
+01:10 +543: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V11: connection moves WHILE the POST is parked → POST happened pre-change only; the late answer writes nothing
+01:10 +544: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V11: a stopped controller rejects every late completion
+01:10 +545: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V12: rapid triple tap JOINS one flight — exactly ONE POST
+01:10 +546: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V12: hung status GET is abortable; the late completion is rejected by the generation
+01:10 +547: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V15: remote stop has ZERO wake side effects; the send gate stays activity-driven
+01:10 +548: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V16: POST 401 → failed honestly — visible id never implies stoppable
+01:10 +549: /Users/zaber/hermes-app/app/test/cross_device_stop_test.dart: V16: status 403 during checking is NOT "stopped" — bounded, honest
+01:10 +550: loading /Users/zaber/hermes-app/app/test/approval_inbox_test.dart
+01:10 +550: /Users/zaber/hermes-app/app/test/approval_inbox_test.dart: ApprovalInbox duplicate SSE upsert keeps ONE card and one identity
+01:10 +551: /Users/zaber/hermes-app/app/test/approval_inbox_test.dart: ApprovalInbox GET snapshot merges the same request and adds unseen pending
+01:10 +552: /Users/zaber/hermes-app/app/test/approval_inbox_test.dart: ApprovalInbox available snapshot is the truth: missing pending reconciles away
+01:10 +553: /Users/zaber/hermes-app/app/test/approval_inbox_test.dart: ApprovalInbox unavailable/overflow snapshot never claims empty and marks unconfirmed
+01:10 +554: /Users/zaber/hermes-app/app/test/approval_inbox_test.dart: ApprovalInbox exact-id settle touches ONLY the named request
+01:10 +555: /Users/zaber/hermes-app/app/test/approval_inbox_test.dart: ApprovalInbox settleRun ends every pending of ONE run, sibling runs survive
+01:10 +556: /Users/zaber/hermes-app/app/test/approval_inbox_test.dart: ApprovalInbox remainingSeconds is a bounded estimate; gone is gone, not deny
+01:10 +557: /Users/zaber/hermes-app/app/test/approval_inbox_test.dart: ApprovalInbox stale server_epoch upsert does not resurrect a settled card
+01:10 +558: /Users/zaber/hermes-app/app/test/approval_inbox_test.dart: ApprovalInbox visible keeps pending + brief handled-elsewhere receipts
+01:10 +559: /Users/zaber/hermes-app/app/test/approval_inbox_test.dart: ApprovalInbox key carries the full tuple
+01:10 +560: loading /Users/zaber/hermes-app/app/test/imgview_test.dart
+01:11 +560: /Users/zaber/hermes-app/app/test/imgview_test.dart: downloaded thumbnail opens viewer and returns
+01:11 +561: /Users/zaber/hermes-app/app/test/imgview_test.dart: gallery opens tapped index and supports swipe and arrows
+01:11 +562: /Users/zaber/hermes-app/app/test/imgview_test.dart: download invokes injected saver for current page
+01:11 +563: /Users/zaber/hermes-app/app/test/imgview_test.dart: failed download leaves retry available
+01:11 +564: loading /Users/zaber/hermes-app/app/test/imgperf_image_lifecycle_test.dart
+01:11 +564: /Users/zaber/hermes-app/app/test/imgperf_image_lifecycle_test.dart: S1/A1 same-path rebuilds reuse one download future
+01:12 +565: /Users/zaber/hermes-app/app/test/imgperf_image_lifecycle_test.dart: S1/A1 a new path fetches a new image
+01:12 +566: /Users/zaber/hermes-app/app/test/imgperf_image_lifecycle_test.dart: S1/A1 repo identity swap re-fetches; late old result loses
+01:12 +567: /Users/zaber/hermes-app/app/test/imgperf_image_lifecycle_test.dart: S1/A1 a failed download degrades to an actionable tile with retry
+01:12 +568: /Users/zaber/hermes-app/app/test/imgperf_image_lifecycle_test.dart: failure cooldown dedupes one account but never poisons another
+01:12 +569: loading /Users/zaber/hermes-app/app/test/audit16_idle_lru_test.dart
+01:12 +569: /Users/zaber/hermes-app/app/test/audit16_idle_lru_test.dart: AUDIT-16 past sessions are bounded: oldest idles evicted, newest kept
+01:13 +570: /Users/zaber/hermes-app/app/test/audit16_idle_lru_test.dart: AUDIT-16 a session with a running turn survives the eviction sweep
+01:13 +571: /Users/zaber/hermes-app/app/test/audit16_idle_lru_test.dart: AUDIT-16 resume only fetches for visible pages and active runs
+01:13 +572: loading /Users/zaber/hermes-app/app/test/local_store_p2_test.dart
+01:13 +572: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: P2 local store draft survives store recreation (app kill)
+01:13 +573: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: P2 local store drafts are per-session and per-server
+01:13 +574: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: P2 local store hidden set persists and toggles
+01:13 +575: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: P2 local store title cache overrides stale server title on reopen
+01:13 +576: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: P2 local store titles stay raw; the untitled fallback is display-only
+01:13 +577: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: P2 local store lost marker round-trips
+01:13 +578: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: STUCK-BUSY recovery budget (B3) legacy pending parses with null recovery fields
+01:13 +579: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: STUCK-BUSY recovery budget (B3) beginPendingRecovery initializes once; reload keeps the deadline
+01:13 +580: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: STUCK-BUSY recovery budget (B3) begin compare-mismatch never touches another token’s record
+01:13 +581: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: STUCK-BUSY recovery budget (B3) consumeRecoveryRetry is single-shot, re-arms exactly 30s once
+01:13 +582: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: STUCK-BUSY recovery budget (B3) amend / touch / savePending preserve recovery + startedAt
+01:13 +583: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: STUCK-BUSY recovery budget (B3) a NEW claim resets the old turn’s recovery metadata
+01:13 +584: /Users/zaber/hermes-app/app/test/local_store_p2_test.dart: STUCK-BUSY recovery budget (B3) clearPending compare-mismatch reports false and keeps the record
+01:13 +585: loading /Users/zaber/hermes-app/app/test/live_merge_detail_test.dart
+01:13 +585: /Users/zaber/hermes-app/app/test/live_merge_detail_test.dart: live tools: no epoch timestamp (detailed=false)
+01:14 +586: /Users/zaber/hermes-app/app/test/live_merge_detail_test.dart: live tools: no epoch timestamp (detailed=true)
+01:14 +587: /Users/zaber/hermes-app/app/test/live_merge_detail_test.dart: re-entry mid-run (detailed ON, tools already durable): every step once
+01:14 +588: loading /Users/zaber/hermes-app/app/test/p3_followup_test.dart
+01:14 +588: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: MessageTime shows clock today, date after midnight or year end
+01:15 +589: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: malformed data-URL images degrade to placeholders instead of throwing
+01:15 +590: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: unuploaded drafts persist per session across controller rebuilds
+01:15 +591: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+03:03 +592: loading /Users/zaber/hermes-app/app/test/ios_picker_test.dart
+03:03 +592: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H1 controller: focus before a late change still lands the file no draft before the change; exactly one draft after
+03:03 +593: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H2 controller: session lifecycle session untouched while waiting, cleaned up once at terminal
+03:03 +594: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H3 controller: real cancel is a silent no-op cancelled keeps drafts, error and busy clean
+03:03 +595: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H4 controller: anomalous outcomes surface typed errors emptyUnexpected maps to attachmentPickerEmpty, never cancel silence
+03:03 +596: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H4 controller: anomalous outcomes surface typed errors failed passes its typed message through untouched
+03:03 +597: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H4 controller: anomalous outcomes surface typed errors first file kept when a later file fails mid-read
+03:03 +598: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H5 total budget (5 min, wait + staging) 299s still busy; 300s times out, cleans up, re-picks clean
+03:03 +599: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H6 suspended timers / resume checks expired clock: a focus wake-up decides timeout, not cancel
+03:03 +600: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H6 suspended timers / resume checks focus BEFORE the deadline never cancels
+03:03 +601: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H6 suspended timers / resume checks expired clock: a late change maps to timeout and is NOT staged
+03:03 +602: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H7 staging budget and the atomic commit zone expiry mid-staging cancels the stream; first file kept, no ghost
+03:03 +603: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H7 staging budget and the atomic commit zone a stage result landing after the timeout is discarded, never a draft
+03:03 +604: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H7 staging budget and the atomic commit zone a persist already in flight completes; the file is kept
+03:03 +605: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H8 faults and capacity on the pick path a zero-byte file is a valid pick
+03:03 +606: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H8 faults and capacity on the pick path a knownSize beyond 500 MiB is rejected before any read
+03:03 +607: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H8 faults and capacity on the pick path storage failure surfaces feedback and unlocks
+03:03 +608: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H8 faults and capacity on the pick path each one-shot stream opens exactly once across a multi-file pick
+03:03 +609: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H9 dispose and re-entry one picker per busy window
+03:03 +610: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H9 dispose and re-entry dispose aborts the session, cancels the timer, late results inert
+03:03 +611: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H10 entry points do not regress addFiles / pickSource never start a picker session
+03:03 +612: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H10 entry points do not regress the web gallery fires onPickOther exactly once and returns null
+03:03 +613: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H11 feedback catalog new keys carry the reviewed literal strings (en + zh-TW)
+03:03 +614: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H11 feedback catalog an unsuccessful pick shows exactly one SnackBar
+03:03 +615: /Users/zaber/hermes-app/app/test/ios_picker_test.dart: H11 feedback catalog a cancel toast is silent
+03:03 +616: loading /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart
+03:04 +616: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: R2 decision table: running/approval steerable, queued/stopping/terminal not
+03:04 +617: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: stale evidence or missing identity proves NOTHING (invalidIdentity)
+03:04 +618: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: STEERVIS: stale evidence keeps remote rows visible but blocks steer
+03:04 +619: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: STEERVIS: empty API observation cannot supply a background steer target
+03:04 +620: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: capability off: no submit, honest notReady, legacy untouched
+03:04 +621: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: running remote: accepted receipt, no chat traffic, card tracked
+03:04 +622: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: socket-unknown keeps the SAME id for the retry and never chat-sends
+03:04 +623: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: offline: the draft is kept, NOTHING is sent anywhere
+03:04 +624: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: two runs mint distinct first-attempt ids (never one id reused)
+03:04 +625: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: run_not_ready / queue_full / conflict keep the draft, no new id
+03:04 +626: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: closed race: notReady/closed wording, durable draft retained, never "read"
+03:04 +627: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: poll failure NEVER reads as empty: receipts stay unconfirmed
+03:04 +628: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: delivered receipt retires when the exact batch row is in history
+03:04 +629: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: history provenance identity retires the matching receipt card
+03:04 +630: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: text similarity NEVER retires: same words, different batch stays
+03:04 +631: /Users/zaber/hermes-app/app/test/cross_device_steer_test.dart: target identity drift: stale target refuses before any POST
+03:04 +632: loading /Users/zaber/hermes-app/app/test/settings_environment_test.dart
+03:04 +632: /Users/zaber/hermes-app/app/test/settings_environment_test.dart: AppSettings.configured key alone is NOT enough — blank or junk URL must not be "configured"
+03:04 +633: /Users/zaber/hermes-app/app/test/settings_environment_test.dart: AppSettings.configured valid URL + key is configured; trailing slash normalises
+03:04 +634: /Users/zaber/hermes-app/app/test/settings_environment_test.dart: AppSettings.configured a fresh public build has NO default URL
+03:04 +635: /Users/zaber/hermes-app/app/test/settings_environment_test.dart: loadSettings precedence stored URL wins over the (empty) compile default
+03:04 +636: /Users/zaber/hermes-app/app/test/settings_environment_test.dart: loadSettings precedence stored BLANK url is a missing value, not a station
+03:04 +637: /Users/zaber/hermes-app/app/test/settings_environment_test.dart: loadSettings precedence stored INVALID url is preserved verbatim for the user to fix
+03:04 +638: /Users/zaber/hermes-app/app/test/settings_environment_test.dart: loadSettings precedence legacy define is empty in public builds — nothing migrates
+03:04 +639: /Users/zaber/hermes-app/app/test/settings_environment_test.dart: startup routing key present + URL blank => SettingsPage, ZERO requests
+03:05 +640: /Users/zaber/hermes-app/app/test/settings_environment_test.dart: startup routing invalid stored URL + key => still SettingsPage, zero calls
+03:05 +641: /Users/zaber/hermes-app/app/test/settings_environment_test.dart: startup routing valid URL + key => SessionsPage
+03:05 +642: /Users/zaber/hermes-app/app/test/settings_environment_test.dart: startup routing blank-URL settings page shows neutral guidance, no Tailscale
+03:05 +643: loading /Users/zaber/hermes-app/app/test/offline_draft_restore_test.dart
+03:05 +643: /Users/zaber/hermes-app/app/test/offline_draft_restore_test.dart: local stop restores the VERBATIM draft exactly once
+03:06 +644: /Users/zaber/hermes-app/app/test/offline_draft_restore_test.dart: typing while a held local stop lands: current text wins
+03:06 +645: /Users/zaber/hermes-app/app/test/offline_draft_restore_test.dart: attachments survive a local end; blobs are never discarded
+03:06 +646: /Users/zaber/hermes-app/app/test/offline_draft_restore_test.dart: M16: attempt-backed same-text draft kept, legacy ghost cleared
+03:06 +647: /Users/zaber/hermes-app/app/test/offline_draft_restore_test.dart: legacy delivered same-text draft is still a ghost
+03:06 +648: /Users/zaber/hermes-app/app/test/offline_draft_restore_test.dart: clearForAttempt removes ONLY the consumed, unreferenced drafts
+03:06 +649: /Users/zaber/hermes-app/app/test/offline_draft_restore_test.dart: a blob still referenced by an abandoned journal is never discarded
+03:06 +650: /Users/zaber/hermes-app/app/test/offline_draft_restore_test.dart: mergeForRestore merges by blob identity, never overwriting receipts
+03:06 +651: loading /Users/zaber/hermes-app/app/test/openperf_regression_test.dart
+03:06 +651: /Users/zaber/hermes-app/app/test/openperf_regression_test.dart: 200-row first build mounts a viewport-sized window (P4 pin)
+RENDERX coldInteractiveMs=277
+03:07 +652: /Users/zaber/hermes-app/app/test/openperf_regression_test.dart: content of swept-but-unrevealed rows stays unbuilt (P4 pin)
+03:07 +653: loading /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart
+03:07 +653: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: LiveTurn terminal variants each known terminal event sets terminalStatus + completed once
+03:07 +654: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: LiveTurn terminal variants status is CARRIED, never flattened: the four never agree
+03:07 +655: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: LiveTurn terminal variants duplicate terminal — same seq AND re-delivery — updates once
+03:07 +656: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: LiveTurn terminal variants wrong runId contradicts the known identity → ignored
+03:07 +657: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: LiveTurn terminal variants session contradiction keeps throwing exactly as before
+03:07 +658: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: A: terminal frame settles once; wrong-runId frame is ignored; a late stale-identity frame never touches the current turn
+03:07 +659: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: A: terminal frame then history GET 500 → settles, never busy, bounded (no recovery loop)
+03:07 +660: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: A: terminal frame then a NEVER-COMPLETING history GET → settled, not busy, nothing pending (Completer parked forever)
+03:07 +661: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: A: EOF only + runStatus cancelled → known-terminal convergence, neutral server-ended wording, never 「已由你停止」
+03:07 +662: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: A: EOF only + runStatus unreachable → EXISTING bounded unconfirmed recovery, untouched (recovering → uncertain, same phases)
+03:07 +663: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: V09 terminals × paths run.completed frame path
+03:07 +664: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: V09 terminals × paths completed EOF + status path
+03:07 +665: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: V09 terminals × paths run.cancelled frame path
+03:07 +666: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: V09 terminals × paths cancelled EOF + status path
+03:07 +667: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: V09 terminals × paths run.failed frame path
+03:07 +668: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: V09 terminals × paths failed EOF + status path
+03:07 +669: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: V09 terminals × paths run.interrupted frame path
+03:07 +670: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: V09 terminals × paths interrupted EOF + status path
+03:07 +671: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: A pressed stop ITSELF: the cancelled frame keeps the accepted-record wording (M030 path), not the neutral one
+03:07 +672: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: V08: B stops A's run once; A settles ONCE from the cancelled frame; B has zero settle/journal/StopRecord/wake side effects
+03:07 +673: /Users/zaber/hermes-app/app/test/cross_device_terminal_test.dart: wake batch: the terminal frame acks terminal per EXISTING rules; device B contributes zero acks
+03:07 +674: loading /Users/zaber/hermes-app/app/test/attachment_batch_test.dart
+03:08 +674: /Users/zaber/hermes-app/app/test/attachment_batch_test.dart: batch of three keeps successes in order when the middle read fails
+03:08 +675: /Users/zaber/hermes-app/app/test/attachment_batch_test.dart: two same-named files with different bytes stay two distinct drafts
+03:08 +676: /Users/zaber/hermes-app/app/test/attachment_batch_test.dart: a reject inside the batch never escapes as an unhandled async error
+03:08 +677: /Users/zaber/hermes-app/app/test/attachment_batch_test.dart: staging write failures classify separately from read failures
+03:08 +678: loading /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart
+03:08 +678: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports), drag=40.0
+RENDERX motion: frames=70 peakWidgets=63 peakRows=1 peakPumpUs=3789
+RENDERX maxStep=39.51792581538393 maxExtentStep=48.48420000000624
+03:09 +679: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports), drag=120.0
+RENDERX motion: frames=70 peakWidgets=121 peakRows=2 peakPumpUs=5467
+RENDERX maxStep=119.35514715061436 maxExtentStep=48.484199999998964
+03:09 +680: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: load-older converges without oscillation
+03:09 +681: loading /Users/zaber/hermes-app/app/test/renderx_instruments/idle_and_probe_test.dart
+03:10 +681: /Users/zaber/hermes-app/app/test/renderx_instruments/idle_and_probe_test.dart: early motion spike is retained even when final frames are quiet
+03:10 +682: /Users/zaber/hermes-app/app/test/renderx_instruments/idle_and_probe_test.dart: long drag never forces correction; idle resumes latest once
+03:10 +683: loading /Users/zaber/hermes-app/app/test/renderx_instruments/row_geometry_test.dart
+03:10 +683: /Users/zaber/hermes-app/app/test/renderx_instruments/row_geometry_test.dart: late downloaded pixels keep viewport row height until scroll idle
+══╡ EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK ╞════════════════════════════════════════════════════
+The following TestFailure was thrown running a test:
+Expected: a value less than <120.0>
+  Actual: <208.0>
+   Which: is not a value less than <120.0>
+
+When the exception was thrown, this was the stack:
+#4      main.<anonymous closure> (file:///Users/zaber/hermes-app/app/test/renderx_instruments/row_geometry_test.dart:69:7)
+<asynchronous suspension>
+#5      testWidgets.<anonymous closure>.<anonymous closure> (package:flutter_test/src/widget_tester.dart:192:15)
+<asynchronous suspension>
+#6      TestWidgetsFlutterBinding._runTestBody (package:flutter_test/src/binding.dart:1953:5)
+<asynchronous suspension>
+<asynchronous suspension>
+(elided one frame from package:stack_trace)
+
+This was caught by the test expectation on the following line:
+  file:///Users/zaber/hermes-app/app/test/renderx_instruments/row_geometry_test.dart line 69
+The test description was:
+  late downloaded pixels keep viewport row height until scroll idle
+════════════════════════════════════════════════════════════════════════════════════════════════════
+03:10 +683 -1: /Users/zaber/hermes-app/app/test/renderx_instruments/row_geometry_test.dart: late downloaded pixels keep viewport row height until scroll idle [E]
+  Test failed. See exception logs above.
+  The test description was: late downloaded pixels keep viewport row height until scroll idle
+  
+Warning: At least one test in this suite creates an HttpClient. When running a test suite that uses
+TestWidgetsFlutterBinding, all HTTP requests will return status code 400, and no network request
+will actually be made. Any test expecting a real network connection and status code will fail.
+To test code that needs an HttpClient, provide your own HttpClient implementation to the code under
+test, so that your test can consistently provide a testable response to the code under test.
+03:10 +683 -1: /Users/zaber/hermes-app/app/test/renderx_instruments/row_geometry_test.dart: descendant-only layout publishes height without ancestor rebuild
+03:10 +684 -1: /Users/zaber/hermes-app/app/test/renderx_instruments/row_geometry_test.dart: extent memory follows ExpansionTile animation and collapse
+03:11 +685 -1: loading /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart
+03:11 +685 -1: /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart: streamed tail and expansion repaint only their row boundaries
+RENDERX repaint: stableDelta=5 tailDelta=14
+03:12 +686 -1: loading /Users/zaber/hermes-app/app/test/t12_linkify_test.dart
+03:12 +686 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls bare http url becomes angle autolink
+03:12 +687 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls existing markdown link untouched
+03:12 +688 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls url inside inline code untouched
+03:12 +689 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls url inside fenced code untouched
+03:12 +690 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls trailing punctuation stays outside the link
+03:12 +691 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls url in parentheses keeps closing paren out
+03:12 +692 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls bare url at line start links
+03:12 +693 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls angle autolink already present is not doubled
+03:12 +694 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls url with query string kept whole
+03:12 +695 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls no false positive on file paths
+03:12 +696 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls fullwidth colon glued before url still links (v0.10 regression)
+03:12 +697 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls CJK word glued before url links
+03:12 +698 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls url glued to CJK bracket on both sides
+03:12 +699 -1: /Users/zaber/hermes-app/app/test/t12_linkify_test.dart: linkifyBareUrls url glued to curly quote edge does not swallow quote
+03:12 +700 -1: loading /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart
+03:12 +700 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: single fresh remote row: affordance ENABLED; tap POSTs stop to that exact runId only — zero chat, zero local busy
+03:13 +701 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: aged-out evidence: affordance DISABLED with the readable refresh reason (RefreshRequired)
+03:13 +702 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: null-runId row: disabled ACTION with the readable no-run-id reason — never tooltip-only (V02/V17)
+03:13 +703 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: stopping row shows 核對中 purely from fresh activity and is not a POST target (V10/V17, zh)
+03:13 +704 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: two stoppable rows: chooser lists them; cancel = ZERO side effects; selecting POSTs the named row only
+03:13 +705 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: overflow: the chooser still opens, with the visible may-not-be-everything note
+03:13 +706 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: null-runId entry appears in the chooser DISABLED with its reason and is never selectable (V04)
+03:13 +707 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: the ROW stop action never touches the composer or the draft (V13)
+03:13 +708 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: /stop with an accepted outcome consumes the COMMAND (never a draft); no restore affordance appears
+03:13 +709 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: /stop with 409 also consumes the command and shows the non-error checking wording (V07/V17, zh)
+03:13 +710 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: /stop with a FAILED preflight RETAINS the command
+03:13 +711 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: input TYPED DURING the awaited /stop survives untouched
+03:13 +712 -1: /Users/zaber/hermes-app/app/test/cross_device_stop_ui_test.dart: connection move during an awaited POST: targetChanged RETAINS the command, readable feedback, no draft restore (V11/V13)
+03:13 +713 -1: loading /Users/zaber/hermes-app/app/test/deep_link_ingress_test.dart
+03:13 +713 -1: /Users/zaber/hermes-app/app/test/deep_link_ingress_test.dart: one canonical URL shape on every platform the server run_link parses to exact, decoded ids
+03:13 +714 -1: /Users/zaber/hermes-app/app/test/deep_link_ingress_test.dart: one canonical URL shape on every platform a path-style /run URL is NOT a protocol and parses to nothing
+03:13 +715 -1: /Users/zaber/hermes-app/app/test/deep_link_ingress_test.dart: one canonical URL shape on every platform a secret-bearing href parses to nothing
+03:13 +716 -1: /Users/zaber/hermes-app/app/test/deep_link_ingress_test.dart: cold start before any router exists the first link waits in the stash and routes exactly once
+03:13 +717 -1: /Users/zaber/hermes-app/app/test/deep_link_ingress_test.dart: cold start before any router exists a junk href before login stashes nothing and never throws
+03:13 +718 -1: /Users/zaber/hermes-app/app/test/deep_link_ingress_test.dart: warm start with a router attached temporary route failure waits for explicit retry
+03:13 +719 -1: /Users/zaber/hermes-app/app/test/deep_link_ingress_test.dart: warm start with a router attached later links route immediately without touching the stash
+03:13 +720 -1: /Users/zaber/hermes-app/app/test/deep_link_ingress_test.dart: warm start with a router attached a link arriving while a route is busy is QUEUED, never dropped
+03:13 +721 -1: /Users/zaber/hermes-app/app/test/deep_link_ingress_test.dart: warm start with a router attached the same notification tapped later navigates AGAIN (no URL dedup)
+03:14 +722 -1: /Users/zaber/hermes-app/app/test/deep_link_ingress_test.dart: warm start with a router attached detached (settings open), links wait in the stash, not the void
+03:14 +723 -1: loading /Users/zaber/hermes-app/app/test/android_manifest_test.dart
+03:14 +723 -1: /Users/zaber/hermes-app/app/test/android_manifest_test.dart: AndroidManifest deep-link filters (NOTIF2 B2) MAIN/LAUNCHER survives
+03:14 +724 -1: /Users/zaber/hermes-app/app/test/android_manifest_test.dart: AndroidManifest deep-link filters (NOTIF2 B2) HTTPS App Link filters exist with the full VIEW contract
+03:14 +725 -1: /Users/zaber/hermes-app/app/test/android_manifest_test.dart: AndroidManifest deep-link filters (NOTIF2 B2) host/path are placeholders — no tailnet host is baked in
+03:14 +726 -1: /Users/zaber/hermes-app/app/test/android_manifest_test.dart: AndroidManifest deep-link filters (NOTIF2 B2) Flutter engine deep-linking is opted out (plugin owns the intent)
+03:14 +727 -1: /Users/zaber/hermes-app/app/test/android_manifest_test.dart: build-time wiring is REAL, not documented fiction gradle consumes the placeholder keys from -P properties
+03:14 +728 -1: /Users/zaber/hermes-app/app/test/android_manifest_test.dart: build-time wiring is REAL, not documented fiction build_app.py actually passes the properties to the APK build
+03:14 +729 -1: loading /Users/zaber/hermes-app/app/test/audit_wave3_approval_test.dart
+03:14 +729 -1: /Users/zaber/hermes-app/app/test/audit_wave3_approval_test.dart: approval.request: card shows command + the server choices
+03:15 +730 -1: /Users/zaber/hermes-app/app/test/audit_wave3_approval_test.dart: clicking a choice POSTs it, card retires, turn continues
+03:15 +731 -1: /Users/zaber/hermes-app/app/test/audit_wave3_approval_test.dart: 409 on the answer: honest error, card stays usable
+03:15 +732 -1: /Users/zaber/hermes-app/app/test/audit_wave3_approval_test.dart: no run_id anywhere: display-only + CLI hint
+03:15 +733 -1: loading /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart
+03:15 +733 -1: /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart: unchanged revision: ticks GET activity only, NEVER history
+03:16 +734 -1: /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart: other device posts (revision moves): exactly ONE history GET
+03:16 +735 -1: /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart: remote run: temp user row before the durable write; send locked; a typed send fires ZERO POSTs and /stop posts stop to the exact remote runId only (§5.5)
+03:16 +736 -1: /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart: remote terminal folds into history: temp row disappears once the durable rows arrive (claim ledger dedupes by id)
+03:16 +737 -1: /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart: legacy gateway (404): no lock, no banner — pre-WAVE4 send
+03:16 +738 -1: /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart: cross-platform observation claims by fold/position, never a permanent ghost (discord-run repro)
+03:16 +739 -1: /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart: fold match beats exact for whitespace/attachment decoration
+03:16 +740 -1: /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart: stale after a confirmed remote run: banner stays, send stays locked — a failed snapshot NEVER reads as idle
+03:16 +741 -1: /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart: backgrounded: zero activity GETs; resume = one immediate tick, no stacked timers
+03:16 +742 -1: /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart: cold-start failure keeps the send locked (unknown is NOT idle)
+03:16 +743 -1: /Users/zaber/hermes-app/app/test/audit_cross_device_sync_test.dart: busy sending: revision move still merges; pending bubble dedup intact; own run row never becomes a remote projection
+03:17 +744 -1: loading /Users/zaber/hermes-app/app/test/approval_epoch_contract_test.dart
+03:17 +744 -1: /Users/zaber/hermes-app/app/test/approval_epoch_contract_test.dart: model — opaque hex epoch snapshot/SSE hex epoch survives verbatim (never _asInt→0)
+03:17 +745 -1: /Users/zaber/hermes-app/app/test/approval_epoch_contract_test.dart: model — opaque hex epoch key carries the opaque epoch
+03:17 +746 -1: /Users/zaber/hermes-app/app/test/approval_epoch_contract_test.dart: model — opaque hex epoch a moved generation retires the pending card and re-arms repair
+03:17 +747 -1: /Users/zaber/hermes-app/app/test/approval_epoch_contract_test.dart: model — opaque hex epoch a settled card is never resurrected by a foreign generation
+03:17 +748 -1: /Users/zaber/hermes-app/app/test/approval_epoch_contract_test.dart: wire — hex epoch on snapshot / SSE / exact-answer X4: hex snapshot epoch rides the exact-answer POST verbatim
+03:18 +749 -1: /Users/zaber/hermes-app/app/test/approval_epoch_contract_test.dart: wire — hex epoch on snapshot / SSE / exact-answer X4: a generation bump cleans the stale card out of the panel
+03:18 +750 -1: loading /Users/zaber/hermes-app/app/test/audit03_draft_flush_test.dart
+03:18 +750 -1: /Users/zaber/hermes-app/app/test/audit03_draft_flush_test.dart: leaving 0 ms after typing keeps the full draft
+03:19 +751 -1: /Users/zaber/hermes-app/app/test/audit03_draft_flush_test.dart: leaving 100 ms after typing keeps the full draft
+03:19 +752 -1: /Users/zaber/hermes-app/app/test/audit03_draft_flush_test.dart: leaving 399 ms after typing keeps the full draft
+03:19 +753 -1: /Users/zaber/hermes-app/app/test/audit03_draft_flush_test.dart: mid-debounce edits are flushed, not the older snapshot
+03:19 +754 -1: /Users/zaber/hermes-app/app/test/audit03_draft_flush_test.dart: leaving after a send keeps the box empty
+03:19 +755 -1: loading /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart
+03:19 +755 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: bootstrap anchors folded (Discord-reformatted) user text
+03:20 +756 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: pendingDelivered hides the bubble on folded-equal history rows
+03:20 +757 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: live reconcile anchors via the same folded matcher
+03:20 +758 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: duplicate same-text candidates never settle on the older turn
+03:20 +759 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: unsupported gateway (activity 404) is never treated as quiet-idle
+03:20 +760 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: budget-exhausted tool-tail settles idle with chatTurnIncomplete once
+03:20 +761 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: same shape WITHOUT runId: quiet evidence lands incomplete fast
+03:20 +762 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: reload adopts the REMAINING budget; expiry lands uncertain; one retry
+03:20 +763 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: legacy pending migrates on first recovery, never twice
+03:20 +764 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: 60s cap: hung GET still lands uncertain at the deadline, late 200 dies
+03:21 +765 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: quiet evidence insufficient (activity 500): never an incomplete settle
+03:24 +766 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: quiet evidence insufficient (unsupported gateway): never an incomplete settle
+03:28 +767 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: quiet evidence insufficient (overflow): never an incomplete settle
+03:32 +768 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: quiet evidence insufficient (revision moves): never an incomplete settle
+03:36 +769 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: active run never expires on the budget timer
+03:37 +770 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: external user-less rows cannot fake a settle
+03:40 +771 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: clear local waiting record: idle, cleared, zero POSTs, drafts kept
+03:40 +772 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: clear never deletes another tab’s new claim
+03:41 +773 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: storage that refuses the budget: uncertain + honest error, no window
+03:41 +774 -1: /Users/zaber/hermes-app/app/test/stuck_busy_recovery_test.dart: explicit terminals settle regardless of the history read
+03:41 +775 -1: loading /Users/zaber/hermes-app/app/test/detached_poll_test.dart
+03:41 +775 -1: /Users/zaber/hermes-app/app/test/detached_poll_test.dart: detach cuts the SSE and polling completes the run from status
+03:41 +776 -1: /Users/zaber/hermes-app/app/test/detached_poll_test.dart: detach restores the approval card from polled status
+03:41 +777 -1: /Users/zaber/hermes-app/app/test/detached_poll_test.dart: attach stops the timer and finishes a completed run in one poll
+03:41 +778 -1: /Users/zaber/hermes-app/app/test/detached_poll_test.dart: pending bubble hides once history carries the sent row
+03:41 +779 -1: /Users/zaber/hermes-app/app/test/detached_poll_test.dart: polling gives up after repeated transport misses
+03:41 +780 -1: loading /Users/zaber/hermes-app/app/test/i18n_locale_test.dart
+03:42 +780 -1: /Users/zaber/hermes-app/app/test/i18n_locale_test.dart: blackbox contract fixed English on a Chinese system locale
+03:42 +781 -1: /Users/zaber/hermes-app/app/test/i18n_locale_test.dart: blackbox contract settings exposes a language control before connection
+03:42 +782 -1: /Users/zaber/hermes-app/app/test/i18n_locale_test.dart: blackbox contract language switch is live and works with empty settings
+[dbg] _setLocale running zh-Hant
+03:42 +783 -1: /Users/zaber/hermes-app/app/test/i18n_locale_test.dart: typed state normalize: aliases and rejections
+03:42 +784 -1: /Users/zaber/hermes-app/app/test/i18n_locale_test.dart: typed state saved zh-Hant starts Traditional; legacy zh alias too
+03:42 +785 -1: /Users/zaber/hermes-app/app/test/i18n_locale_test.dart: typed state a successful switch persists the canonical tag exactly
+03:42 +786 -1: /Users/zaber/hermes-app/app/test/i18n_locale_test.dart: typed state failed preference write keeps the old language
+03:42 +787 -1: /Users/zaber/hermes-app/app/test/i18n_locale_test.dart: typed state language saving never touches the credential vault
+03:42 +788 -1: /Users/zaber/hermes-app/app/test/i18n_locale_test.dart: typed state same-value selection is a no-op; rapid switches serialize
+03:42 +789 -1: /Users/zaber/hermes-app/app/test/i18n_locale_test.dart: typed state an existing language survives a credential vault read failure
+03:42 +790 -1: loading /Users/zaber/hermes-app/app/test/p3_content_test.dart
+03:43 +790 -1: /Users/zaber/hermes-app/app/test/p3_content_test.dart: timestamps use local same-day clock and month/day for older dates
+03:43 +791 -1: /Users/zaber/hermes-app/app/test/p3_content_test.dart: MEDIA and attachment receipts split into typed content blocks
+03:43 +792 -1: /Users/zaber/hermes-app/app/test/p3_content_test.dart: server MEDIA paths are download-eligible, other refs are not
+03:43 +793 -1: /Users/zaber/hermes-app/app/test/p3_content_test.dart: user and final markdown, code copy, and timestamp smoke
+03:43 +794 -1: /Users/zaber/hermes-app/app/test/p3_content_test.dart: server path renders as downloadable attachment; no raw MEDIA token
+03:43 +795 -1: /Users/zaber/hermes-app/app/test/p3_content_test.dart: data image opens full screen and malformed data degrades gracefully
+03:43 +796 -1: loading /Users/zaber/hermes-app/app/test/chat_input_widget_test.dart
+03:43 +796 -1: /Users/zaber/hermes-app/app/test/chat_input_widget_test.dart: mobile: Enter and Shift+Enter insert newlines, never send
+03:44 +797 -1: /Users/zaber/hermes-app/app/test/chat_input_widget_test.dart: desktop: plain Enter sends, Shift+Enter breaks a line
+03:44 +798 -1: /Users/zaber/hermes-app/app/test/chat_input_widget_test.dart: IME send action: composing blocks (zero POST, candidates kept), committing then sending posts exactly once
+03:44 +799 -1: /Users/zaber/hermes-app/app/test/chat_input_widget_test.dart: mobile hint states Enter=newline, send key=send
+03:44 +800 -1: Some tests failed.
+
+Failing tests:
+  /Users/zaber/hermes-app/app/test/renderx_instruments/row_geometry_test.dart: late downloaded pixels keep viewport row height until scroll idle

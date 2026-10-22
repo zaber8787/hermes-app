@@ -76,7 +76,8 @@ void main() {
     expect(
       repo.downloads,
       1,
-      reason: 'same-path rebuilds must not restart the download '
+      reason:
+          'same-path rebuilds must not restart the download '
           '(IMGPERF A1 red: downloadCalls 3)',
     );
     expect(_shownBytes(t), same(repo.bytes));
@@ -107,8 +108,9 @@ void main() {
     repo.close();
   });
 
-  testWidgets('S1/A1 repo identity swap re-fetches; late old result loses',
-      (t) async {
+  testWidgets('S1/A1 repo identity swap re-fetches; late old result loses', (
+    t,
+  ) async {
     final repoA = _MediaRepo()..gate = Completer<Uint8List>();
     final repoB = _MediaRepo();
     _initialRepo = repoA;
@@ -153,32 +155,58 @@ void main() {
     repoB.close();
   });
 
-  testWidgets('S1/A1 a failed download degrades to an actionable tile with retry',
-      (t) async {
-    final repo = _MediaRepo()..failures = 1;
-    final container = ProviderContainer(
-      overrides: [repositoryProvider.overrideWithValue(repo)],
-    );
-    await t.pumpWidget(
-      UncontrolledProviderScope(
-        container: container,
-        child: localizedWrap(Scaffold(body: ServerPathImage('/fixture/x.png'))),
-      ),
-    );
-    await t.pump();
-    await t.pump();
-    expect(find.byType(AttachmentTile), findsOneWidget);
-    expect(repo.downloads, 1);
-    await t.tap(find.byIcon(Icons.download).hitTestable());
-    await t.pump();
-    await t.pump();
-    expect(
-      repo.downloads,
-      2,
-      reason: 'the failed future is not remembered — one explicit retry refetches',
-    );
-    await t.pumpWidget(const SizedBox.shrink());
-    container.dispose();
-    repo.close();
-  });
+  testWidgets(
+    'S1/A1 a failed download degrades to an actionable tile with retry',
+    (t) async {
+      final repo = _MediaRepo()..failures = 1;
+      final container = ProviderContainer(
+        overrides: [repositoryProvider.overrideWithValue(repo)],
+      );
+      await t.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: localizedWrap(
+            Scaffold(body: ServerPathImage('/fixture/x.png')),
+          ),
+        ),
+      );
+      await t.pump();
+      await t.pump();
+      expect(find.byType(AttachmentTile), findsOneWidget);
+      expect(repo.downloads, 1);
+      await t.tap(find.byIcon(Icons.download).hitTestable());
+      await t.pump();
+      await t.pump();
+      await t.pump();
+      await t.pump();
+      expect(
+        find.byType(MessageImageMemory),
+        findsOneWidget,
+        reason: 'successful explicit retry restores the inline thumbnail',
+      );
+      expect(
+        repo.downloads,
+        2,
+        reason:
+            'the failed future is not remembered — one explicit retry refetches',
+      );
+      await t.pumpWidget(const SizedBox.shrink());
+      container.dispose();
+      repo.close();
+    },
+  );
+  test(
+    'failure cooldown dedupes one account but never poisons another',
+    () async {
+      final a = _MediaRepo()..failures = 1;
+      final b = _MediaRepo();
+      await expectLater(cachedServerFile(a, '/same.png'), throwsStateError);
+      await expectLater(cachedServerFile(a, '/same.png'), throwsStateError);
+      expect(a.downloads, 1);
+      expect(await cachedServerFile(b, '/same.png'), b.bytes);
+      expect(b.downloads, 1);
+      a.close();
+      b.close();
+    },
+  );
 }

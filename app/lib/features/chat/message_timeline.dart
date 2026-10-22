@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter/material.dart';
 import 'package:flutter/rendering.dart'
     show RenderBox, SliverMultiBoxAdaptorParentData;
@@ -15,6 +13,7 @@ import 'message_content.dart';
 import 'tool_timeline_projection.dart';
 import 'turn_history_match.dart' show foldedTurnTextEquals;
 import 'typing_dots.dart';
+import 'timeline_row_geometry.dart';
 
 class MessageTimeline extends StatelessWidget {
   const MessageTimeline({
@@ -314,11 +313,16 @@ class MessageTimelineSliver extends StatelessWidget {
       for (var i = 0; i < rows.length; i++)
         if (rows[i].keyValue != null) rows[i].keyValue!: i,
     };
+    final prefix = <double>[0];
+    for (final row in rows) {
+      prefix.add(prefix.last + (memory?[row.keyValue] ?? averageExtent));
+    }
     return SliverList(
       // Keyed children + the child-index callback keep expansion state and
       // scroll anchoring across rebuilds, exactly where Column's keyed
       // children used to (a new page simply maps to new indices).
-      delegate: SliverChildBuilderDelegate(
+      delegate: _MeasuredRowDelegate(
+        prefix: prefix,
         (context, index) {
           final key = rows[index].keyValue;
           final rowKey = ValueKey(key ?? 'row#$index');
@@ -350,6 +354,27 @@ class MessageTimelineSliver extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Estimate only the unlaid suffix, never extrapolate the current window's
+/// mean across the entire history (one short row would move the thumb).
+class _MeasuredRowDelegate extends SliverChildBuilderDelegate {
+  _MeasuredRowDelegate(
+    super.builder, {
+    required this.prefix,
+    required super.childCount,
+    required super.findChildIndexCallback,
+  });
+
+  final List<double> prefix;
+
+  @override
+  double? estimateMaxScrollOffset(
+    int firstIndex,
+    int lastIndex,
+    double leadingScrollOffset,
+    double trailingScrollOffset,
+  ) => trailingScrollOffset + prefix.last - prefix[lastIndex + 1];
 }
 
 /// OPENPERF P1: placeholder row. Rows far from the viewport (or the reveal
@@ -388,7 +413,6 @@ class _LazyRowState extends State<_LazyRow> {
   bool _real = false;
   ScrollPosition? _position;
   bool _tickScheduled = false;
-  double _reported = double.nan;
 
   bool _near() {
     final reveal = widget.reveal;
@@ -450,18 +474,11 @@ class _LazyRowState extends State<_LazyRow> {
   @override
   void dispose() {
     _position?.removeListener(_onScroll);
-    _idleReport?.cancel();
     super.dispose();
   }
 
   void _onScroll() {
-    if (_real) {
-      // SCROLLFIX: content that lands late (an image decoding, an
-      // ExpansionTile animating) re-measures once the reader stops, so
-      // the memory never freezes a mid-load height.
-      _armIdleReport();
-      return;
-    }
+    if (_real) return;
     // SCROLLFIX: scroll fires far more often than frames, and _near() is a
     // render-tree query. Coalesce to one evaluation per frame — with
     // hundreds of on-stage rows this listener storm (not layout) was where
@@ -474,33 +491,10 @@ class _LazyRowState extends State<_LazyRow> {
     });
   }
 
-  Timer? _idleReport;
-  void _armIdleReport() {
-    _idleReport?.cancel();
-    _idleReport = Timer(const Duration(milliseconds: 400), () {
-      if (mounted) _measureInto();
-    });
-  }
-
-  void _reportExtent() {
-    // Report once on this frame's layout (post-frame), and re-arm only
-    // when the row rebuilds — never a permanent per-frame callback chain.
-    if (!mounted) return;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _measureInto());
-  }
-
-  void _measureInto() {
-    final memory = widget.extentMemory;
+  void _recordExtent(double height) {
     final key = widget.keyValue;
-    if (memory == null || key == null || !mounted) return;
-    final box = context.findRenderObject();
-    if (box is RenderBox && box.hasSize && box.size.height > 0) {
-      final h = box.size.height;
-      if ((h - _reported).abs() > 1) {
-        _reported = h;
-        memory[key] = h;
-      }
-    }
+    if (!mounted || key == null || height <= 0) return;
+    widget.extentMemory?[key] = height;
   }
 
   @override
@@ -509,8 +503,11 @@ class _LazyRowState extends State<_LazyRow> {
     // notification of their own — decide at build time as well.
     if (!_real && _near()) _real = true;
     if (_real) {
-      _reportExtent();
-      return widget.builder(context, widget.key);
+      return TimelineRowGeometry(
+        scrolling: _position?.isScrollingNotifier,
+        onExtent: _recordExtent,
+        child: widget.builder(context, widget.key),
+      );
     }
     return SizedBox(height: widget.extent);
   }

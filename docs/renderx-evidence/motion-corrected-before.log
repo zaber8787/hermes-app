@@ -1,0 +1,4 @@
+00:00 +0: loading /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart
+00:00 +0: fling toward history keeps a smooth trajectory (no per-frame teleports)
+00:00 +1: load-older converges without oscillation
+00:00 +2: All tests passed!

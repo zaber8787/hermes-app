@@ -2,6 +2,7 @@
 // load-older anchor convergence. Static geometry already passes; the bug is
 // motion.
 import 'dart:async';
+import 'renderx_instruments/frame_probe.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -30,8 +31,10 @@ class FakeScrollRepo2 extends HermesRepository {
   Future<SessionActivity> sessionActivity(String sid) async =>
       SessionActivity.quiet(sid);
   @override
-  Future<Map<String, dynamic>> sessionDetail(String sid) async =>
-      {'id': sid, 'message_count': 0};
+  Future<Map<String, dynamic>> sessionDetail(String sid) async => {
+    'id': sid,
+    'message_count': 0,
+  };
   @override
   Stream<SseEvent> chat(String sid, String input, {String? wakeBatch}) =>
       events.stream;
@@ -62,7 +65,8 @@ void main() {
     (i) => Message(
       id: 's$shift-m$i',
       role: i.isEven ? 'user' : 'assistant',
-      content: '${List.filled(1 + (i + shift) % 8, '段落內容 $i 帶點長度').join(' ')}\n\n',
+      content:
+          '${List.filled(1 + (i + shift) % 8, '段落內容 $i 帶點長度').join(' ')}\n\n',
       timestamp: 1000.0 + shift * 1000 + i,
     ),
   );
@@ -115,51 +119,64 @@ void main() {
     return t.state<ScrollableState>(scroller).position;
   }
 
-  testWidgets('fling toward history keeps a smooth trajectory (no per-frame '
-      'teleports)', (t) async {
-    await open(t);
-    final pos = tl(t);
-    // Park mid-history so the fling runs through placeholder territory.
-    pos.jumpTo(pos.maxScrollExtent * 0.6);
-    await t.pumpAndSettle();
-    final gesture = await t.startGesture(const Offset(200, 500));
-    // Drag DOWN = reveal older content (top direction).
-    for (var i = 0; i < 10; i++) {
-      await gesture.moveBy(const Offset(0, 40));
-      await t.pump(const Duration(milliseconds: 16));
-    }
-    final samples = <double>[];
-    final extentSamples = <double>[];
-    await gesture.up();
-    // Sample the whole ballistic phase frame by frame.
-    for (var i = 0; i < 60; i++) {
-      await t.pump(const Duration(milliseconds: 16));
-      samples.add(pos.pixels);
-      extentSamples.add(pos.maxScrollExtent);
-    }
-    // A frame-to-frame jump far beyond ballistic velocity = a teleport.
-    var maxStep = 0.0;
-    var maxExtentStep = 0.0;
-    for (var i = 1; i < samples.length; i++) {
-      maxStep = (samples[i] - samples[i - 1]).abs();
-      if (maxStep > 2000) break;
-      maxExtentStep =
-          (extentSamples[i] - extentSamples[i - 1]).abs().clamp(
-              maxExtentStep, double.infinity);
-    }
-    expect(
-      maxStep,
-      lessThan(1500),
-      reason: 'fling frame must not teleport by $maxStep px '
-          '(placeholder height correction firing mid-flight)',
-    );
-    expect(
-      maxExtentStep,
-      lessThan(1500),
-      reason: 'maxScrollExtent swung by $maxExtentStep px in one frame — '
-          'the thumb jumps even when the view does not',
-    );
-  });
+  for (final dragStep in [40.0, 120.0]) {
+    testWidgets('fling toward history keeps a smooth trajectory (no per-frame '
+        'teleports), drag=$dragStep', (t) async {
+      await open(t);
+      final pos = tl(t);
+      // Park mid-history so the fling runs through placeholder territory.
+      pos.jumpTo(pos.maxScrollExtent * 0.6);
+      await t.pumpAndSettle();
+      final probe = FrameProbe()..attach();
+      addTearDown(probe.detach);
+      final samples = <double>[pos.pixels];
+      final extentSamples = <double>[pos.maxScrollExtent];
+      final gesture = await t.startGesture(const Offset(200, 500));
+      // Drag DOWN = reveal older content (top direction).
+      for (var i = 0; i < 10; i++) {
+        await gesture.moveBy(
+          Offset(0, dragStep),
+          timeStamp: Duration(milliseconds: (i + 1) * 16),
+        );
+        await probe.pump(t);
+        samples.add(pos.pixels);
+        extentSamples.add(pos.maxScrollExtent);
+      }
+      final releaseOffset = pos.pixels;
+      await gesture.up(timeStamp: const Duration(milliseconds: 161));
+      // Sample the whole ballistic phase frame by frame.
+      for (var i = 0; i < 60; i++) {
+        await probe.pump(t);
+        samples.add(pos.pixels);
+        extentSamples.add(pos.maxScrollExtent);
+      }
+      probe.detach();
+      expect(
+        (releaseOffset - samples.last).abs(),
+        greaterThan(10),
+        reason: 'probe must actually exercise ballistic motion',
+      );
+      debugPrint('RENDERX motion: $probe');
+      // A frame-to-frame jump far beyond ballistic velocity = a teleport.
+      final maxStep = maxSampleStep(samples);
+      final maxExtentStep = maxSampleStep(extentSamples);
+      debugPrint('RENDERX maxStep=$maxStep maxExtentStep=$maxExtentStep');
+      expect(
+        maxStep,
+        lessThan(dragStep + 10),
+        reason:
+            'fling frame must not teleport by $maxStep px '
+            '(placeholder height correction firing mid-flight)',
+      );
+      expect(
+        maxExtentStep,
+        lessThan(300),
+        reason:
+            'maxScrollExtent swung by $maxExtentStep px in one frame — '
+            'the thumb jumps even when the view does not',
+      );
+    });
+  }
 
   testWidgets('load-older converges without oscillation', (t) async {
     await open(t);
@@ -184,7 +201,8 @@ void main() {
     expect(
       reversals,
       lessThan(3),
-      reason: 'anchor restore reversed direction $reversals times: $seen — '
+      reason:
+          'anchor restore reversed direction $reversals times: $seen — '
           'the reader sees 乱跳 while it settles',
     );
   });

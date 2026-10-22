@@ -1,0 +1,294 @@
+diff --git a/app/lib/features/chat/message_timeline.dart b/app/lib/features/chat/message_timeline.dart
+index a1117ad..2fe4824 100644
+--- a/app/lib/features/chat/message_timeline.dart
++++ b/app/lib/features/chat/message_timeline.dart
+@@ -1,5 +1,3 @@
+-import 'dart:async';
+-
+ import 'package:flutter/material.dart';
+ import 'package:flutter/rendering.dart'
+     show RenderBox, SliverMultiBoxAdaptorParentData;
+@@ -15,6 +13,7 @@ import 'message_content.dart';
+ import 'tool_timeline_projection.dart';
+ import 'turn_history_match.dart' show foldedTurnTextEquals;
+ import 'typing_dots.dart';
++import 'timeline_row_geometry.dart';
+ 
+ class MessageTimeline extends StatelessWidget {
+   const MessageTimeline({
+@@ -388,7 +387,6 @@ class _LazyRowState extends State<_LazyRow> {
+   bool _real = false;
+   ScrollPosition? _position;
+   bool _tickScheduled = false;
+-  double _reported = double.nan;
+ 
+   bool _near() {
+     final reveal = widget.reveal;
+@@ -450,18 +448,11 @@ class _LazyRowState extends State<_LazyRow> {
+   @override
+   void dispose() {
+     _position?.removeListener(_onScroll);
+-    _idleReport?.cancel();
+     super.dispose();
+   }
+ 
+   void _onScroll() {
+-    if (_real) {
+-      // SCROLLFIX: content that lands late (an image decoding, an
+-      // ExpansionTile animating) re-measures once the reader stops, so
+-      // the memory never freezes a mid-load height.
+-      _armIdleReport();
+-      return;
+-    }
++    if (_real) return;
+     // SCROLLFIX: scroll fires far more often than frames, and _near() is a
+     // render-tree query. Coalesce to one evaluation per frame — with
+     // hundreds of on-stage rows this listener storm (not layout) was where
+@@ -474,33 +465,10 @@ class _LazyRowState extends State<_LazyRow> {
+     });
+   }
+ 
+-  Timer? _idleReport;
+-  void _armIdleReport() {
+-    _idleReport?.cancel();
+-    _idleReport = Timer(const Duration(milliseconds: 400), () {
+-      if (mounted) _measureInto();
+-    });
+-  }
+-
+-  void _reportExtent() {
+-    // Report once on this frame's layout (post-frame), and re-arm only
+-    // when the row rebuilds — never a permanent per-frame callback chain.
+-    if (!mounted) return;
+-    WidgetsBinding.instance.addPostFrameCallback((_) => _measureInto());
+-  }
+-
+-  void _measureInto() {
+-    final memory = widget.extentMemory;
++  void _recordExtent(double height) {
+     final key = widget.keyValue;
+-    if (memory == null || key == null || !mounted) return;
+-    final box = context.findRenderObject();
+-    if (box is RenderBox && box.hasSize && box.size.height > 0) {
+-      final h = box.size.height;
+-      if ((h - _reported).abs() > 1) {
+-        _reported = h;
+-        memory[key] = h;
+-      }
+-    }
++    if (!mounted || key == null || height <= 0) return;
++    widget.extentMemory?[key] = height;
+   }
+ 
+   @override
+@@ -509,8 +477,11 @@ class _LazyRowState extends State<_LazyRow> {
+     // notification of their own — decide at build time as well.
+     if (!_real && _near()) _real = true;
+     if (_real) {
+-      _reportExtent();
+-      return widget.builder(context, widget.key);
++      return TimelineRowGeometry(
++        scrolling: _position?.isScrollingNotifier,
++        onExtent: _recordExtent,
++        child: widget.builder(context, widget.key),
++      );
+     }
+     return SizedBox(height: widget.extent);
+   }
+diff --git a/app/test/scrollfix_motion_test.dart b/app/test/scrollfix_motion_test.dart
+index 181057f..1500160 100644
+--- a/app/test/scrollfix_motion_test.dart
++++ b/app/test/scrollfix_motion_test.dart
+@@ -141,8 +141,8 @@ void main() {
+     var maxStep = 0.0;
+     var maxExtentStep = 0.0;
+     for (var i = 1; i < samples.length; i++) {
+-      maxStep = (samples[i] - samples[i - 1]).abs();
+-      if (maxStep > 2000) break;
++      maxStep = (samples[i] - samples[i - 1]).abs().clamp(
++          maxStep, double.infinity);
+       maxExtentStep =
+           (extentSamples[i] - extentSamples[i - 1]).abs().clamp(
+               maxExtentStep, double.infinity);
+@@ -155,7 +155,7 @@ void main() {
+     );
+     expect(
+       maxExtentStep,
+-      lessThan(1500),
++      lessThan(300),
+       reason: 'maxScrollExtent swung by $maxExtentStep px in one frame — '
+           'the thumb jumps even when the view does not',
+     );
+diff --git a/app/lib/features/chat/timeline_row_geometry.dart b/app/lib/features/chat/timeline_row_geometry.dart
+new file mode 100644
+index 0000000..f3fc33e
+--- /dev/null
++++ b/app/lib/features/chat/timeline_row_geometry.dart
+@@ -0,0 +1,84 @@
++import 'package:flutter/foundation.dart';
++import 'package:flutter/rendering.dart';
++import 'package:flutter/widgets.dart';
++
++/// Observes descendant layout, including changes that never rebuild the row.
++/// A moving reader keeps the last published extent until scrolling ends.
++class TimelineRowGeometry extends SingleChildRenderObjectWidget {
++  const TimelineRowGeometry({
++    super.key,
++    required this.scrolling,
++    required this.onExtent,
++    required super.child,
++  });
++
++  final ValueListenable<bool>? scrolling;
++  final ValueChanged<double> onExtent;
++
++  @override
++  RenderObject createRenderObject(BuildContext context) =>
++      _RowGeometry(scrolling, onExtent);
++
++  @override
++  void updateRenderObject(BuildContext context, covariant _RowGeometry object) {
++    object
++      ..scrolling = scrolling
++      ..onExtent = onExtent;
++  }
++}
++
++class _RowGeometry extends RenderProxyBox {
++  _RowGeometry(this._scrolling, this.onExtent);
++
++  ValueListenable<bool>? _scrolling;
++  ValueChanged<double> onExtent;
++  double? _published;
++  bool _pending = false;
++
++  set scrolling(ValueListenable<bool>? value) {
++    if (identical(value, _scrolling)) return;
++    if (attached) _scrolling?.removeListener(_scrollChanged);
++    _scrolling = value;
++    if (attached) _scrolling?.addListener(_scrollChanged);
++    markNeedsLayout();
++  }
++
++  void _scrollChanged() {
++    if (_scrolling?.value != true) markNeedsLayout();
++  }
++
++  @override
++  void attach(PipelineOwner owner) {
++    super.attach(owner);
++    _scrolling?.addListener(_scrollChanged);
++  }
++
++  @override
++  void detach() {
++    _scrolling?.removeListener(_scrollChanged);
++    super.detach();
++  }
++
++  @override
++  void performLayout() {
++    super.performLayout();
++    if (_scrolling?.value == true && _published != null) {
++      size = constraints.constrain(Size(size.width, _published!));
++    }
++    if (_published == size.height) return;
++    _published = size.height;
++    if (_pending) return;
++    _pending = true;
++    WidgetsBinding.instance.addPostFrameCallback((_) {
++      _pending = false;
++      if (attached) onExtent(size.height);
++    });
++  }
++
++  @override
++  void paint(PaintingContext context, Offset offset) {
++    // Deferred content may grow past the stable row while a drag is active.
++    context.pushClipRect(needsCompositing, offset, Offset.zero & size,
++        (context, offset) => super.paint(context, offset));
++  }
++}
+diff --git a/app/test/renderx_instruments/row_geometry_test.dart b/app/test/renderx_instruments/row_geometry_test.dart
+new file mode 100644
+index 0000000..d188825
+--- /dev/null
++++ b/app/test/renderx_instruments/row_geometry_test.dart
+@@ -0,0 +1,77 @@
++import 'package:flutter/material.dart';
++import 'package:flutter_test/flutter_test.dart';
++import 'package:flutter_riverpod/flutter_riverpod.dart';
++import 'package:hermes_app/features/chat/message_timeline.dart';
++import 'package:hermes_app/features/chat/timeline_row_geometry.dart';
++import 'package:hermes_app/models/message.dart';
++
++import '../support/localized_app.dart';
++
++void main() {
++  testWidgets('descendant-only layout publishes height without ancestor rebuild',
++      (tester) async {
++    final height = ValueNotifier<double>(80);
++    final scrolling = ValueNotifier<bool>(false);
++    final measured = <double>[];
++    await tester.pumpWidget(MaterialApp(
++      home: Align(
++        alignment: Alignment.topLeft,
++        child: TimelineRowGeometry(
++          scrolling: scrolling,
++          onExtent: measured.add,
++          child: ValueListenableBuilder<double>(
++            valueListenable: height,
++            builder: (_, value, _) => SizedBox(width: 100, height: value),
++          ),
++        ),
++      ),
++    ));
++    expect(measured, [80]);
++    scrolling.value = true;
++    height.value = 280;
++    await tester.pump();
++    expect(tester.getSize(find.byType(TimelineRowGeometry)).height, 80);
++    expect(measured, [80], reason: 'late content must not move a dragging reader');
++    scrolling.value = false;
++    await tester.pump();
++    expect(measured, [80, 280]);
++    height.value = 40;
++    await tester.pump();
++    expect(measured, [80, 280, 40]);
++    await tester.pumpWidget(const SizedBox());
++    height.dispose();
++    scrolling.dispose();
++  });
++
++  testWidgets('extent memory follows ExpansionTile animation and collapse',
++      (tester) async {
++    final memory = <Object, double>{};
++    final messages = List.generate(50, (i) => Message(
++      id: 'm$i',
++      role: i == 0 ? 'system' : 'user',
++      content: i == 0 ? List.filled(30, 'detail\n').join() : 'row $i',
++    ));
++    await tester.pumpWidget(ProviderScope(child: localizedHome(home: Scaffold(
++      body: CustomScrollView(slivers: [
++        MessageTimelineSliver(
++          messages: messages,
++          detailed: true,
++          extentMemory: memory,
++          reveal: const TimelineReveal(
++            pixels: 0, viewport: 600, revision: 0, realFrom: 0),
++        ),
++      ]),
++    ))));
++    await tester.pumpAndSettle();
++    final rowKey = memory.keys.firstWhere((key) => key.toString().endsWith(':m0'));
++    final collapsed = memory[rowKey]!;
++    await tester.tap(find.descendant(of: find.byType(ExpansionTile).first, matching: find.byType(ListTile)).first);
++    await tester.pumpAndSettle();
++    final expanded = memory[rowKey]!;
++    expect(expanded, greaterThan(collapsed + 100));
++    await tester.tap(find.descendant(of: find.byType(ExpansionTile).first, matching: find.byType(ListTile)).first);
++    await tester.pumpAndSettle();
++    expect(memory[rowKey], closeTo(collapsed, 0.01));
++    expect(tester.takeException(), isNull);
++  });
++}

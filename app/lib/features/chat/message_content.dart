@@ -131,7 +131,19 @@ class _ServerPathImageState extends ConsumerState<ServerPathImage> {
       future: _future,
       builder: (context, snapshot) {
         if (snapshot.hasError) {
-          return AttachmentTile(widget.path, filename: widget.filename);
+          final repo = _repo!;
+          final path = widget.path;
+          return AttachmentTile(
+            path,
+            filename: widget.filename,
+            onDownloaded: (bytes) {
+              if (!mounted || !identical(_repo, repo) || _path != path) return;
+              _serverFileCooldown[repo]?.remove(path);
+              setState(() {
+                _future = Future.value(bytes);
+              });
+            },
+          );
         }
         if (!snapshot.hasData) {
           return const SizedBox(
@@ -240,15 +252,39 @@ Future<void> openMessageLink(BuildContext context, String value) async {
   }
 }
 
-class MessageContent extends ConsumerWidget {
+class MessageContent extends ConsumerStatefulWidget {
   const MessageContent(this.text, {super.key});
   final String text;
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<MessageContent> createState() => _MessageContentState();
+}
+
+class _MessageContentState extends ConsumerState<MessageContent> {
+  String? _text;
+  HermesRepository? _repository;
+  Widget? _cached;
+
+  @override
+  Widget build(BuildContext context) {
     final repo = ref.watch(repositoryProvider);
+    final text = widget.text;
+    if (_cached != null && _text == text && identical(_repository, repo)) {
+      return _cached!;
+    }
+    _text = text;
+    _repository = repo;
+    return _cached = _buildContent(context, repo, text);
+  }
+
+  Widget _buildContent(
+    BuildContext context,
+    HermesRepository repo,
+    String text,
+  ) {
+    final parts = splitMessageContent(text);
     final sources = <String>[];
     final filenames = <String, String>{};
-    for (final part in splitMessageContent(text)) {
+    for (final part in parts) {
       if (part.media &&
           (isImageReference(part.value) ||
               _serverImagePath.hasMatch(part.value) ||
@@ -280,7 +316,7 @@ class MessageContent extends ConsumerWidget {
       child: SelectionArea(
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: splitMessageContent(text).map((part) {
+          children: parts.map((part) {
             if (part.media) {
               if (isImageReference(part.value)) return MessageImage(part.value);
               // OPENPERF P3 (定案2): history ships MEDIA REFERENCES. An image
@@ -667,15 +703,18 @@ Future<Uint8List> cachedArtifact(
 /// /v1/media/download fetches. In-flight state hangs on the repository
 /// INSTANCE (Expando), so an identity swap always re-fetches (IMGPERF A1
 /// contract) while rebuilds of one identity share a single GET. A path that
-/// just failed cools down for 30s globally instead of re-firing on every
+/// just failed cools down for 30s per repository identity instead of re-firing on every
 /// list rebuild — vanished files were a request storm.
-final Expando<Map<String, Future<Uint8List>>> _serverInflight =
-    Expando('serverFileInflight');
-final Map<String, DateTime> _serverFileCooldown = {};
+final Expando<Map<String, Future<Uint8List>>> _serverInflight = Expando(
+  'serverFileInflight',
+);
+final Expando<Map<String, DateTime>> _serverFileCooldown = Expando(
+  'serverFileCooldown',
+);
 
 Future<Uint8List> cachedServerFile(HermesRepository repo, String path) {
-  final key = '${sha256.convert(utf8.encode(repo.baseUrl)).toString()}#file#$path';
-  final failedAt = _serverFileCooldown[key];
+  final cooldown = _serverFileCooldown[repo] ??= <String, DateTime>{};
+  final failedAt = cooldown[path];
   if (failedAt != null &&
       DateTime.now().difference(failedAt) < const Duration(seconds: 30)) {
     return Future.error(StateError('recent download failure: $path'));
@@ -691,10 +730,10 @@ Future<Uint8List> cachedServerFile(HermesRepository repo, String path) {
   final future = () async {
     try {
       final bytes = await repo.downloadServerFile(path);
-      _serverFileCooldown.remove(key);
+      cooldown.remove(path);
       return bytes;
     } catch (_) {
-      _serverFileCooldown[key] = DateTime.now();
+      cooldown[path] = DateTime.now();
       rethrow;
     } finally {
       inflight.remove(path);
@@ -705,9 +744,15 @@ Future<Uint8List> cachedServerFile(HermesRepository repo, String path) {
 }
 
 class AttachmentTile extends ConsumerStatefulWidget {
-  const AttachmentTile(this.reference, {super.key, this.filename});
+  const AttachmentTile(
+    this.reference, {
+    super.key,
+    this.filename,
+    this.onDownloaded,
+  });
   final String reference;
   final String? filename;
+  final ValueChanged<Uint8List>? onDownloaded;
   @override
   ConsumerState<AttachmentTile> createState() => _AttachmentTileState();
 }
@@ -811,6 +856,7 @@ class _AttachmentTileState extends ConsumerState<AttachmentTile> {
                     final bytes = await ref
                         .read(repositoryProvider)
                         .downloadServerFile(reference);
+                    widget.onDownloaded?.call(bytes);
                     final saved = await saveBytesAs(name, bytes);
                     if (mounted) {
                       setState(

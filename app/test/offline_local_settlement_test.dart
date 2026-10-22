@@ -249,7 +249,7 @@ void main() {
   });
 
   test('takeover mid-flight: M021, the moved record survives untouched', () async {
-    final token = await seedWaitingTurn('問題一', lease: const Duration(milliseconds: 1));
+    final token = await seedWaitingTurn('問題一', lease: const Duration(seconds: -60));
     t = t0.add(const Duration(seconds: 61));
     final c = scripted();
     await c.bootstrap();

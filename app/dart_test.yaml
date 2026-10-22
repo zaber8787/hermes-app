@@ -1,0 +1,3 @@
+# Wall-clock render budgets need a dedicated CPU instead of competing VMs.
+# All tests still run; callers may override with --concurrency for throughput.
+concurrency: 1

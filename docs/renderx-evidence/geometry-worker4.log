@@ -1,0 +1,41 @@
+Resolving dependencies...
+Downloading packages...
+  android_file_picker 1.1.1 (2.1.1 available)
+  code_assets 1.2.1 (2.1.0 available)
+  cross_file 0.3.5+5 (0.4.0 available)
+  dbus 0.7.15 (0.8.0 available)
+  file_picker 12.3.0 (13.1.0 available)
+  file_picker_darwin 1.2.0 (2.3.2 available)
+  file_picker_linux 1.1.0 (2.0.2 available)
+  file_picker_platform_interface 3.4.0 (4.2.0 available)
+  file_picker_web 3.1.0 (4.2.0 available)
+  flutter_secure_storage 10.3.3 (11.2.0 available)
+  flutter_secure_storage_darwin 0.3.2 (0.4.3 available)
+  flutter_secure_storage_platform_interface 2.1.0 (2.1.1 available)
+  hooks 2.0.2 (2.2.0 available)
+  jni 1.0.3 (1.1.0 available)
+  jni_flutter 1.0.3 (1.0.4+1 available)
+  material_color_utilities 0.13.0 (0.13.1 available)
+  objective_c 9.5.0 (9.6.2 available)
+  record_use 0.6.0 (1.1.1 available)
+  shared_preferences 2.5.5 (2.5.6 available)
+  shared_preferences_android 2.4.28 (2.5.2 available)
+  shared_preferences_foundation 2.5.7 (2.6.0 available)
+  test_api 0.7.12 (0.7.15 available)
+  url_launcher 6.3.2 (6.3.3 available)
+  val_highlight 0.1.0 (0.1.1 available)
+  val_highlight_flutter 0.1.0 (0.1.1 available)
+  val_latex 0.1.1 (0.1.3 available)
+  val_latex_flutter 0.1.2 (0.1.3 available)
+  vector_math 2.4.0 (2.4.3 available)
+  vm_service 15.3.0 (15.4.0 available)
+  windows_file_picker 1.3.0 (2.0.1 available)
+Got dependencies!
+30 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+00:00 +0: loading /Users/zaber/hermes-app/app/test/renderx_instruments/row_geometry_test.dart
+00:00 +0: /Users/zaber/hermes-app/app/test/renderx_instruments/row_geometry_test.dart: descendant-only layout publishes height without ancestor rebuild
+00:00 +1: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports)
+00:00 +2: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports)
+00:00 +3: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: load-older converges without oscillation
+00:00 +4: All tests passed!

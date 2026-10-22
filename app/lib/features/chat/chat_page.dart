@@ -31,6 +31,7 @@ import 'remote_stop.dart';
 import 'viewers.dart';
 import 'typing_dots.dart';
 import 'message_timeline.dart';
+import 'scroll_idle_gate.dart';
 import 'tool_timeline_projection.dart';
 
 /// Attachment-button pick feedback (IOS-PICKER-PLAN B4 — presentation
@@ -257,6 +258,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       scheduleMicrotask(leaving.detach);
     }
     input.dispose();
+    _anchorIdle.cancel();
     scroll.dispose();
     super.dispose();
   }
@@ -991,26 +993,35 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     return real;
   }
 
+  final _anchorIdle = ScrollIdleGate();
+
   void _refineOlderAnchor(
     (Object?, double)? anchor,
     double baseExtent,
     double baseOffset,
     int refine, [
     int? anchorIndex,
-    int wait = 0,
   ]) {
     if (!scroll.hasClients || !mounted || anchor == null) return;
     final position = scroll.position;
     // SCROLLFIX: never jumpTo under a moving reader — a correction landing
     // mid-drag or mid-fling is exactly the '乱跳' the reader reports. Wait
-    // (bounded) for the gesture/ballistic to end, then measure as usual.
-    if (position.isScrollingNotifier.value && refine > 0 && wait < 240) {
-      WidgetsBinding.instance.addPostFrameCallback(
-        (_) => _refineOlderAnchor(
-            anchor, baseExtent, baseOffset, refine, anchorIndex, wait + 1),
-      );
+    // for the scroll-end event, then run the bounded refinement passes.
+    if (position.isScrollingNotifier.value) {
+      _anchorIdle.run(position.isScrollingNotifier, () {
+        if (mounted) {
+          _refineOlderAnchor(
+            anchor,
+            baseExtent,
+            baseOffset,
+            refine,
+            anchorIndex,
+          );
+        }
+      });
       return;
     }
+    _anchorIdle.cancel();
     final anchorKey = anchor.$1;
     final now = anchorKey != null ? _timelineRowDy(anchorKey) : null;
 
@@ -1126,7 +1137,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           viewport: scroll.hasClients ? scroll.position.viewportDimension : 640,
           revision: revealRevision,
           focusIndex: revealFocus,
-          realFrom: realFrom,
+          realFrom: realFrom ?? (!firstLoaded ? messages.length : null),
         ),
       ),
     );
@@ -1191,8 +1202,8 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     if (rows > 40 && _followRealFloor == null) {
       _followRealFloor = rows;
       if (mounted) setState(() {});
-    } else if (_followRealFloor != null && _followRealFloor! > rows - 12) {
-      _followRealFloor = rows - 12;
+    } else if (_followRealFloor != null && _followRealFloor! > rows - 4) {
+      _followRealFloor = rows - 4;
       if (mounted) setState(() {});
     }
     // Only ever CLOSE the gap to the bottom; never yank an established

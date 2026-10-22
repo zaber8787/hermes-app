@@ -125,7 +125,7 @@ void main() {
     for (var i = 0; i < 6; i++) {
       await t.pump(const Duration(milliseconds: 120));
     }
-    expect(pos.pixels, closeTo(settled, 1.0),
+    expect(pos.pixels, closeTo(settled, 0.001),
         reason: 'viewport must stay where the reader left it');
   });
 

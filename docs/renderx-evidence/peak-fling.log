@@ -1,0 +1,13 @@
+00:00 +0: loading /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart
+00:00 +0: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports), drag=40.0
+RENDERX motion: frames=70 peakWidgets=63 peakRows=1 peakPumpUs=4006
+RENDERX maxStep=39.51792581538393 maxExtentStep=48.48420000000624
+00:00 +1: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports), drag=120.0
+RENDERX motion: frames=70 peakWidgets=121 peakRows=2 peakPumpUs=4635
+RENDERX maxStep=119.35514715061436 maxExtentStep=48.484199999998964
+00:00 +2: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: load-older converges without oscillation
+00:01 +3: loading /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart
+00:01 +3: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +4: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: total extent stays stable while browsing (thumb does not jump wildly)
+00:01 +5: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: no placeholder band inside the settled viewport
+00:02 +6: All tests passed!

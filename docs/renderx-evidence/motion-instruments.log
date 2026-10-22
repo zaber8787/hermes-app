@@ -1,0 +1,39 @@
+00:00 +0: loading /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart
+00:00 +0: fling toward history keeps a smooth trajectory (no per-frame teleports)
+══╡ EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK ╞════════════════════════════════════════════════════
+The following _TypeError was thrown running a test:
+Null check operator used on a null value
+
+When the exception was thrown, this was the stack:
+#0      Element.widget (package:flutter/src/widgets/framework.dart:3666:31)
+#1      FrameProbe.pump.<anonymous closure> (file:///Users/zaber/hermes-app/app/test/renderx_instruments/frame_probe.dart:38:41)
+#2      WhereIterator.moveNext (dart:_internal/iterable.dart:469:13)
+#3      Iterable.length (dart:core/iterable.dart:544:15)
+#4      FrameProbe.pump (file:///Users/zaber/hermes-app/app/test/renderx_instruments/frame_probe.dart:38:62)
+<asynchronous suspension>
+#5      main.<anonymous closure> (file:///Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart:140:7)
+<asynchronous suspension>
+#6      testWidgets.<anonymous closure>.<anonymous closure> (package:flutter_test/src/widget_tester.dart:192:15)
+<asynchronous suspension>
+#7      TestWidgetsFlutterBinding._runTestBody (package:flutter_test/src/binding.dart:1953:5)
+<asynchronous suspension>
+<asynchronous suspension>
+(elided one frame from package:stack_trace)
+
+The test description was:
+  fling toward history keeps a smooth trajectory (no per-frame teleports)
+════════════════════════════════════════════════════════════════════════════════════════════════════
+00:00 +0 -1: fling toward history keeps a smooth trajectory (no per-frame teleports) [E]
+  Test failed. See exception logs above.
+  The test description was: fling toward history keeps a smooth trajectory (no per-frame teleports)
+  
+Warning: At least one test in this suite creates an HttpClient. When running a test suite that uses
+TestWidgetsFlutterBinding, all HTTP requests will return status code 400, and no network request
+will actually be made. Any test expecting a real network connection and status code will fail.
+To test code that needs an HttpClient, provide your own HttpClient implementation to the code under
+test, so that your test can consistently provide a testable response to the code under test.
+00:00 +0 -1: load-older converges without oscillation
+00:00 +1 -1: Some tests failed.
+
+Failing tests:
+  /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports)

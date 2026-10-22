@@ -1,0 +1,38 @@
+00:00 +0: loading /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart
+00:00 +0: /Users/zaber/hermes-app/app/test/imgperf_image_lifecycle_test.dart: S1/A1 same-path rebuilds reuse one download future
+00:00 +1: /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart: streamed tail and expansion repaint only their row boundaries
+00:00 +2: /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart: streamed tail and expansion repaint only their row boundaries
+00:00 +3: /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart: streamed tail and expansion repaint only their row boundaries
+00:00 +4: /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart: streamed tail and expansion repaint only their row boundaries
+00:00 +5: /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart: streamed tail and expansion repaint only their row boundaries
+RENDERX repaint: stableDelta=5 tailDelta=14
+══╡ EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK ╞════════════════════════════════════════════════════
+The following assertion was thrown running a test:
+The value of a rendering debug variable was changed by the test.
+
+When the exception was thrown, this was the stack:
+#0      debugAssertAllRenderVarsUnset.<anonymous closure> (package:flutter/src/rendering/debug.dart:348:7)
+#1      debugAssertAllRenderVarsUnset (package:flutter/src/rendering/debug.dart:351:4)
+#2      TestWidgetsFlutterBinding._verifyInvariants (package:flutter_test/src/binding.dart:2013:7)
+#3      AutomatedTestWidgetsFlutterBinding._verifyInvariants (package:flutter_test/src/binding.dart:2525:11)
+#4      TestWidgetsFlutterBinding._runTestBody (package:flutter_test/src/binding.dart:1974:7)
+<asynchronous suspension>
+<asynchronous suspension>
+(elided one frame from package:stack_trace)
+
+The test description was:
+  streamed tail and expansion repaint only their row boundaries
+════════════════════════════════════════════════════════════════════════════════════════════════════
+00:00 +5 -1: /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart: streamed tail and expansion repaint only their row boundaries [E]
+  Test failed. See exception logs above.
+  The test description was: streamed tail and expansion repaint only their row boundaries
+  
+Warning: At least one test in this suite creates an HttpClient. When running a test suite that uses
+TestWidgetsFlutterBinding, all HTTP requests will return status code 400, and no network request
+will actually be made. Any test expecting a real network connection and status code will fail.
+To test code that needs an HttpClient, provide your own HttpClient implementation to the code under
+test, so that your test can consistently provide a testable response to the code under test.
+00:00 +5 -1: Some tests failed.
+
+Failing tests:
+  /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart: streamed tail and expansion repaint only their row boundaries

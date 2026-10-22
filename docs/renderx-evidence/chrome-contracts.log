@@ -1,0 +1,25 @@
+00:00 +0: loading /Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart
+[CHROME]:[1022/195525.343920:ERROR:base/power_monitor/thermal_state_observer_mac.mm:122] ThermalStateObserverMac unable to register to power notifications. Result: 9
+[CHROME]:[1022/195525.344545:ERROR:net/dns/dns_config_service_posix.cc:139] DNS config watch failed to start.
+[CHROME]:[1022/195525.344829:FATAL:base/apple/mach_port_rendezvous_mac.cc:159] Check failed: kr == KERN_SUCCESS. bootstrap_check_in org.chromium.Chromium.MachPortRendezvousServer.83187: Permission denied (1100)
+Failed to launch browser after 3 tries. Command used to launch it: /private/tmp/renderx-chrome/chrome-headless-shell-mac-arm64/chrome-headless-shell --user-data-dir=/var/folders/f5/nx0_w2vs2499chp3ml65d7w00000gn/T/flutter_tools.urBewZ/flutter_tools_chrome_device.MrKJn0 --remote-debugging-port=63401 --disable-background-timer-throttling --disable-extensions --disable-popup-blocking --bwsi --no-first-run --no-default-browser-check --disable-default-apps --disable-translate --disable-search-engine-choice-screen --no-sandbox --headless --window-size=2400,1800 http://localhost:63399/static/index.html?managerUrl=ws%3A%2F%2Flocalhost%3A63399%2F0&debug=false
+00:00 +0 -1: loading /Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart [E]
+  Failed to load "/Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart": Failed to launch browser. Make sure you are using an up-to-date Chrome or Edge. Otherwise, consider using -d web-server instead and filing an issue at https://github.com/flutter/flutter/issues.
+  package:flutter_tools/src/base/common.dart 34:3                  throwToolExit
+  package:flutter_tools/src/web/chrome.dart 341:17                 ChromiumLauncher._spawnChromiumProcess.<fn>
+  dart:async/stream_pipe.dart 14:23                                _runUserCode
+  dart:async/stream.dart 1787:11                                   Stream.firstWhere.<fn>
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/web/chrome.dart 314:7                  ChromiumLauncher._spawnChromiumProcess
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/web/chrome.dart 254:29                 ChromiumLauncher.launch
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/test/flutter_web_platform.dart 874:29  BrowserManager.start
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/test/flutter_web_platform.dart 636:27  FlutterWebPlatform.load
+  ===== asynchronous gap ===========================
+  package:test_core/src/runner/loader.dart 249:27                  Loader.loadFile.<fn>
+  ===== asynchronous gap ===========================
+  package:test_core/src/runner/load_suite.dart 95:21               new LoadSuite.<fn>.<fn>
+  
+00:00 +0 -1: loading /Users/zaber/hermes-app/app/test/openperf_regression_test.dart

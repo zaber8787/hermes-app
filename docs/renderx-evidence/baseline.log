@@ -1,0 +1,56 @@
+Flutter is deprecating support for Intel-based Macs. A future version of Flutter will require an Apple Silicon Mac to build applications.
+00:00 +0: loading /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart
+00:00 +0 -1: loading /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart [E]
+  Failed to load "/Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart": Failed to create server socket (OS Error: Operation not permitted, errno = 1), address = 127.0.0.1, port = 0
+  dart:io-patch/socket_patch.dart 1248:7                           _NativeSocket.bind
+  ===== asynchronous gap ===========================
+  dart:io-patch/socket_patch.dart 2195:12                          _RawServerSocket.bind.<fn>
+  ===== asynchronous gap ===========================
+  dart:io-patch/socket_patch.dart 2515:12                          _ServerSocket.bind.<fn>
+  ===== asynchronous gap ===========================
+  dart:_http/http_impl.dart 3479:24                                _HttpServer.bind.<fn>
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/test/flutter_tester_device.dart 89:15  FlutterTesterTestDevice.start
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/test/flutter_platform.dart 679:51      FlutterPlatform._startTest.<fn>
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/base/async_guard.dart 108:24           asyncGuard.<fn>
+  
+00:00 +0 -2: loading /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart [E]
+  Failed to load "/Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart": Failed to create server socket (OS Error: Operation not permitted, errno = 1), address = 127.0.0.1, port = 0
+  dart:io-patch/socket_patch.dart 1248:7                           _NativeSocket.bind
+  ===== asynchronous gap ===========================
+  dart:io-patch/socket_patch.dart 2195:12                          _RawServerSocket.bind.<fn>
+  ===== asynchronous gap ===========================
+  dart:io-patch/socket_patch.dart 2515:12                          _ServerSocket.bind.<fn>
+  ===== asynchronous gap ===========================
+  dart:_http/http_impl.dart 3479:24                                _HttpServer.bind.<fn>
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/test/flutter_tester_device.dart 89:15  FlutterTesterTestDevice.start
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/test/flutter_platform.dart 679:51      FlutterPlatform._startTest.<fn>
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/base/async_guard.dart 108:24           asyncGuard.<fn>
+  
+00:00 +0 -3: loading /Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart [E]
+  Failed to load "/Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart": Failed to create server socket (OS Error: Operation not permitted, errno = 1), address = 127.0.0.1, port = 0
+  dart:io-patch/socket_patch.dart 1248:7                           _NativeSocket.bind
+  ===== asynchronous gap ===========================
+  dart:io-patch/socket_patch.dart 2195:12                          _RawServerSocket.bind.<fn>
+  ===== asynchronous gap ===========================
+  dart:io-patch/socket_patch.dart 2515:12                          _ServerSocket.bind.<fn>
+  ===== asynchronous gap ===========================
+  dart:_http/http_impl.dart 3479:24                                _HttpServer.bind.<fn>
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/test/flutter_tester_device.dart 89:15  FlutterTesterTestDevice.start
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/test/flutter_platform.dart 679:51      FlutterPlatform._startTest.<fn>
+  ===== asynchronous gap ===========================
+  package:flutter_tools/src/base/async_guard.dart 108:24           asyncGuard.<fn>
+  
+00:00 +0 -3: Some tests failed.
+
+Failing tests:
+  /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: loading /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart
+  /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: loading /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart
+  /Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart: loading /Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart

@@ -1,0 +1,88 @@
+00:00 +0: loading /Users/zaber/hermes-app/app/test/renderx_instruments/idle_and_probe_test.dart
+00:00 +0: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports)
+00:00 +1: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports)
+00:00 +2: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports)
+00:00 +3: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports)
+00:00 +4: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports)
+00:00 +5: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports)
+00:00 +5: /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart: streamed tail and expansion repaint only their row boundaries
+══╡ EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK ╞════════════════════════════════════════════════════
+The following TestFailure was thrown running a test:
+Expected: a value greater than <10>
+  Actual: <10>
+   Which: is not a value greater than <10>
+
+When the exception was thrown, this was the stack:
+#4      main.<anonymous closure> (file:///Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart:52:5)
+<asynchronous suspension>
+#5      testWidgets.<anonymous closure>.<anonymous closure> (package:flutter_test/src/widget_tester.dart:192:15)
+<asynchronous suspension>
+#6      TestWidgetsFlutterBinding._runTestBody (package:flutter_test/src/binding.dart:1953:5)
+<asynchronous suspension>
+<asynchronous suspension>
+(elided one frame from package:stack_trace)
+
+This was caught by the test expectation on the following line:
+  file:///Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart line 52
+The test description was:
+  streamed tail and expansion repaint only their row boundaries
+════════════════════════════════════════════════════════════════════════════════════════════════════
+00:00 +5 -1: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports)
+00:00 +5 -1: /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart: streamed tail and expansion repaint only their row boundaries [E]
+  Test failed. See exception logs above.
+  The test description was: streamed tail and expansion repaint only their row boundaries
+  
+Warning: At least one test in this suite creates an HttpClient. When running a test suite that uses
+TestWidgetsFlutterBinding, all HTTP requests will return status code 400, and no network request
+will actually be made. Any test expecting a real network connection and status code will fail.
+To test code that needs an HttpClient, provide your own HttpClient implementation to the code under
+test, so that your test can consistently provide a testable response to the code under test.
+00:00 +5 -1: /Users/zaber/hermes-app/app/test/scrollfix_motion_test.dart: fling toward history keeps a smooth trajectory (no per-frame teleports)
+RENDERX motion: frames=70 peakWidgets=63 peakRows=1 peakPumpUs=8739
+RENDERX maxStep=39.51792581538393 maxExtentStep=48.48420000000624
+00:01 +6 -1: /Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart: reader away from tail can return to latest without approval
+00:01 +7 -1: /Users/zaber/hermes-app/app/test/openperf_regression_test.dart: 200-row first build mounts a viewport-sized window (P4 pin)
+00:01 +8 -1: /Users/zaber/hermes-app/app/test/openperf_regression_test.dart: 200-row first build mounts a viewport-sized window (P4 pin)
+00:01 +8 -1: /Users/zaber/hermes-app/app/test/timeline_virtualization_test.dart: 200-message first build stays viewport-sized (P1 pin)
+RENDERX coldFirstMs=63
+00:01 +9 -1: /Users/zaber/hermes-app/app/test/openperf_regression_test.dart: 200-row first build mounts a viewport-sized window (P4 pin)
+00:01 +10 -1: /Users/zaber/hermes-app/app/test/openperf_regression_test.dart: 200-row first build mounts a viewport-sized window (P4 pin)
+RENDERX coldInteractiveMs=411
+00:01 +11 -1: /Users/zaber/hermes-app/app/test/openperf_regression_test.dart: 200-row first build mounts a viewport-sized window (P4 pin)
+00:01 +12 -1: /Users/zaber/hermes-app/app/test/openperf_regression_test.dart: 200-row first build mounts a viewport-sized window (P4 pin)
+══╡ EXCEPTION CAUGHT BY FLUTTER TEST FRAMEWORK ╞════════════════════════════════════════════════════
+The following TestFailure was thrown running a test:
+Expected: a value less than <300>
+  Actual: <411>
+   Which: is not a value less than <300>
+
+When the exception was thrown, this was the stack:
+#4      main.<anonymous closure> (file:///Users/zaber/hermes-app/app/test/openperf_regression_test.dart:129:5)
+<asynchronous suspension>
+#5      testWidgets.<anonymous closure>.<anonymous closure> (package:flutter_test/src/widget_tester.dart:192:15)
+<asynchronous suspension>
+#6      TestWidgetsFlutterBinding._runTestBody (package:flutter_test/src/binding.dart:1953:5)
+<asynchronous suspension>
+<asynchronous suspension>
+(elided one frame from package:stack_trace)
+
+This was caught by the test expectation on the following line:
+  file:///Users/zaber/hermes-app/app/test/openperf_regression_test.dart line 129
+The test description was:
+  200-row first build mounts a viewport-sized window (P4 pin)
+════════════════════════════════════════════════════════════════════════════════════════════════════
+00:01 +12 -2: /Users/zaber/hermes-app/app/test/openperf_regression_test.dart: 200-row first build mounts a viewport-sized window (P4 pin) [E]
+  Test failed. See exception logs above.
+  The test description was: 200-row first build mounts a viewport-sized window (P4 pin)
+  
+Warning: At least one test in this suite creates an HttpClient. When running a test suite that uses
+TestWidgetsFlutterBinding, all HTTP requests will return status code 400, and no network request
+will actually be made. Any test expecting a real network connection and status code will fail.
+To test code that needs an HttpClient, provide your own HttpClient implementation to the code under
+test, so that your test can consistently provide a testable response to the code under test.
+00:01 +12 -2: /Users/zaber/hermes-app/app/test/openperf_regression_test.dart: content of swept-but-unrevealed rows stays unbuilt (P4 pin)
+00:01 +13 -2: Some tests failed.
+
+Failing tests:
+  /Users/zaber/hermes-app/app/test/openperf_regression_test.dart: 200-row first build mounts a viewport-sized window (P4 pin)
+  /Users/zaber/hermes-app/app/test/renderx_instruments/repaint_test.dart: streamed tail and expansion repaint only their row boundaries

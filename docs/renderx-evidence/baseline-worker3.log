@@ -1,0 +1,853 @@
+Flutter is deprecating support for Intel-based Macs. A future version of Flutter will require an Apple Silicon Mac to build applications.
+Resolving dependencies...
+Downloading packages...
+  android_file_picker 1.1.1 (2.1.1 available)
+  code_assets 1.2.1 (2.1.0 available)
+  cross_file 0.3.5+5 (0.4.0 available)
+  dbus 0.7.15 (0.8.0 available)
+  file_picker 12.3.0 (13.1.0 available)
+  file_picker_darwin 1.2.0 (2.3.2 available)
+  file_picker_linux 1.1.0 (2.0.2 available)
+  file_picker_platform_interface 3.4.0 (4.2.0 available)
+  file_picker_web 3.1.0 (4.2.0 available)
+  flutter_secure_storage 10.3.3 (11.2.0 available)
+  flutter_secure_storage_darwin 0.3.2 (0.4.3 available)
+  flutter_secure_storage_platform_interface 2.1.0 (2.1.1 available)
+  hooks 2.0.2 (2.2.0 available)
+  jni 1.0.3 (1.1.0 available)
+  jni_flutter 1.0.3 (1.0.4+1 available)
+  material_color_utilities 0.13.0 (0.13.1 available)
+  objective_c 9.5.0 (9.6.2 available)
+  record_use 0.6.0 (1.1.1 available)
+  shared_preferences 2.5.5 (2.5.6 available)
+  shared_preferences_android 2.4.28 (2.5.2 available)
+  shared_preferences_foundation 2.5.7 (2.6.0 available)
+  test_api 0.7.12 (0.7.15 available)
+  url_launcher 6.3.2 (6.3.3 available)
+  val_highlight 0.1.0 (0.1.1 available)
+  val_highlight_flutter 0.1.0 (0.1.1 available)
+  val_latex 0.1.1 (0.1.3 available)
+  val_latex_flutter 0.1.2 (0.1.3 available)
+  vector_math 2.4.0 (2.4.3 available)
+  vm_service 15.3.0 (15.4.0 available)
+  windows_file_picker 1.3.0 (2.0.1 available)
+Got dependencies!
+30 packages have newer versions incompatible with dependency constraints.
+Try `flutter pub outdated` for more information.
+00:00 +0: loading /Users/zaber/hermes-app/app/test/i18n_notification_test.dart
+00:00 +0: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: first arm baselines: existing reports never queue
+00:00 +1: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: SessionSelection (pure model) enter/toggle/union/clear semantics
+00:00 +2: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: SessionSelection (pure model) enter/toggle/union/clear semantics
+00:00 +3: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: SessionSelection (pure model) enter/toggle/union/clear semantics
+00:00 +4: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: SessionSelection (pure model) enter/toggle/union/clear semantics
+00:00 +5: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: SessionSelection (pure model) enter/toggle/union/clear semantics
+00:00 +6: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: NO_REPLY/HEARTBEAT_OK and empty are ignored-consumed; mentions survive
+00:00 +7: /Users/zaber/hermes-app/app/test/auto_wake_test.dart: NO_REPLY/HEARTBEAT_OK and empty are ignored-consumed; mentions survive
+00:00 +8: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +9: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +10: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +11: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +12: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +12: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: syncLocale dispatch shape: map with canonical tag only
+[dbg] _setLocale running zh-Hant
+00:00 +13: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +14: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +15: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +15: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: initial sync is queued BEFORE the first start
+[dbg] _setLocale running en
+00:00 +16: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +16: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: changed-locale command serializes with stop/start, never reorders
+[dbg] _setLocale running zh-Hant
+00:00 +17: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +18: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +18: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: rapid en -> zh -> en: last committed tag wins, two calls max queued
+[dbg] _setLocale running en
+[dbg] _setLocale running zh-Hant
+[dbg] _setLocale running en
+00:00 +19: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +20: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +20: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: failure does not poison the queue: a later start still dispatches
+[dbg] _setLocale running zh-Hant
+00:00 +21: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +22: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +23: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +24: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +25: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +26: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +27: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +28: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +29: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +30: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +31: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +32: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +33: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +34: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +35: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +36: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +37: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +38: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +39: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page visible Select button enters; tap toggles without opening; cancel exits and clears
+00:00 +40: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 1 — claim ledger is idempotent (B2) R3 an active claim survives repeated identical ticks
+00:00 +41: /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart: /status when idle shows the long card, zero chat POSTs
+00:01 +42: /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart: /status when idle shows the long card, zero chat POSTs
+00:01 +42: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: UI switch commits zh-Hant in place; the channel seam is the direct dispatch tests above
+[dbg] _setLocale running zh-Hant
+00:01 +43: /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart: /status when idle shows the long card, zero chat POSTs
+00:01 +44: /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart: /status when idle shows the long card, zero chat POSTs
+00:01 +45: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page select-all covers the whole filtered set across lazy rows, and filters never clear the selection (M-outside note)
+00:01 +46: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page select-all covers the whole filtered set across lazy rows, and filters never clear the selection (M-outside note)
+00:01 +46: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: mirror failure warns without reverting the committed UI
+[dbg] _setLocale running zh-Hant
+00:01 +47: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page select-all covers the whole filtered set across lazy rows, and filters never clear the selection (M-outside note)
+00:01 +47: /Users/zaber/hermes-app/app/test/i18n_notification_test.dart: locale bookkeeping: token stream commands unchanged by a switch
+[dbg] _setLocale running zh-Hant
+00:01 +48: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page select-all covers the whole filtered set across lazy rows, and filters never clear the selection (M-outside note)
+00:01 +49: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page select-all covers the whole filtered set across lazy rows, and filters never clear the selection (M-outside note)
+00:01 +50: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 1 — selection mode on the real page select-all covers the whole filtered set across lazy rows, and filters never clear the selection (M-outside note)
+00:01 +51: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 1 — identity retire on the same tick (B3 refresh) R2a run.started retires the local preview immediately, with no extra activity/history tick
+00:01 +52: /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart: /status during bootstrap observation: SnackBar names runId
+00:01 +53: /Users/zaber/hermes-app/app/test/chat_page_commands_test.dart: /status during bootstrap observation: SnackBar names runId
+00:01 +54: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +55: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +56: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +57: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +58: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +59: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +60: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +61: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +62: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +63: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +64: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +65: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +66: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +67: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +68: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:01 +69: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:02 +70: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:02 +71: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: settled scroll does not drift on landing ticks
+00:02 +72: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — unknown-identity preview arbitration (B3) R7b a different runId revealed later restores the independent preview
+00:02 +73: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:02 +74: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:02 +75: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:02 +76: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:02 +77: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:02 +78: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:02 +79: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:02 +80: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:02 +81: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:02 +82: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:02 +83: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar select 3, hide: exactly 3 set-PATCHes, rows leave at batch end, auto-exit, no DELETE
+00:02 +84: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: total extent stays stable while browsing (thumb does not jump wildly)
+00:02 +85: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: total extent stays stable while browsing (thumb does not jump wildly)
+00:02 +86: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: total extent stays stable while browsing (thumb does not jump wildly)
+00:02 +87: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: total extent stays stable while browsing (thumb does not jump wildly)
+00:02 +88: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: total extent stays stable while browsing (thumb does not jump wildly)
+00:02 +89: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: total extent stays stable while browsing (thumb does not jump wildly)
+00:02 +90: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar one 503 among three: summary, failed row stays selected, retry PATCHes ONLY it, then exits
+00:02 +91: /Users/zaber/hermes-app/app/test/ghost_dup_test.dart: Phase 2 — renderer boundaries (B4) R10 renderer identity: copy everywhere, timestamps only where durable, EntryView ids prove the source
+00:02 +92: /Users/zaber/hermes-app/app/test/scrollfix_jank_test.dart: no placeholder band inside the settled viewport
+00:02 +93: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar unhide batch touches hidden=false only; pins survive untouched (incl. pinned-hidden)
+00:02 +94: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar unhide batch touches hidden=false only; pins survive untouched (incl. pinned-hidden)
+00:02 +95: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar already-at-target rows are NO-OPs: counted, not PATCHed
+00:02 +96: /Users/zaber/hermes-app/app/test/bulk_hide_test.dart: Phase 3 — the bulk toolbar applying freezes order and controls; progress updates
+00:02 +97: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:02 +98: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:02 +99: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:02 +100: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:02 +101: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:02 +102: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:02 +103: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:02 +104: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:03 +105: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:03 +106: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:03 +107: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:03 +108: /Users/zaber/hermes-app/app/test/approval_remote_discovery_test.dart: X1: a remote waiting run in activity discovers the pending card
+00:03 +109: /Users/zaber/hermes-app/app/test/silence_drop_ui_test.dart: waiting + silence-check ride secondary tones, never error red (en)
+00:03 +110: /Users/zaber/hermes-app/app/test/silence_drop_ui_test.dart: waiting + silence-check ride secondary tones, never error red (en)
+00:03 +111: /Users/zaber/hermes-app/app/test/silence_drop_ui_test.dart: waiting + silence-check ride secondary tones, never error red (en)
+00:03 +112: /Users/zaber/hermes-app/app/test/silence_drop_ui_test.dart: waiting + silence-check ride secondary tones, never error red (en)
+00:03 +113: /Users/zaber/hermes-app/app/test/silence_drop_ui_test.dart: waiting + silence-check ride secondary tones, never error red (en)
+00:03 +114: /Users/zaber/hermes-app/app/test/silence_drop_ui_test.dart: waiting + silence-check ride secondary tones, never error red (en)
+00:03 +115: /Users/zaber/hermes-app/app/test/settings_wake_test.dart: settings toggle: default off; enabling persists
+00:03 +116: /Users/zaber/hermes-app/app/test/settings_wake_test.dart: settings toggle: default off; enabling persists
+00:03 +117: /Users/zaber/hermes-app/app/test/settings_wake_test.dart: settings toggle: default off; enabling persists
+00:03 +118: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:03 +119: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:03 +120: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:03 +121: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:03 +122: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:03 +123: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:03 +124: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:04 +125: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:04 +126: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:04 +127: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:04 +128: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:04 +129: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:04 +130: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:04 +131: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:04 +132: /Users/zaber/hermes-app/app/test/draft_ghost_test.dart: re-entry mid-run shows an empty box (run still streaming)
+00:04 +133: /Users/zaber/hermes-app/app/test/audit_wave3_admin_ui_test.dart: management page memory editor: save PUTs content and pops
+00:04 +134: /Users/zaber/hermes-app/app/test/audit_wave3_admin_ui_test.dart: management page memory editor: save PUTs content and pops
+00:04 +135: /Users/zaber/hermes-app/app/test/audit_wave3_admin_ui_test.dart: management page memory editor: save PUTs content and pops
+00:04 +136: /Users/zaber/hermes-app/app/test/audit_wave3_admin_ui_test.dart: management page memory editor: save PUTs content and pops
+00:04 +137: /Users/zaber/hermes-app/app/test/audit_wave3_admin_ui_test.dart: management page memory editor: save PUTs content and pops
+00:04 +138: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:04 +139: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:04 +140: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:04 +141: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:04 +142: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:04 +143: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:04 +144: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:04 +145: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +146: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +147: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +148: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +149: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +150: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +151: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +152: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +153: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +154: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +155: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +156: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +157: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +158: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +159: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +160: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +161: /Users/zaber/hermes-app/app/test/audit21_nav_viewers_test.dart: AUDIT-21 fast double tap must not stack two routes for one sid
+00:05 +162: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: mid-run partial durable: EXACTLY ONE step-summary row (count 4)
+00:05 +163: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: mid-run partial durable: EXACTLY ONE step-summary row (count 4)
+00:05 +164: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: mid-run partial durable: EXACTLY ONE step-summary row (count 4)
+00:05 +165: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: mid-run partial durable: EXACTLY ONE step-summary row (count 4)
+00:05 +166: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: the merged row grows honestly with each new step.started
+00:05 +167: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: the merged row grows honestly with each new step.started
+00:05 +168: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: detailed toggle over the merged window shows every step once
+00:05 +169: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: detailed toggle over the merged window shows every step once
+00:05 +170: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: detailed toggle over the merged window shows every step once
+00:05 +171: /Users/zaber/hermes-app/app/test/live_merge_group_test.dart: detailed toggle over the merged window shows every step once
+00:06 +172: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: successful open starts; run completion stops before socket EOF
+00:06 +173: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: two sessions use distinct leases and release independently
+00:06 +174: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: HTTP rejection never starts service
+00:06 +175: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: SSE error event and early EOF each release service exactly once
+00:06 +176: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: transport parse failure releases service
+00:06 +177: /Users/zaber/hermes-app/app/test/stream_keepalive_test.dart: recovering stops service; history polling never restarts it
+00:06 +178: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: keepalive comments become heartbeat events
+00:06 +179: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: keepalive comments become heartbeat events
+00:06 +180: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: keepalive comments become heartbeat events
+00:06 +181: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: keepalive comments become heartbeat events
+00:06 +182: /Users/zaber/hermes-app/app/test/websync_f1_states_test.dart: EOF mid-stream with the user row already in history: DELIVERED, never the resend bait
+00:06 +183: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +184: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +185: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +186: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +187: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +188: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +189: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +190: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +191: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +192: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +193: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +194: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +195: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +196: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +197: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +198: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +199: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +200: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +201: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +202: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +203: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +204: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +205: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +206: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +207: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +208: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +209: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +210: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +211: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +212: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +213: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +214: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +215: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +216: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +217: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +218: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +219: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +220: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:06 +221: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +222: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +223: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +224: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +225: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +226: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +227: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +228: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +229: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +230: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +231: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +232: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +233: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +234: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +235: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +236: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +237: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +238: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +239: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +240: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +241: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +242: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +243: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +244: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +245: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +246: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +247: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +248: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +249: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +250: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +251: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +252: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +253: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +254: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +255: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +256: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +257: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +258: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +259: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +260: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +261: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +262: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +263: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +264: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +265: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +266: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +267: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +268: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +269: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +270: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +271: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +272: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +273: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +274: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +275: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +276: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +277: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +278: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +279: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +280: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +281: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +282: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +283: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +284: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:07 +285: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +286: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +287: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +288: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +289: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +290: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +291: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +292: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +293: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +294: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +295: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +296: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +297: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +298: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +299: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +300: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +301: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +302: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +303: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +304: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +305: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +306: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +307: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +308: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +309: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +310: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +311: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +312: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +313: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +314: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +315: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +316: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +317: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +318: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:08 +319: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +320: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +321: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +322: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +323: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +324: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +325: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +326: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +327: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +328: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +329: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +330: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +331: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +332: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +333: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +334: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +335: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +336: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +337: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:09 +338: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +339: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +340: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +341: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +342: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +343: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +344: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +345: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +346: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +347: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +348: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +349: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +350: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +351: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +352: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +353: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +354: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +355: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +356: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +357: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +358: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +359: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +360: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +361: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +362: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +363: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +364: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +365: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +366: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +367: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +368: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +369: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +370: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +371: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +372: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:10 +373: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +374: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +375: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +376: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +377: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +378: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +379: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +380: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +381: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +382: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +383: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +384: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +385: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +386: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +387: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +388: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +389: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +390: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +391: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +392: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +393: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +394: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +395: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +396: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +397: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +398: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +399: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:11 +400: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +401: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +402: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +403: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +404: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +405: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +406: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +407: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +408: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +409: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +410: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +411: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +412: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +413: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +414: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +415: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +416: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +417: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +418: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +419: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +420: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +421: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +422: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +423: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +424: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +425: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +426: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +427: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +428: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +429: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +430: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +430: /Users/zaber/hermes-app/app/test/stuck_busy_ui_test.dart: uncertain with allowance left offers BOTH actions
+DBG phase=ChatPhase.uncertain err=UiMessage.local(MessageKey.chatRecoveryUncertain) dl=2014-12-31 23:59:59.000Z
+00:12 +431: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +432: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +433: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:12 +434: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +435: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +436: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +437: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +438: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +439: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +440: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +441: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +442: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +443: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +444: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +445: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +446: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +447: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +448: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +449: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +450: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +451: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +452: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +453: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +454: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +455: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +456: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +457: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +458: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +459: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +460: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +461: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +462: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +463: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +464: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +465: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +466: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +467: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +468: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +469: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +470: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +471: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:13 +472: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +473: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +474: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +475: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +476: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +477: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +478: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +479: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +480: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +481: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +482: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +483: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +484: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +485: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +486: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +487: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +488: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +489: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +490: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +491: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +492: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +493: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +494: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +495: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +496: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +497: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +498: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +499: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +500: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +501: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +502: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +503: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +504: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +505: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +506: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +507: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +508: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +509: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +510: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +511: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +512: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +513: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +514: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +515: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +516: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +517: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +518: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +519: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +520: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +521: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +522: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +523: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +524: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +525: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +526: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +527: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +528: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +529: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +530: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +531: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +532: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +533: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +534: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:14 +535: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +536: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +537: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +538: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +539: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +540: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +541: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +542: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +543: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +544: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +545: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +546: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +547: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +548: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +549: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +550: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +551: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +552: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +553: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +554: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +555: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +556: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +557: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +558: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +559: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +560: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +561: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +562: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +563: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +564: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +565: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +566: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +567: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +568: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +569: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +570: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +571: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +572: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +573: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +574: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +575: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +576: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +577: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +578: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:15 +579: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +580: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +581: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +582: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +583: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +584: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +585: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +586: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +587: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +588: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +589: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +590: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +591: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +592: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +593: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +594: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +595: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +596: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +597: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +598: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +599: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +600: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +601: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +602: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +603: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +604: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +605: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +606: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +607: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +608: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +609: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +610: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +611: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +612: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +613: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +614: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +615: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +616: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +617: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +618: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +619: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +620: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +621: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +622: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +623: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +624: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +625: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +626: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +627: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +628: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:16 +629: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +630: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +631: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +632: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +633: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +634: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +635: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +636: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +637: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +638: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +639: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +640: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +641: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +642: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +643: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +644: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +645: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +646: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +647: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +648: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +649: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +650: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +651: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +652: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +653: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +654: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +655: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +656: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +657: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +658: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +659: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +660: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +661: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +662: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +663: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +664: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +665: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:17 +666: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +667: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +668: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +669: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +670: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +671: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +672: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +673: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +674: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +675: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +676: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +677: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +678: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +679: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +680: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +681: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +682: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +683: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +684: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +685: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +686: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +687: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +688: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +689: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +690: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +691: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +692: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +693: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +694: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +695: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +696: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +697: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +698: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:18 +699: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +700: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +701: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +702: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +703: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +704: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +705: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +706: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +707: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +708: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +709: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +710: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +711: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +712: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +713: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +714: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +715: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +716: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +717: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:19 +718: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +719: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +720: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +721: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +722: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +723: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +724: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +725: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +726: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +727: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +728: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +729: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +730: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +731: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +732: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +733: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +734: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +735: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +736: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +737: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +738: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +739: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +740: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +741: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +742: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +743: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +744: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +745: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:20 +746: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +747: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +748: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +749: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +750: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +751: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +752: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +753: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +754: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +755: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +756: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +757: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +758: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +759: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +760: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +761: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +762: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +762: /Users/zaber/hermes-app/app/test/i18n_locale_test.dart: blackbox contract language switch is live and works with empty settings
+[dbg] _setLocale running zh-Hant
+00:21 +763: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:21 +764: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:22 +765: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:22 +766: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:22 +767: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:22 +768: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:22 +769: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:22 +770: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:22 +771: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:22 +772: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:22 +773: /Users/zaber/hermes-app/app/test/sse_heartbeat_test.dart: stream with interleaved keepalives completes without recover
+00:22 +774: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:22 +775: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:22 +776: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:22 +777: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:22 +778: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:22 +779: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:22 +780: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:22 +781: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:22 +782: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:25 +783: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:29 +784: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:32 +785: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:36 +786: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:38 +787: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:41 +788: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:41 +789: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:41 +790: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:41 +791: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+00:41 +792: /Users/zaber/hermes-app/app/test/p3_followup_test.dart: keepalive comments reset the silence watchdog before recovery starts
+02:04 +793: All tests passed!

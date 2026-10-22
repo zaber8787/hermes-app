@@ -1,0 +1,5 @@
+00:00 +0: loading /Users/zaber/hermes-app/app/test/openperf_regression_test.dart
+00:00 +0: 200-row first build mounts a viewport-sized window (P4 pin)
+RENDERX coldInteractiveMs=277
+00:00 +1: content of swept-but-unrevealed rows stays unbuilt (P4 pin)
+00:00 +2: All tests passed!

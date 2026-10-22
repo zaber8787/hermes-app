@@ -147,6 +147,7 @@ void main() {
     await tester.pump();
     await tester.pump();
     sw.stop();
+    debugPrint('RENDERX coldFirstMs=${sw.elapsedMilliseconds}');
     final mounted = find
         .byType(EntryView, skipOffstage: false)
         .evaluate()
@@ -156,7 +157,7 @@ void main() {
     expect(mounted, lessThan(40), reason: 'timeline must not mount every row');
     expect(
       sw.elapsedMilliseconds,
-      lessThan(1200),
+      lessThan(100),
       reason:
           'first pump of 200 rows must stay far under the ~1.9 s eager baseline',
     );
