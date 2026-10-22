@@ -736,6 +736,7 @@ final Expando<Map<String, Future<Uint8List>>> _serverInflight = Expando(
 final Expando<Map<String, DateTime>> _serverFileCooldown = Expando(
   'serverFileCooldown',
 );
+final Expando<Map<String, int>> _serverFileSizes = Expando('_serverFileSizes');
 
 Future<Uint8List> cachedServerFile(HermesRepository repo, String path) {
   final cooldown = _serverFileCooldown[repo] ??= <String, DateTime>{};
@@ -756,13 +757,28 @@ Future<Uint8List> cachedServerFile(HermesRepository repo, String path) {
   // completed future (the old in-flight-only semantics) re-downloaded every
   // vault image on every list virtualization pass — scrolling a media-heavy
   // session was a self-inflicted request storm plus re-decode jank. Only
-  // failures expire (into the cooldown). Bounded FIFO: evicting an old
-  // success costs one re-download on next sight, never a leak.
-  if (inflight.length >= 300) inflight.remove(inflight.keys.first);
+  // failures expire (into the cooldown). Bounds keep the permanent layer
+  // honest: 120 entries and 64 MB raw bytes, FIFO eviction. Flutter's own
+  // ImageCache decodes at most 100 images / 100 MB, so the decoded peak is
+  // unchanged; this layer only holds the source bytes.
+  var sizes = _serverFileSizes[repo];
+  if (sizes == null) {
+    sizes = <String, int>{};
+    _serverFileSizes[repo] = sizes;
+  }
+  final byteSizes = sizes;
+  while (inflight.length >= 120 ||
+      (byteSizes.isNotEmpty &&
+          byteSizes.values.fold<int>(0, (a, b) => a + b) > 64 * 1024 * 1024)) {
+    final victim = inflight.keys.first;
+    inflight.remove(victim);
+    byteSizes.remove(victim);
+  }
   final future = () async {
     try {
       final bytes = await repo.downloadServerFile(path);
       cooldown.remove(path);
+      byteSizes[path] = bytes.length;
       return bytes;
     } catch (_) {
       cooldown[path] = DateTime.now();
