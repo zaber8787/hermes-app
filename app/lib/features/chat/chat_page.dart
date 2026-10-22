@@ -678,27 +678,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   ) {
     final runId = r.runId;
     if (runId == null || runId.trim().isEmpty) return const SizedBox.shrink();
-    final steerable =
-        c.steerTargetForRun(runId) != null ||
-        r.status == 'waiting_for_approval';
-    if (!steerable) {
-      return Expanded(
-        child: Row(
-          key: ValueKey('chat.remoteSteerDisabled.$runId'),
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(Icons.chat_bubble_outline, size: 18),
-            const SizedBox(width: 4),
-            Flexible(
-              child: Text(
-                strings.resolve(MessageKey.steerUnavailable),
-                style: const TextStyle(fontSize: 12),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
+    // STEERVIS-3 (2026-10-23, screenshot-proven): visibility used to hinge
+    // on steerTargetForRun() — the classify gate — while the SUBMIT path
+    // builds a valid target from the run id alone. Runs that classify
+    // refused (preview overlap, staleness heuristics) still steered fine
+    // if attempted, so the gate only ever hid a working button. Show the
+    // button for every live run; the server is the real authority and its
+    // rejection surfaces as a readable failure after send.
+    if (r.isTerminal) return const SizedBox.shrink();
     return TextButton.icon(
       key: ValueKey('chat.remoteSteer.$runId'),
       onPressed: () => unawaited(_steerDialog(c, runId)),
