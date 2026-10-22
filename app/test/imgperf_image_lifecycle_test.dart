@@ -209,4 +209,25 @@ void main() {
       b.close();
     },
   );
+
+  test(
+    'IMGVIEW-RELOAD: a successful download is NOT re-fetched on remount',
+    () async {
+      // The old in-flight-only cache re-downloaded vault images on every
+      // list-virtualization pass (scroll = request storm = jank). Success
+      // now stays cached for the repo identity's lifetime; only failures
+      // expire into the cooldown.
+      final repo = _MediaRepo();
+      final first = await cachedServerFile(repo, '/fixture/a.png');
+      final second = await cachedServerFile(repo, '/fixture/a.png');
+      expect(identical(first, second), isTrue);
+      expect(repo.downloads, 1, reason: 'success must not re-download');
+      // Failure still expires into the cooldown (unchanged contract):
+      // one real attempt, then the cooldown answers without the network.
+      final flaky = _MediaRepo()..failures = 1;
+      await expectLater(cachedServerFile(flaky, '/f.png'), throwsA(anything));
+      await expectLater(cachedServerFile(flaky, '/f.png'), throwsStateError);
+      expect(flaky.downloads, 1);
+    },
+  );
 }

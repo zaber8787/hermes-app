@@ -752,6 +752,13 @@ Future<Uint8List> cachedServerFile(HermesRepository repo, String path) {
   final inflight = slot;
   final existing = inflight[path];
   if (existing != null) return existing;
+  // IMGVIEW-RELOAD (2026-10-22): success STAYS in the map. Dropping the
+  // completed future (the old in-flight-only semantics) re-downloaded every
+  // vault image on every list virtualization pass — scrolling a media-heavy
+  // session was a self-inflicted request storm plus re-decode jank. Only
+  // failures expire (into the cooldown). Bounded FIFO: evicting an old
+  // success costs one re-download on next sight, never a leak.
+  if (inflight.length >= 300) inflight.remove(inflight.keys.first);
   final future = () async {
     try {
       final bytes = await repo.downloadServerFile(path);
@@ -759,9 +766,8 @@ Future<Uint8List> cachedServerFile(HermesRepository repo, String path) {
       return bytes;
     } catch (_) {
       cooldown[path] = DateTime.now();
-      rethrow;
-    } finally {
       inflight.remove(path);
+      rethrow;
     }
   }();
   inflight[path] = future;
