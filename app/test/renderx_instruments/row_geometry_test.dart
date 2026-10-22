@@ -61,8 +61,16 @@ void main() {
         await tester.pump();
       }
       expect(find.byType(MessageImageMemory), findsOneWidget);
-      expect(tester.getSize(find.byType(TimelineRowGeometry)).height, initial);
-      expect(measured, [initial]);
+      // CONTRACT (2026-10-22 field fix): a tall landing (>60px growth) is
+      // published even mid-drag. The old defer-until-idle contract clipped
+      // images/tool results out of sight and the lock/release extent
+      // oscillation bounced flings off image bands. Settled small reflows
+      // still defer (see the sub-threshold case below).
+      expect(
+        tester.getSize(find.byType(TimelineRowGeometry)).height,
+        greaterThan(initial),
+      );
+      expect(measured.last, greaterThan(initial));
       scrolling.value = false;
       await tester.pumpAndSettle();
       final landed = tester.getSize(find.byType(TimelineRowGeometry)).height;
@@ -103,10 +111,12 @@ void main() {
       scrolling.value = true;
       height.value = 280;
       await tester.pump();
-      expect(tester.getSize(find.byType(TimelineRowGeometry)).height, 80);
-      expect(measured, [
-        80,
-      ], reason: 'late content must not move a dragging reader');
+      // CONTRACT (2026-10-22): +200px is a content landing, not settled
+      // jitter — it publishes immediately so the reader can SEE the new
+      // content instead of a clipped frame of it. Sub-threshold reflows
+      // remain deferred; visual anchoring is the refine loop's job.
+      expect(tester.getSize(find.byType(TimelineRowGeometry)).height, 280);
+      expect(measured, [80, 280]);
       scrolling.value = false;
       await tester.pump();
       expect(measured, [80, 280]);
