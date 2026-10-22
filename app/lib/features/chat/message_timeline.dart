@@ -1,5 +1,9 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
-import 'package:flutter/rendering.dart' show SliverMultiBoxAdaptorParentData;
+import 'package:flutter/rendering.dart'
+    show RenderBox, SliverMultiBoxAdaptorParentData;
+import 'package:flutter/scheduler.dart';
 import '../../l10n/app_strings.dart';
 import '../../l10n/localized_text.dart';
 import '../../l10n/message_key.dart';
@@ -240,6 +244,7 @@ class MessageTimelineSliver extends StatelessWidget {
     this.toolExclusions = const {},
     this.slotScope = '',
     this.reveal,
+    this.extentMemory,
   });
   final List<Message> messages;
   final List<Message> liveTail;
@@ -254,6 +259,13 @@ class MessageTimelineSliver extends StatelessWidget {
   /// jump sweeps placeholders instead of full markdown rows. Null keeps
   /// every row real (probes, LiveTurn embeds, tests).
   final TimelineReveal? reveal;
+
+  /// SCROLLFIX: keyValue → last MEASURED height, owned by the page and
+  /// surviving row churn. Rows the reader has already seen re-placeholder
+  /// at their real height instead of the global average, which stops both
+  /// the viewport shove (rows flipping 120↔340px as you scroll past) and
+  /// the maxScrollExtent thrash that throws the scrollbar thumb around.
+  final Map<Object, double>? extentMemory;
   TimelineReveal? get _reveal => reveal;
 
   @override
@@ -284,11 +296,20 @@ class MessageTimelineSliver extends StatelessWidget {
     // is what makes the sliver's own cold-seek mapping (index × laid-out
     // average) land jumps on the right row; per-row estimates would make
     // the page non-uniform and degrade the seek to a sequential crawl.
-    final estimateTotal = rows.fold<double>(
-      0,
-      (sum, row) => sum + row.estimate,
-    );
-    final averageExtent = rows.isEmpty ? 120.0 : estimateTotal / rows.length;
+    // SCROLLFIX: rows with a measured height are NOT averaged — their real
+    // height enters both the total and their own placeholder extent, so
+    // revisiting read territory is geometry-stable. Only never-realised
+    // rows ride the uniform average, which is what cold-seek arithmetic
+    // assumes.
+    final memory = extentMemory;
+    var measuredSum = 0.0;
+    for (final row in rows) {
+      final m = memory == null || row.keyValue == null
+          ? null
+          : memory[row.keyValue!];
+      measuredSum += m ?? row.estimate;
+    }
+    final averageExtent = rows.isEmpty ? 120.0 : measuredSum / rows.length;
     final indexByKey = <Object, int>{
       for (var i = 0; i < rows.length; i++)
         if (rows[i].keyValue != null) rows[i].keyValue!: i,
@@ -309,7 +330,11 @@ class MessageTimelineSliver extends StatelessWidget {
             key: rowKey,
             index: index,
             offset: index * averageExtent,
-            extent: averageExtent,
+            extent: key != null && memory != null
+                ? (memory[key] ?? averageExtent)
+                : averageExtent,
+            extentMemory: key != null ? memory : null,
+            keyValue: key,
             reveal: reveal,
             builder: rows[index].build,
           );
@@ -340,6 +365,8 @@ class _LazyRow extends StatefulWidget {
     required this.extent,
     required this.reveal,
     required this.builder,
+    this.extentMemory,
+    this.keyValue,
   });
 
   final int index;
@@ -348,6 +375,11 @@ class _LazyRow extends StatefulWidget {
   final TimelineReveal reveal;
   final Widget Function(BuildContext, Key?) builder;
 
+  /// SCROLLFIX: where to record this row's measured height (and the row
+  /// identity to record it under). Null = no memory (all-real forms).
+  final Map<Object, double>? extentMemory;
+  final Object? keyValue;
+
   @override
   State<_LazyRow> createState() => _LazyRowState();
 }
@@ -355,6 +387,8 @@ class _LazyRow extends StatefulWidget {
 class _LazyRowState extends State<_LazyRow> {
   bool _real = false;
   ScrollPosition? _position;
+  bool _tickScheduled = false;
+  double _reported = double.nan;
 
   bool _near() {
     final reveal = widget.reveal;
@@ -416,11 +450,57 @@ class _LazyRowState extends State<_LazyRow> {
   @override
   void dispose() {
     _position?.removeListener(_onScroll);
+    _idleReport?.cancel();
     super.dispose();
   }
 
   void _onScroll() {
-    if (mounted && !_real && _near()) setState(() => _real = true);
+    if (_real) {
+      // SCROLLFIX: content that lands late (an image decoding, an
+      // ExpansionTile animating) re-measures once the reader stops, so
+      // the memory never freezes a mid-load height.
+      _armIdleReport();
+      return;
+    }
+    // SCROLLFIX: scroll fires far more often than frames, and _near() is a
+    // render-tree query. Coalesce to one evaluation per frame — with
+    // hundreds of on-stage rows this listener storm (not layout) was where
+    // browsing jank lived.
+    if (_tickScheduled || !mounted) return;
+    _tickScheduled = true;
+    SchedulerBinding.instance.scheduleFrameCallback((_) {
+      _tickScheduled = false;
+      if (mounted && !_real && _near()) setState(() => _real = true);
+    });
+  }
+
+  Timer? _idleReport;
+  void _armIdleReport() {
+    _idleReport?.cancel();
+    _idleReport = Timer(const Duration(milliseconds: 400), () {
+      if (mounted) _measureInto();
+    });
+  }
+
+  void _reportExtent() {
+    // Report once on this frame's layout (post-frame), and re-arm only
+    // when the row rebuilds — never a permanent per-frame callback chain.
+    if (!mounted) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) => _measureInto());
+  }
+
+  void _measureInto() {
+    final memory = widget.extentMemory;
+    final key = widget.keyValue;
+    if (memory == null || key == null || !mounted) return;
+    final box = context.findRenderObject();
+    if (box is RenderBox && box.hasSize && box.size.height > 0) {
+      final h = box.size.height;
+      if ((h - _reported).abs() > 1) {
+        _reported = h;
+        memory[key] = h;
+      }
+    }
   }
 
   @override
@@ -428,7 +508,10 @@ class _LazyRowState extends State<_LazyRow> {
     // Children created by a jump (or first layout) never receive a scroll
     // notification of their own — decide at build time as well.
     if (!_real && _near()) _real = true;
-    if (_real) return widget.builder(context, widget.key);
+    if (_real) {
+      _reportExtent();
+      return widget.builder(context, widget.key);
+    }
     return SizedBox(height: widget.extent);
   }
 }

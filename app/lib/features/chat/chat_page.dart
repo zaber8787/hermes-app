@@ -997,9 +997,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     double baseOffset,
     int refine, [
     int? anchorIndex,
+    int wait = 0,
   ]) {
     if (!scroll.hasClients || !mounted || anchor == null) return;
     final position = scroll.position;
+    // SCROLLFIX: never jumpTo under a moving reader — a correction landing
+    // mid-drag or mid-fling is exactly the '乱跳' the reader reports. Wait
+    // (bounded) for the gesture/ballistic to end, then measure as usual.
+    if (position.isScrollingNotifier.value && refine > 0 && wait < 240) {
+      WidgetsBinding.instance.addPostFrameCallback(
+        (_) => _refineOlderAnchor(
+            anchor, baseExtent, baseOffset, refine, anchorIndex, wait + 1),
+      );
+      return;
+    }
     final anchorKey = anchor.$1;
     final now = anchorKey != null ? _timelineRowDy(anchorKey) : null;
 
@@ -1101,6 +1112,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     return SliverPadding(
       padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
       sliver: MessageTimelineSliver(
+        extentMemory: _extentMemory,
         messages: messages,
         liveTail: liveTail,
         toolExclusions: toolExclusions,
@@ -1132,6 +1144,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   /// sits at the (now measured) bottom, bounded so a pathological extent
   /// can never spin frames forever.
   int _revealRevision = 0;
+  // SCROLLFIX: keyValue → measured row height, owned by this page for its
+  // lifetime. Lets rows the reader already passed re-placeholder at their
+  // real height (geometry-stable browsing) instead of the global average.
+  final Map<Object, double> _extentMemory = {};
   int? _revealFocus;
   int? _followRealFloor;
 
