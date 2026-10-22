@@ -177,6 +177,42 @@ class LocalStore {
     return AppSettings.defaultUrl;
   }
 
+  Future<void> saveRowExtents(String url, String sid, Map<Object, double> extents) async {
+    // EXTENT-PERSIST (2026-10-22): measured row heights survive page exit.
+    // Cold re-entry then placeholders out of REAL geometry instead of the
+    // average — the image-band jank users feel on repeat browsing is the
+    // first-pass landing churn, and this removes it on every pass but the
+    // very first. Key-spaced per server+session; corrupt/absent reads are
+    // simply no memory. Capped; height sanity window is generous.
+    final capped = extents.length <= 3000
+        ? extents
+        : Map<Object, double>.fromEntries(extents.entries.take(3000));
+    await prefs.setString(
+      _extentKey(url, sid),
+      jsonEncode({
+        for (final e in capped.entries)
+          if (e.value > 0 && e.value < 30000) e.key.toString(): e.value,
+      }),
+    );
+  }
+
+  Map<String, double> rowExtents(String url, String sid) {
+    final raw = prefs.getString(_extentKey(url, sid));
+    if (raw == null) return const {};
+    try {
+      final m = jsonDecode(raw);
+      if (m is! Map) return const {};
+      return {
+        for (final e in m.entries)
+          if (e.value is num) e.key.toString(): (e.value as num).toDouble(),
+      }..removeWhere((k, v) => v <= 0 || v >= 30000);
+    } catch (_) {
+      return const {};
+    }
+  }
+
+  String _extentKey(String url, String sid) => 'extents.$url|$sid';
+
   Future<void> saveSettings(AppSettings value) async {
     await vault.write('server.key', value.key);
     await prefs.setString('server.url', value.url);

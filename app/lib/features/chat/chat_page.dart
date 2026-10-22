@@ -1,5 +1,6 @@
 import 'live_merge_fold.dart';
 import 'dart:async';
+import 'dart:collection';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -112,6 +113,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     _store = store;
     final serverUrl = ref.read(settingsProvider).url;
     _serverUrl = serverUrl;
+    store.rowExtents(serverUrl, widget.session.id).forEach((k, v) => _extentMemory[k] = v);
     _draftRev = store.draftRevision(serverUrl, widget.session.id);
     final saved = store.draft(serverUrl, widget.session.id);
     _wakeSessionOff = store.autoWakeSessionOff(serverUrl, widget.session.id);
@@ -218,6 +220,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   @override
   void dispose() {
     _pageGone = true;
+    // EXTENT-PERSIST: flush measured geometry even if the debounce window
+    // was still open when the page went away.
+    _extentSaveTimer?.cancel();
+    unawaited(_store.saveRowExtents(_serverUrl, widget.session.id, _extentMemory));
     // APPWAKE: this editor is gone — a stale "typing" flag must not park
     // the queue forever for a controller that outlives the page.
     chat.noteInputActive(false);
@@ -1158,7 +1164,22 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   // SCROLLFIX: keyValue → measured row height, owned by this page for its
   // lifetime. Lets rows the reader already passed re-placeholder at their
   // real height (geometry-stable browsing) instead of the global average.
-  final Map<Object, double> _extentMemory = {};
+  // EXTENT-PERSIST (2026-10-22): the map is seeded from — and debounced
+  // back to — LocalStore per server+session, so a COLD re-entry places
+  // placeholders out of real geometry too. Repeat-browse image jank was
+  // landing churn against average-sized placeholders; on a warm cache the
+  // placeholder already equals the landing height and nothing churns.
+  late final _ExtentSink _extentMemory = _ExtentSink(_scheduleExtentSave);
+  Timer? _extentSaveTimer;
+
+  void _scheduleExtentSave() {
+    if (!mounted) return;
+    _extentSaveTimer?.cancel();
+    _extentSaveTimer = Timer(const Duration(milliseconds: 900), () {
+      if (!mounted) return;
+      unawaited(_store.saveRowExtents(_serverUrl, widget.session.id, _extentMemory));
+    });
+  }
   int? _revealFocus;
   int? _followRealFloor;
 
@@ -2789,4 +2810,33 @@ class _SlashItem {
 
   /// Descriptor: catalog key or RAW server skill description (§5).
   final UiMessage description;
+}
+
+
+/// Map view of measured row heights that announces writes so the page can
+/// debounce persistence. Same-value writes stay silent (geometry re-reports
+/// the same height constantly during settle).
+class _ExtentSink extends MapBase<Object, double> {
+  _ExtentSink(this.onTouch);
+  final void Function() onTouch;
+  final Map<Object, double> _m = {};
+
+  @override
+  double? operator [](Object? key) => _m[key];
+
+  @override
+  void operator []=(Object key, double value) {
+    final prior = _m[key];
+    _m[key] = value;
+    if (prior == null || (value - prior).abs() > 0.5) onTouch();
+  }
+
+  @override
+  void clear() => _m.clear();
+
+  @override
+  Iterable<Object> get keys => _m.keys;
+
+  @override
+  double? remove(Object? key) => _m.remove(key);
 }
