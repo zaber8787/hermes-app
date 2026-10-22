@@ -42,6 +42,40 @@ class MainActivity : FlutterActivity() {
                 else -> result.notImplemented()
             }
         }
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "hermes/browser")
+            .setMethodCallHandler { call, result ->
+                // LINK-EXIT (2026-10-22): our own verified App Links domain
+                // resolves ACTION_VIEW back to THIS app — url_launcher cannot
+                // dodge that, so resolve an external browser ourselves and
+                // pin the package. Our own package is never a candidate.
+                if (call.method != "openExternally") { result.notImplemented(); return@setMethodCallHandler }
+                val url = (call.arguments as? Map<*, *>)?.get("url") as? String
+                if (url == null) { result.error("argument", "Missing url", null); return@setMethodCallHandler }
+                try {
+                    val view = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                        .addCategory(Intent.CATEGORY_BROWSABLE)
+                    val self = packageName
+                    var target: android.content.ComponentName? = null
+                    val chosen = packageManager.queryIntentActivities(view, 0)
+                        .firstOrNull { it.activityInfo.packageName != self }
+                    if (chosen != null) {
+                        target = android.content.ComponentName(chosen.activityInfo.packageName, chosen.activityInfo.name)
+                    } else {
+                        val resolved = packageManager.resolveActivity(view, 0)
+                        if (resolved != null && resolved.activityInfo.packageName != self) {
+                            target = android.content.ComponentName(resolved.activityInfo.packageName, resolved.activityInfo.name)
+                        }
+                    }
+                    if (target == null) { result.success(false); return@setMethodCallHandler }
+                    view.component = target
+                    view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    view.addFlags(Intent.FLAG_ACTIVITY_MATCH_EXTERNAL)
+                    startActivity(view)
+                    result.success(true)
+                } catch (_: Exception) {
+                    result.success(false)
+                }
+            }
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "hermes/diagnostics")
             .setMethodCallHandler { call, result ->
                 when (call.method) {

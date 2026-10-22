@@ -230,9 +230,34 @@ Future<void> openMessageLink(BuildContext context, String value) async {
       uri != null &&
       ['http', 'https'].contains(uri.scheme) &&
       uri.userInfo.isEmpty;
+  if (!supported) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: LocalizedText(UiMessage.local(MessageKey.contentM001)),
+        ),
+      );
+    }
+    return;
+  }
+  // LINK-EXIT (2026-10-22): on Android this app's own verified App Links
+  // domain resolves ACTION_VIEW back to THIS activity — url_launcher's
+  // externalApplication mode cannot dodge that resolution, so ask the
+  // native channel to pin an external browser package. Non-Android (web)
+  // and any native failure fall through to url_launcher unchanged.
+  if (defaultTargetPlatform == TargetPlatform.android) {
+    try {
+      final opened = await const MethodChannel('hermes/browser').invokeMethod<bool>(
+        'openExternally',
+        {'url': value},
+      );
+      if (opened == true) return;
+    } catch (_) {
+      // pre-channel builds / non-Flutter-host contexts: url_launcher below.
+    }
+  }
   try {
-    if (!supported ||
-        !await launchUrl(uri, mode: LaunchMode.externalApplication)) {
+    if (!await launchUrl(uri, mode: LaunchMode.externalApplication)) {
       if (context.mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
