@@ -2500,7 +2500,11 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [
-                            if (c.detailed)
+                            // STEERVIS-2 (2026-10-22): the steer entry was
+                            // gated on detailed mode, so normal-mode users
+                            // never saw it at all. Steering is a core run
+                            // affordance — show it on every busy row.
+                            if (c.steerInboxEnabled || c.detailed)
                               TextButton.icon(
                                 onPressed: c.canControl && !c.steerBusy
                                     ? showSteer

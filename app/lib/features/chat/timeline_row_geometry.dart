@@ -66,14 +66,16 @@ class _RowGeometry extends RenderProxyBox {
   void performLayout() {
     super.performLayout();
     // Lock-to-published is a DEFERRAL of settled layout, not a gate on
-    // first content reveal. A jump past the 60px idle-adoption threshold
-    // (placeholder -> image, collapsed -> tool result) must publish even
-    // mid-scroll: clipping it until scroll-end hid tool results entirely
-    // and the lock/release extent oscillation made a fling bounce off the
-    // same image band (2026-10-22 field reports).
-    final bigContentLanding =
-        _published != null && size.height > _published! + 60;
-    if (_scrolling?.value == true && _published != null && !bigContentLanding) {
+    // first content reveal. A GROWTH landing must publish even mid-scroll:
+    // clipping it until scroll-end hid tool results entirely and the
+    // lock/release extent oscillation bounced flings off image bands
+    // (2026-10-22 field reports). Threshold = max(60px, 50% of published)
+    // — an absolute value alone either clips a doubling tool row (60→120)
+    // or churns tall rows on sub-pixel reflow. Shrinking never publishes
+    // mid-scroll (an anchor jump is worse than a momentarily-short row).
+    final contentLanding = _published != null &&
+        size.height > _published! + (60.0 < _published! * 0.5 ? 60.0 : _published! * 0.5);
+    if (_scrolling?.value == true && _published != null && !contentLanding) {
       size = constraints.constrain(Size(size.width, _published!));
     }
     if (_published == size.height) return;
