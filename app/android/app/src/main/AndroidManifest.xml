@@ -66,6 +66,23 @@
                     android:host="${deepLinkHost}"
                     android:pathPrefix="${deepLinkPath}"/>
             </intent-filter>
+            <!-- LINK-EXIT2 (2026-10-23): a data filter WITHOUT android:port
+                 matches ONLY the default 443/80 ports. Delivery links live
+                 on the fileserver listener :8443, so every such link opened
+                 a browser instead of the app. Port must be declared
+                 explicitly; separate filter (multiple <data> in one filter
+                 intersect, they do not union). No autoVerify here: Asset
+                 Links statements bind host-only, so this filter must not
+                 claim verification it cannot guarantee (manifest test B2). -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="https"
+                    android:host="${deepLinkHost}"
+                    android:port="8443"
+                    android:pathPrefix="${deepLinkPath}"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

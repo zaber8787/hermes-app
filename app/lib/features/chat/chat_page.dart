@@ -113,7 +113,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     _store = store;
     final serverUrl = ref.read(settingsProvider).url;
     _serverUrl = serverUrl;
-    store.rowExtents(serverUrl, widget.session.id).forEach((k, v) => _extentMemory[k] = v);
+    store
+        .rowExtents(serverUrl, widget.session.id)
+        .forEach((k, v) => _extentMemory[k] = v);
     _draftRev = store.draftRevision(serverUrl, widget.session.id);
     final saved = store.draft(serverUrl, widget.session.id);
     _wakeSessionOff = store.autoWakeSessionOff(serverUrl, widget.session.id);
@@ -223,7 +225,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     // EXTENT-PERSIST: flush measured geometry even if the debounce window
     // was still open when the page went away.
     _extentSaveTimer?.cancel();
-    unawaited(_store.saveRowExtents(_serverUrl, widget.session.id, _extentMemory));
+    unawaited(
+      _store.saveRowExtents(_serverUrl, widget.session.id, _extentMemory),
+    );
     // APPWAKE: this editor is gone — a stale "typing" flag must not park
     // the queue forever for a controller that outlives the page.
     chat.noteInputActive(false);
@@ -606,28 +610,26 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // A row the server never named: DISABLED affordance + the reason in
       // readable text next to it (§5.3). Flexible so the pair can never
       // overflow the row at narrow widths.
-      return Expanded(
-        child: Row(
-          key: const ValueKey('chat.remoteStopDisabled'),
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Semantics(
-              label: strings.resolve(MessageKey.chatStopRemoteNoRunId),
-              button: true,
-              child: IconButton(
-                onPressed: null,
-                tooltip: strings.resolve(MessageKey.chatStopRemoteHelp),
-                icon: const Icon(Icons.stop_circle_outlined),
-              ),
+      return Row(
+        key: const ValueKey('chat.remoteStopDisabled'),
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Semantics(
+            label: strings.resolve(MessageKey.chatStopRemoteNoRunId),
+            button: true,
+            child: IconButton(
+              onPressed: null,
+              tooltip: strings.resolve(MessageKey.chatStopRemoteHelp),
+              icon: const Icon(Icons.stop_circle_outlined),
             ),
-            Flexible(
-              child: Text(
-                strings.resolve(MessageKey.chatStopRemoteNoRunId),
-                style: const TextStyle(fontSize: 12),
-              ),
+          ),
+          Flexible(
+            child: Text(
+              strings.resolve(MessageKey.chatStopRemoteNoRunId),
+              style: const TextStyle(fontSize: 12),
             ),
-          ],
-        ),
+          ),
+        ],
       );
     }
     final target = c.remoteTargetForRun(runId);
@@ -645,28 +647,26 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     // readable text, never tooltip-only (§5.3/V16).
     final reason =
         c.remoteDisabledReason ?? MessageKey.chatStopRemoteRefreshRequired;
-    return Expanded(
-      child: Row(
-        key: const ValueKey('chat.remoteStopDisabled'),
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Semantics(
-            label: strings.resolve(reason),
-            button: true,
-            child: IconButton(
-              onPressed: null,
-              tooltip: strings.resolve(MessageKey.chatStopRemoteHelp),
-              icon: const Icon(Icons.stop_circle_outlined),
-            ),
+    return Row(
+      key: const ValueKey('chat.remoteStopDisabled'),
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Semantics(
+          label: strings.resolve(reason),
+          button: true,
+          child: IconButton(
+            onPressed: null,
+            tooltip: strings.resolve(MessageKey.chatStopRemoteHelp),
+            icon: const Icon(Icons.stop_circle_outlined),
           ),
-          Flexible(
-            child: Text(
-              strings.resolve(reason),
-              style: const TextStyle(fontSize: 12),
-            ),
+        ),
+        Flexible(
+          child: Text(
+            strings.resolve(reason),
+            style: const TextStyle(fontSize: 12),
           ),
-        ],
-      ),
+        ),
+      ],
     );
   }
 
@@ -1164,9 +1164,12 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     _extentSaveTimer?.cancel();
     _extentSaveTimer = Timer(const Duration(milliseconds: 900), () {
       if (!mounted) return;
-      unawaited(_store.saveRowExtents(_serverUrl, widget.session.id, _extentMemory));
+      unawaited(
+        _store.saveRowExtents(_serverUrl, widget.session.id, _extentMemory),
+      );
     });
   }
+
   int? _revealFocus;
   int? _followRealFloor;
 
@@ -1736,10 +1739,21 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         for (final r in c.remoteActiveRuns)
-                          Row(
+                          // STEERVIS-4 (2026-10-23): this was a Row — on a
+                          // phone-width shell the label + dots + stop pushed
+                          // the steer button past the right edge, so the user
+                          // "never sees the button" on exactly the device
+                          // they need it on. Wrap lets the actions drop to a
+                          // second line instead of being clipped.
+                          Wrap(
+                            spacing: 6,
+                            runSpacing: 4,
+                            crossAxisAlignment: WrapCrossAlignment.center,
                             children: [
-                              Expanded(
-                                flex: 3,
+                              ConstrainedBox(
+                                constraints: const BoxConstraints(
+                                  maxWidth: 240,
+                                ),
                                 child: Text(
                                   ChatController.formatRemoteRunLabel(
                                     strings,
@@ -2798,7 +2812,6 @@ class _SlashItem {
   /// Descriptor: catalog key or RAW server skill description (§5).
   final UiMessage description;
 }
-
 
 /// Map view of measured row heights that announces writes so the page can
 /// debounce persistence. Same-value writes stay silent (geometry re-reports
