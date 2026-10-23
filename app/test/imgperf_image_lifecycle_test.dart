@@ -38,8 +38,13 @@ class _MediaRepo extends HermesRepository {
   }
 }
 
-Uint8List _shownBytes(WidgetTester t) =>
-    (t.widget<Image>(find.byType(Image).last).image as MemoryImage).bytes;
+Uint8List _shownBytes(WidgetTester t) {
+  var provider = t.widget<Image>(find.byType(Image).last).image;
+  while (provider is ResizeImage) {
+    provider = provider.imageProvider;
+  }
+  return (provider as MemoryImage).bytes;
+}
 
 class _RepoHolder extends Notifier<HermesRepository> {
   @override

@@ -1,4 +1,6 @@
 import 'dart:collection';
+import 'dart:math' as math;
+import 'dart:ui' as ui;
 import 'dart:typed_data';
 import 'package:http/http.dart' as http;
 import 'image_viewer.dart';
@@ -184,13 +186,129 @@ class MessageImageMemory extends StatelessWidget {
           () async => bytes,
         ),
       ),
-      child: Image.memory(
+      child: _InlineImage(
         bytes,
-        fit: BoxFit.contain,
+        natural: true,
         errorBuilder: (c, e, s) =>
             LocalizedText(UiMessage.local(MessageKey.contentM005)),
       ),
     ),
+  );
+}
+
+// SCROLLJANK A: 64 physical-pixel buckets, at most 1536² decoded pixels
+// (9 MiB RGBA per frame). Targets preserve aspect and never upscale small images.
+// Both axes are bounded even when a natural-height row is unconstrained.
+const _inlineDecodeEdge = 1536;
+int _decodeBucket(double logical, double dpr) =>
+    ((logical * dpr / 64).ceil() * 64).clamp(64, _inlineDecodeEdge);
+
+final _imageDimensions = Expando<Future<Size>>();
+
+Future<Size> _dimensions(
+  Uint8List bytes,
+) => _imageDimensions[bytes] ??= () async {
+  final buffer = await ui.ImmutableBuffer.fromUint8List(bytes);
+  try {
+    final descriptor = await ui.ImageDescriptor.encoded(buffer);
+    try {
+      // Descriptor reads metadata only: no full-resolution raster/codec frame.
+      return Size(descriptor.width.toDouble(), descriptor.height.toDouble());
+    } finally {
+      descriptor.dispose();
+    }
+  } finally {
+    buffer.dispose();
+  }
+}();
+
+// PNG dimensions are available synchronously, keeping cached small-image
+// landings synchronous as before. Other formats use the engine metadata path.
+Size? _pngDimensions(Uint8List bytes) {
+  if (bytes.length < 24 ||
+      bytes[0] != 137 ||
+      bytes[1] != 80 ||
+      bytes[2] != 78 ||
+      bytes[3] != 71 ||
+      bytes[4] != 13 ||
+      bytes[5] != 10 ||
+      bytes[6] != 26 ||
+      bytes[7] != 10) {
+    return null;
+  }
+  final data = ByteData.sublistView(bytes);
+  final width = data.getUint32(16);
+  final height = data.getUint32(20);
+  if (width == 0 || height == 0) return null;
+  return Size(width.toDouble(), height.toDouble());
+}
+
+class _InlineImage extends StatelessWidget {
+  const _InlineImage(
+    this.bytes, {
+    this.natural = false,
+    required this.errorBuilder,
+  });
+  final Uint8List bytes;
+  final bool natural;
+  final ImageErrorWidgetBuilder errorBuilder;
+
+  @override
+  Widget build(BuildContext context) => LayoutBuilder(
+    builder: (context, constraints) {
+      final dpr = MediaQuery.devicePixelRatioOf(context);
+      Widget image(Size original) {
+        final logical = natural
+            ? constraints.constrainSizeAndAttemptToPreserveAspectRatio(original)
+            : constraints.biggest;
+        final width = logical.width.isFinite ? logical.width : 480.0;
+        final height = logical.height.isFinite ? logical.height : 480.0;
+        final factor = math.min(
+          1.0,
+          math.min(
+            _decodeBucket(math.max(1, width), dpr) / original.width,
+            _decodeBucket(math.max(1, height), dpr) / original.height,
+          ),
+        );
+        // Explicit proportional targets avoid ResizeImagePolicy.fit rounding
+        // the short edge to zero for extreme panoramas. A one-pixel minimum
+        // also keeps these images within the same bounded pixel budget.
+        final provider = ResizeImage(
+          MemoryImage(bytes),
+          width: math.max(1, (original.width * factor).floor()),
+          height: math.max(1, (original.height * factor).floor()),
+        );
+        return SizedBox(
+          width: natural ? logical.width : null,
+          height: natural ? logical.height : null,
+          // Fit the ORIGINAL aspect into the logical box. Integer decoder
+          // rounding (e.g. 4000x1 -> 512x1) must not alter the painted aspect.
+          child: FittedBox(
+            fit: BoxFit.contain,
+            child: Image(
+              image: provider,
+              width: original.width,
+              height: original.height,
+              fit: BoxFit.fill,
+              errorBuilder: errorBuilder,
+            ),
+          ),
+        );
+      }
+
+      final png = _pngDimensions(bytes);
+      if (png != null) return image(png);
+      return FutureBuilder<Size>(
+        future: _dimensions(bytes),
+        builder: (context, snapshot) {
+          if (snapshot.hasError) {
+            return errorBuilder(context, snapshot.error!, snapshot.stackTrace);
+          }
+          if (!snapshot.hasData) return const SizedBox.shrink();
+          return image(snapshot.data!);
+        },
+      );
+    },
   );
 }
 
@@ -606,11 +724,7 @@ class _MessageImageState extends ConsumerState<MessageImage> {
         }
         final decoded = _decode();
         if (decoded == null) return local(MessageKey.contentM007);
-        return Image.memory(
-          decoded.bytes,
-          fit: BoxFit.contain,
-          errorBuilder: failure,
-        );
+        return _InlineImage(decoded.bytes, errorBuilder: failure);
       }
       final uri = Uri.tryParse(widget.source);
       if (uri == null ||
@@ -633,11 +747,7 @@ class _MessageImageState extends ConsumerState<MessageImage> {
           if (!snapshot.hasData) {
             return const Center(child: CircularProgressIndicator());
           }
-          return Image.memory(
-            snapshot.data!,
-            fit: BoxFit.contain,
-            errorBuilder: failure,
-          );
+          return _InlineImage(snapshot.data!, errorBuilder: failure);
         },
       );
     } catch (_) {
