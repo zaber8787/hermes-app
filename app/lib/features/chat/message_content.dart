@@ -250,6 +250,43 @@ Size? _headerDimensions(Uint8List bytes) {
   final png = _pngDimensions(bytes);
   if (png != null) return png;
   final data = ByteData.sublistView(bytes);
+  // IMGVIEW-VISIBLE: WebP — Discord re-encodes many attachments to WebP,
+  // and on the web engine an unparsed header means the slow metadata path
+  // (which is unusable there), so parse all three container layouts here.
+  if (bytes.length >= 30 &&
+      bytes[0] == 82 && // R
+      bytes[1] == 73 && // I
+      bytes[3] == 70 && // F
+      bytes[8] == 87 && // W
+      bytes[9] == 69 && // E
+      bytes[10] == 66 && // B
+      bytes[11] == 80) {
+    // Extended (VP8X): canvas size at bytes 24..29, 24-bit LE minus one.
+    if (bytes[12] == 88 && bytes[15] == 86 && bytes[16] == 80) {
+      final w = bytes[24] | (bytes[25] << 8) | (bytes[26] << 16);
+      final h = bytes[27] | (bytes[28] << 8) | (bytes[29] << 16);
+      if (w > 0 && h > 0) return Size((w + 1).toDouble(), (h + 1).toDouble());
+    }
+    // Simple VP8 (lossy): dimensions at frame header bytes 26..29.
+    if (bytes[12] == 86 && bytes[13] == 80 && bytes[14] == 56) {
+      final w = data.getUint16(26, Endian.little) & 0x3fff;
+      final h = data.getUint16(28, Endian.little) & 0x3fff;
+      if (w > 0 && h > 0) return Size(w.toDouble(), h.toDouble());
+    }
+    // Simple lossless VP8L: after the 8-bit signature, 14-bit (w-1) then
+    // 14-bit (h-1), LSB-first across bytes 20..24.
+    if (bytes[12] == 76 && bytes.length >= 25) {
+      int bit(int i) => (bytes[20 + (i >> 3)] >> (i & 7)) & 1;
+      var w = 0, h = 0;
+      for (var k = 0; k < 14; k++) {
+        w |= bit(8 + k) << k;
+        h |= bit(22 + k) << k;
+      }
+      if (w > 0 || h > 0) {
+        return Size((w + 1).toDouble(), (h + 1).toDouble());
+      }
+    }
+  }
   if (bytes.length >= 10 &&
       bytes[0] == 71 &&
       bytes[1] == 73 &&
@@ -409,12 +446,26 @@ class _InlineImageState extends State<_InlineImage> {
         return _fullSize(context, error, stack);
       }
       return FutureBuilder<Size>(
-        future: _dimensions(bytes),
+        future: _dimensions(bytes).timeout(
+          // IMGVIEW-VISIBLE (2026-10-23): on the web engine the metadata
+          // future can hang instead of throwing; a hanging future rendered
+          // a zero-height shrink box — the image simply vanished from the
+          // flow ("圖片沒有渲染"). Cap the wait: past 6s, take the full-size
+          // decode path (slower but always paints).
+          const Duration(seconds: 6),
+        ),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
             return _fullSize(context, snapshot.error!, snapshot.stackTrace);
           }
-          if (!snapshot.hasData) return const SizedBox.shrink();
+          if (!snapshot.hasData) {
+            // Discord-style reservation: keep layout stable and show that
+            // something is coming instead of an invisible 0×0 gap.
+            return const SizedBox(
+              height: 160,
+              child: Center(child: CircularProgressIndicator()),
+            );
+          }
           try {
             return image(snapshot.data!);
           } catch (error, stack) {
@@ -479,10 +530,9 @@ Future<void> openMessageLink(BuildContext context, String value) async {
   // and any native failure fall through to url_launcher unchanged.
   if (defaultTargetPlatform == TargetPlatform.android) {
     try {
-      final opened = await const MethodChannel('hermes/browser').invokeMethod<bool>(
-        'openExternally',
-        {'url': value},
-      );
+      final opened = await const MethodChannel(
+        'hermes/browser',
+      ).invokeMethod<bool>('openExternally', {'url': value});
       if (opened == true) return;
     } catch (_) {
       // pre-channel builds / non-Flutter-host contexts: url_launcher below.
