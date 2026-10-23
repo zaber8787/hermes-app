@@ -243,7 +243,55 @@ Size? _pngDimensions(Uint8List bytes) {
   return Size(width.toDouble(), height.toDouble());
 }
 
-class _InlineImage extends StatelessWidget {
+// Encoded ImageDescriptor.width/height are unsupported on web. Read common
+// headers without rasterizing; unknown formats still try the engine and fall
+// back to full-size rendering if metadata is unavailable.
+Size? _headerDimensions(Uint8List bytes) {
+  final png = _pngDimensions(bytes);
+  if (png != null) return png;
+  final data = ByteData.sublistView(bytes);
+  if (bytes.length >= 10 &&
+      bytes[0] == 71 &&
+      bytes[1] == 73 &&
+      bytes[2] == 70) {
+    final w = data.getUint16(6, Endian.little);
+    final h = data.getUint16(8, Endian.little);
+    if (w > 0 && h > 0) return Size(w.toDouble(), h.toDouble());
+  }
+  if (bytes.length < 4 || bytes[0] != 0xff || bytes[1] != 0xd8) {
+    return null;
+  }
+  var offset = 2;
+  while (offset + 3 < bytes.length) {
+    if (bytes[offset++] != 0xff) return null;
+    while (offset < bytes.length && bytes[offset] == 0xff) {
+      offset++;
+    }
+    if (offset >= bytes.length) return null;
+    final marker = bytes[offset++];
+    if (marker == 0xda || marker == 0xd9) return null;
+    if (marker == 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > bytes.length) return null;
+    final length = data.getUint16(offset);
+    if (length < 2 || offset + length > bytes.length) return null;
+    final isFrame =
+        marker >= 0xc0 &&
+        marker <= 0xcf &&
+        marker != 0xc4 &&
+        marker != 0xc8 &&
+        marker != 0xcc;
+    if (isFrame && length >= 8) {
+      final h = data.getUint16(offset + 3);
+      final w = data.getUint16(offset + 5);
+      if (w > 0 && h > 0) return Size(w.toDouble(), h.toDouble());
+      return null;
+    }
+    offset += length;
+  }
+  return null;
+}
+
+class _InlineImage extends StatefulWidget {
   const _InlineImage(
     this.bytes, {
     this.natural = false,
@@ -254,8 +302,66 @@ class _InlineImage extends StatelessWidget {
   final ImageErrorWidgetBuilder errorBuilder;
 
   @override
+  State<_InlineImage> createState() => _InlineImageState();
+}
+
+class _InlineImageState extends State<_InlineImage> {
+  bool _loggedFallback = false;
+  bool _useFullSize = false;
+  Uint8List get bytes => widget.bytes;
+  bool get natural => widget.natural;
+  ImageErrorWidgetBuilder get errorBuilder => widget.errorBuilder;
+
+  @override
+  void didUpdateWidget(covariant _InlineImage oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (!identical(oldWidget.bytes, bytes)) {
+      _loggedFallback = false;
+      _useFullSize = false;
+    }
+  }
+
+  void _logFallback(Object error) {
+    if (!_loggedFallback) {
+      _loggedFallback = true;
+      debugPrint('InlineImage: falling back to full-size MemoryImage: $error');
+    }
+  }
+
+  Widget _rawImage() => Image(
+    image: MemoryImage(bytes),
+    fit: BoxFit.contain,
+    errorBuilder: errorBuilder,
+  );
+
+  Widget _fullSize(BuildContext context, Object error, StackTrace? stack) {
+    _logFallback(error);
+    _useFullSize = true;
+    return _rawImage();
+  }
+
+  Widget _providerError(BuildContext context, Object error, StackTrace? stack) {
+    _logFallback(error);
+    final failedBytes = bytes;
+    // Image calls errorBuilder during build. Replace the entire bounded
+    // subtree on the next frame, rather than nesting a second Image in it.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted && identical(bytes, failedBytes) && !_useFullSize) {
+        setState(() => _useFullSize = true);
+      }
+    });
+    // Keep FittedBox's transform finite and the gallery gesture hittable
+    // while the replacement frame is scheduled.
+    return const ColoredBox(
+      color: Colors.transparent,
+      child: SizedBox(width: 1, height: 1),
+    );
+  }
+
+  @override
   Widget build(BuildContext context) => LayoutBuilder(
     builder: (context, constraints) {
+      if (_useFullSize) return _rawImage();
       final dpr = MediaQuery.devicePixelRatioOf(context);
       Widget image(Size original) {
         final logical = natural
@@ -290,22 +396,30 @@ class _InlineImage extends StatelessWidget {
               width: original.width,
               height: original.height,
               fit: BoxFit.fill,
-              errorBuilder: errorBuilder,
+              errorBuilder: _providerError,
             ),
           ),
         );
       }
 
-      final png = _pngDimensions(bytes);
-      if (png != null) return image(png);
+      try {
+        final header = _headerDimensions(bytes);
+        if (header != null) return image(header);
+      } catch (error, stack) {
+        return _fullSize(context, error, stack);
+      }
       return FutureBuilder<Size>(
         future: _dimensions(bytes),
         builder: (context, snapshot) {
           if (snapshot.hasError) {
-            return errorBuilder(context, snapshot.error!, snapshot.stackTrace);
+            return _fullSize(context, snapshot.error!, snapshot.stackTrace);
           }
           if (!snapshot.hasData) return const SizedBox.shrink();
-          return image(snapshot.data!);
+          try {
+            return image(snapshot.data!);
+          } catch (error, stack) {
+            return _fullSize(context, error, stack);
+          }
         },
       );
     },

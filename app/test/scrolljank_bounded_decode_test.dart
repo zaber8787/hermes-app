@@ -4,6 +4,7 @@ import 'dart:typed_data';
 import 'dart:ui' as ui;
 
 import 'package:flutter/material.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
@@ -12,14 +13,20 @@ import 'package:hermes_app/features/chat/image_viewer.dart';
 import 'package:hermes_app/providers.dart';
 
 import 'support/localized_app.dart';
+import 'support/scrolljank_jpeg.dart';
 
 class _DecodeBinding extends AutomatedTestWidgetsFlutterBinding {
   int decodes = 0;
+  bool failNextDecode = false;
   @override
   Future<ui.Codec> instantiateImageCodecWithSize(
     ui.ImmutableBuffer buffer, {
     ui.TargetImageSizeCallback? getTargetSize,
   }) async {
+    if (failNextDecode) {
+      failNextDecode = false;
+      throw StateError('injected bounded decode failure');
+    }
     final codec = await super.instantiateImageCodecWithSize(
       buffer,
       getTargetSize: getTargetSize,
@@ -118,6 +125,84 @@ void main() {
     binding.imageCache.clearLiveImages();
     resetDataUrlCache();
     binding.decodes = 0;
+    binding.failNextDecode = false;
+  });
+
+  testWidgets('real large JPEG renders bounded pixels on VM and web', (
+    t,
+  ) async {
+    final provider = await _mount(
+      t,
+      MessageImageMemory(scrolljankJpeg()),
+      width: 480,
+    );
+    final decoded = (await t.runAsync(() => _resolve(provider)))!;
+    expect(decoded.width, 512);
+    expect(decoded.height, 384);
+    decoded.dispose();
+    await t.pump();
+    expect(t.widget<RawImage>(find.byType(RawImage)).image, isNotNull);
+    expect(t.takeException(), isNull);
+  });
+
+  testWidgets(
+    'bounded provider failure renders original pixels and logs once',
+    (t) async {
+      final bytes = (await t.runAsync(() => _png(4000, 3000)))!;
+      final logs = <String>[];
+      final previous = debugPrint;
+      debugPrint = (String? message, {int? wrapWidth}) {
+        if (message != null) logs.add(message);
+      };
+      addTearDown(() => debugPrint = previous);
+      binding.failNextDecode = true;
+      await t.pumpWidget(localizedWrap(MessageImageMemory(bytes)));
+      for (var i = 0; i < 100; i++) {
+        await t.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 10)),
+        );
+        await t.pump();
+        final rasters = t.widgetList<RawImage>(find.byType(RawImage));
+        if (rasters.any((r) => r.image?.width == 4000)) break;
+      }
+      final full = t.widgetList<Image>(find.byType(Image)).last;
+      expect(full.image, isA<MemoryImage>());
+      expect((full.image as MemoryImage).bytes, same(bytes));
+      final raster = t.widgetList<RawImage>(find.byType(RawImage)).last;
+      expect(raster.image?.width, 4000);
+      expect(raster.image?.height, 3000);
+      await t.pump();
+      expect(
+        logs.where((s) => s.contains('falling back to full-size')),
+        hasLength(1),
+      );
+      debugPrint = previous;
+      expect(t.takeException(), isNull);
+    },
+  );
+
+  testWidgets('valid BMP uses engine metadata or web full-size fallback', (
+    t,
+  ) async {
+    final bytes = scrolljankBmp();
+    await t.pumpWidget(localizedWrap(MessageImageMemory(bytes)));
+    for (var i = 0; i < 100; i++) {
+      await t.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 10)),
+      );
+      await t.pump();
+      if (t
+          .widgetList<RawImage>(find.byType(RawImage))
+          .any((r) => r.image != null)) {
+        break;
+      }
+    }
+    final image = t.widgetList<Image>(find.byType(Image)).last;
+    expect(image.image, kIsWeb ? isA<MemoryImage>() : isA<ResizeImage>());
+    final raster = t.widgetList<RawImage>(find.byType(RawImage)).last;
+    expect(raster.image?.width, 40);
+    expect(raster.image?.height, 30);
+    expect(t.takeException(), isNull);
   });
 
   testWidgets('three sources resolve bounded pixels; remount keeps provider keys', (
@@ -343,16 +428,38 @@ void main() {
       () => Future<void>.delayed(const Duration(milliseconds: 20)),
     );
     await t.pump();
-    expect(find.byType(Image), findsNothing);
+    for (
+      var i = 0;
+      i < 100 && find.text('The image could not be loaded').evaluate().isEmpty;
+      i++
+    ) {
+      await t.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 5)),
+      );
+      await t.pump();
+    }
+    expect(t.widget<Image>(find.byType(Image)).image, isA<MemoryImage>());
     expect(find.text('The image could not be loaded'), findsOneWidget);
     expect(t.takeException(), isNull);
     // A recognized header with corrupt raster data must also reach fallback.
     final valid = (await t.runAsync(() => _png(40, 30)))!;
-    await _mount(t, MessageImageMemory(Uint8List.sublistView(valid, 0, 24)));
+    await t.pumpWidget(
+      localizedWrap(MessageImageMemory(Uint8List.sublistView(valid, 0, 24))),
+    );
     await t.runAsync(
       () => Future<void>.delayed(const Duration(milliseconds: 20)),
     );
     await t.pump();
+    for (
+      var i = 0;
+      i < 100 && find.text('The image could not be loaded').evaluate().isEmpty;
+      i++
+    ) {
+      await t.runAsync(
+        () => Future<void>.delayed(const Duration(milliseconds: 5)),
+      );
+      await t.pump();
+    }
     expect(find.text('The image could not be loaded'), findsOneWidget);
     expect(t.takeException(), isNull);
   });
