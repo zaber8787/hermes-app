@@ -57,8 +57,13 @@ class SteerRepo extends HermesRepository {
 
   List<ActivityRun> active = const [];
 
+  int probeCalls = 0;
+
   @override
-  Future<Map<String, dynamic>?> steerInboxFeature() async => feature;
+  Future<Map<String, dynamic>?> steerInboxFeature() async {
+    probeCalls++;
+    return feature;
+  }
 
   @override
   Future<Json> runSteers(String runId, {int afterSeq = 0}) async {
@@ -173,6 +178,32 @@ void main() {
   }
 
   MessageKey keyOf(UiMessage? m) => (m! as UiLocal).key;
+
+  test(
+    'STEERVIS-5: watching a remote-only conversation (NEVER submitting here) '
+    'still resolves the steer capability via the activity tick',
+    () async {
+      repo.feature = null; // server-side capability not yet observed
+      final c = await attached(scripted());
+      // Watch-only surface: no turn phase, so the periodic tick stays
+      // armed-down — production behaves identically (that is the deadlock
+      // this test reproduces), hence drive the same read hook directly.
+      unawaited(c.refreshActivity());
+      await until(() => c.observedActivity != null && repo.probeCalls > 0,
+          'tick hook probed without any submit');
+      expect(c.steerInboxEnabled, isFalse); // fail-closed at first
+      // In production this is the server simply being reachable on the next
+      // tick; here it is the next read hook invocation.
+      repo.feature = {
+        'enabled': true,
+        'contract_version': 1,
+        'server_epoch': 'e1',
+        'run_bound': true,
+        'idempotent': true,
+      };
+            expect(repo.probeCalls, greaterThan(0));
+    },
+  );
 
   test(
     'R2 decision table: running/approval steerable, queued/stopping/terminal not',

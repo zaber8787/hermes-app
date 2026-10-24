@@ -1641,6 +1641,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _lastAppliedActivitySeq = seq;
       _activityFailure = null;
       _applyActivity(snap, token);
+      // STEERVIS-5 (2026-10-24): the steer capability was ONLY ever probed
+      // from the submit paths (5949/6314) — a chicken-and-egg deadlock: the
+      // remote-run steer button needs steerInboxEnabled to render, but a
+      // user who only ever watches runs started on another device never
+      // submits here, so the cap stayed null and the button stayed hidden
+      // forever. Probe alongside the other per-tick capabilities.
+      unawaited(_probeSteerCap());
       unawaited(_steerPoll());
       unawaited(_probeNotifyCap());
       unawaited(_notificationPoll());
