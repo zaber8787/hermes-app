@@ -369,12 +369,21 @@ class _MeasuredRowDelegate extends SliverChildBuilderDelegate {
   final List<double> prefix;
 
   @override
+  // DETAIL-BLACKOUT: uniform extrapolation of the UNBUILT suffix. The old
+  // form `trailing + prefix.last - prefix[lastIndex + 1]` DECREASES as the
+  // framework probes larger lastIndex values while hunting an offset, so
+  // any search over scroll positions lands on the wrong row (in practice:
+  // the top few rows, viewport parked at a fake bottom). Monotone-in-
+  // lastIndex keeps that search consistent; the suffix mean matches the
+  // uniform placeholder geometry exactly.
   double? estimateMaxScrollOffset(
     int firstIndex,
     int lastIndex,
     double leadingScrollOffset,
     double trailingScrollOffset,
-  ) => trailingScrollOffset + prefix.last - prefix[lastIndex + 1];
+  ) =>
+      trailingScrollOffset +
+      (childCount! - 1 - lastIndex) * (prefix.last / childCount!);
 }
 
 /// OPENPERF P1: placeholder row. Rows far from the viewport (or the reveal

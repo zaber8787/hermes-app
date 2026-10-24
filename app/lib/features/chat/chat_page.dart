@@ -1180,6 +1180,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     // settled position — do not let it consume the one-shot follow budget;
     // the next build's postFrame tick rides when rows are real.
     if (position.maxScrollExtent == 0) return;
+    final sweepRows = ref.read(chatProvider(widget.session.id)).messages.length;
     // Settled at bottom: exactly, or — over a page whose extents above
     // the landing band are still estimates — as close as the pinned real
     // tail chunk guarantees (the band itself shows built content either
@@ -1187,6 +1188,21 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     final tailPinned = _followRealFloor != null;
     final gap = position.maxScrollExtent - position.pixels;
     if (gap <= 0.5 || (tailPinned && gap <= position.viewportDimension / 2)) {
+      // DETAIL-BLACKOUT (2026-10-24): settled is NOT landed while the
+      // landing band holds ZERO real rows. Stage 1 spans the page with
+      // uniform placeholders, so its bottom is pure arithmetic — a gap
+      // of zero there is exactly the reported black page (viewport
+      // parked over estimates, no real row ever enters it, nothing ever
+      // pulls it back). Step the pin to the real-tail stage and keep
+      // following instead of settling black.
+      if (_followRealFloor != null && _followRealFloor! >= sweepRows) {
+        _followRealFloor = (sweepRows - 12).clamp(0, sweepRows);
+        if (mounted) setState(() => _revealRevision++);
+        WidgetsBinding.instance.addPostFrameCallback(
+          (_) => _followBottom(refine > 0 ? refine : 6),
+        );
+        return;
+      }
       firstLoaded = true;
       // Landing done: the sweep pin drops. Rows that went real KEEP real
       // (element state latches — the delegate now always emits _LazyRow),
@@ -1210,11 +1226,21 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     // the sliver's index×extent mapping is exact and one jump lands on the
     // tail. Stage 2 streams the last chunk real under the landing band;
     // the refine ticks then just close the residual gap.
+    // DETAIL-BLACKOUT (2026-10-24): the band used to open at ZERO real
+    // rows (floor = rows) and land on rows-4. Over a long DETAILED
+    // history that is fatal — a monster row's placeholder can be 10-20x
+    // its real height, so a 4-row real band paints a few hundred px
+    // inside a viewport ringed entirely by placeholders (the reported
+    // black page). Stream the tail from the first tick instead: with
+    // monotone max-offset estimation (see _MeasuredRowDelegate) the
+    // one-jump landing precision stage 1 was bought for no longer needs
+    // zero-real rows, and 24 real rows clear any viewport even in the
+    // worst estimate skew.
     if (rows > 40 && _followRealFloor == null) {
       _followRealFloor = rows;
       if (mounted) setState(() {});
-    } else if (_followRealFloor != null && _followRealFloor! > rows - 4) {
-      _followRealFloor = rows - 4;
+    } else if (_followRealFloor != null && _followRealFloor! > rows - 12) {
+      _followRealFloor = (rows - 12).clamp(0, rows);
       if (mounted) setState(() {});
     }
     // Only ever CLOSE the gap to the bottom; never yank an established
