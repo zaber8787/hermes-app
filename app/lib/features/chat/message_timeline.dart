@@ -134,6 +134,19 @@ class TimelineReveal {
   /// content while the page streams its tail into existence (chunk by
   /// chunk, bottom up). Null = proximity rules only.
   final int? realFrom;
+
+  /// A TAIL-RELATIVE pin (negative realFrom = “the last N rows build
+  /// real”) is resolved here because THIS widget owns the row list —
+  /// brief mode collapses the projection, so only the sliver knows how
+  /// many rows exist (BRIEF-BLACKOUT: page-side absolute floors missed
+  /// the projection and blackened brief pages).
+  TimelineReveal withRealFrom(int? rf) => TimelineReveal(
+    pixels: pixels,
+    viewport: viewport,
+    revision: revision,
+    focusIndex: focusIndex,
+    realFrom: rf,
+  );
 }
 
 List<TimelineRow> _timelineRows(
@@ -326,9 +339,13 @@ class MessageTimelineSliver extends StatelessWidget {
         (context, index) {
           final key = rows[index].keyValue;
           final rowKey = ValueKey(key ?? 'row#$index');
-          final reveal = _reveal;
+          var reveal = _reveal;
           if (reveal == null || rows.length <= _lazyThreshold) {
             return rows[index].build(context, rowKey);
+          }
+          if ((reveal.realFrom ?? 0) < 0) {
+            reveal = reveal.withRealFrom(
+                (rows.length + reveal.realFrom!).clamp(0, rows.length));
           }
           return _LazyRow(
             key: rowKey,

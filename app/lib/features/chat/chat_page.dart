@@ -1171,6 +1171,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
   }
 
   int? _revealFocus;
+  /// Stage-1 sweep sentinel: no row index reaches it, so the page
+  /// stays uniformly placeholder until the false-landing gate steps
+  /// to the tail band (DETAIL-BLACKOUT / BRIEF-BLACKOUT).
+  static const int _kSweepAllReal = 1 << 30;
   int? _followRealFloor;
 
   void _followBottom(int refine) {
@@ -1180,7 +1184,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     // settled position — do not let it consume the one-shot follow budget;
     // the next build's postFrame tick rides when rows are real.
     if (position.maxScrollExtent == 0) return;
-    final sweepRows = ref.read(chatProvider(widget.session.id)).messages.length;
+    // BRIEF-BLACKOUT (2026-10-25): the sweep counts ROWS OF THE TIMELINE,
+    // which in brief mode is the PROJECTED list (tool runs and narration
+    // merge — far fewer rows than raw messages). A floor computed from
+    // raw message counts lands BEYOND the sliver's childCount, so the
+    // real band is empty and the page settles black. Count rows the way
+    // the sliver does.
+    final sweepState = ref.read(chatProvider(widget.session.id));
+    final sweepRows = projectMessages(sweepState.messages).length;
     // Settled at bottom: exactly, or — over a page whose extents above
     // the landing band are still estimates — as close as the pinned real
     // tail chunk guarantees (the band itself shows built content either
@@ -1195,15 +1206,19 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // parked over estimates, no real row ever enters it, nothing ever
       // pulls it back). Step the pin to the real-tail stage and keep
       // following instead of settling black.
-      if (_followRealFloor != null && _followRealFloor! >= sweepRows) {
-        _followRealFloor = (sweepRows - 12).clamp(0, sweepRows);
+      firstLoaded = true;
+      // FALSE-LANDING gate (DETAIL-BLACKOUT): settling while still in
+      // the uniform stage means the bottom is pure placeholder
+      // arithmetic — step to the tail band and keep following instead
+      // of settling black.
+      if (_followRealFloor == _kSweepAllReal) {
+        _followRealFloor = -12;
         if (mounted) setState(() => _revealRevision++);
         WidgetsBinding.instance.addPostFrameCallback(
           (_) => _followBottom(refine > 0 ? refine : 6),
         );
         return;
       }
-      firstLoaded = true;
       // Landing done: the sweep pin drops. Rows that went real KEEP real
       // (element state latches — the delegate now always emits _LazyRow),
       // and clearing restores the idle geometry rule for later scrolls.
@@ -1221,7 +1236,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     // The landing band must be real content: pin the bottom chunk real
     // (row estimates are good to a few percent, so one chunk stabilises
     // the bottom; probes stream the rest as their boxes get laid out).
-    final rows = ref.read(chatProvider(widget.session.id)).messages.length;
+    final rows = sweepRows;
     // Two-stage sweep. Stage 1 keeps the page PURE UNIFORM placeholders so
     // the sliver's index×extent mapping is exact and one jump lands on the
     // tail. Stage 2 streams the last chunk real under the landing band;
@@ -1236,11 +1251,16 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     // one-jump landing precision stage 1 was bought for no longer needs
     // zero-real rows, and 24 real rows clear any viewport even in the
     // worst estimate skew.
+    // BRIEF-BLACKOUT (2026-10-25): the pin is TAIL-RELATIVE (-12 = the
+    // last 12 TIMELINE rows build real), never an absolute index. In
+    // brief mode the sliver's rows are the collapsed projection — far
+    // fewer than raw messages — and an absolute floor computed from any
+    // count but the sliver's own lands beyond childCount: zero real
+    // rows, black page (the exact DETAIL-BLACKOUT failure, mirrored to
+    // brief mode). The sliver resolves the tail-relative pin against
+    // its own row list.
     if (rows > 40 && _followRealFloor == null) {
-      _followRealFloor = rows;
-      if (mounted) setState(() {});
-    } else if (_followRealFloor != null && _followRealFloor! > rows - 12) {
-      _followRealFloor = (rows - 12).clamp(0, rows);
+      _followRealFloor = _kSweepAllReal;
       if (mounted) setState(() {});
     }
     // Only ever CLOSE the gap to the bottom; never yank an established

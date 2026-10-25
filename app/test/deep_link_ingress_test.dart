@@ -76,7 +76,7 @@ void main() {
       await Future<void>.delayed(Duration.zero);
       expect(browserCalls, hasLength(1));
       expect(routed, isEmpty);
-      expect(await store.peekDeepLink(), isNull); // never stashed
+      expect(store.peekDeepLink(), isNull); // never stashed
     });
 
     test('a plain chat route link still routes in-app (no regression)', () async {
