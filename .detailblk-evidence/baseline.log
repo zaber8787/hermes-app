@@ -1,0 +1,6 @@
+Flutter is deprecating support for Intel-based Macs. A future version of Flutter will require an Apple Silicon Mac to build applications.
+Flutter failed to write to a file at "/Users/zaber/.config/flutter/tool_state".
+Please ensure that the SDK and/or project is installed in a location that has read/write permissions for the current user.
+Try running:
+  sudo chown -R $(whoami) /Users/zaber/.config/flutter/tool_state
+

@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import '../settings/local_store.dart';
 import 'run_link.dart';
@@ -38,6 +40,16 @@ class DeepLinkIngress {
   }
 
   void observe(String href) {
+    // APK-EXIT (2026-10-24): LINK-EXIT2 made the app claim the fileserver
+    // port (:8443) so chat links stay in-app — but that also captured the
+    // update APK links: tapping one in a notification opened the app, the
+    // path parsed to no route, and the download never started. A file
+    // artifact is not a route — hand it to the browser (which knows how
+    // to download and install) and leave the routing queue untouched.
+    if (_isFileArtifact(href)) {
+      unawaited(_openExternally(href));
+      return;
+    }
     RunLink? link;
     try {
       link = RunLink.tryParse(href);
@@ -102,6 +114,36 @@ class DeepLinkIngress {
 
   void detach() {
     _router = null;
+  }
+
+  static bool _isFileArtifact(String href) {
+    final uri = Uri.tryParse(href);
+    if (uri == null) return false;
+    final path = uri.path.toLowerCase();
+    return path.endsWith('.apk') || path.endsWith('.zip');
+  }
+
+  static Future<void> _openExternally(String href) async {
+    // Same verified-domain dodge as chat links: ACTION_VIEW on our own
+    // domain resolves back to THIS activity, so pin the browser natively
+    // first and fall through to url_launcher.
+    if (defaultTargetPlatform == TargetPlatform.android) {
+      try {
+        final opened = await const MethodChannel(
+          'hermes/browser',
+        ).invokeMethod<bool>('openExternally', {'url': href});
+        if (opened == true) return;
+      } catch (_) {
+        // fall through to url_launcher
+      }
+    }
+    final uri = Uri.tryParse(href);
+    if (uri == null) return;
+    try {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } on Object {
+      // No browser at all: an honest no-op beats a crash.
+    }
   }
 
   void dispose() {

@@ -1,4 +1,6 @@
 import 'dart:async';
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -29,6 +31,62 @@ void main() {
   tearDown(() async {
     ingress.dispose();
     await source.close();
+  });
+
+  // APK-EXIT (2026-10-24): the fileserver-port claim (LINK-EXIT2) made
+  // tapped update-APK notifications open the app and go nowhere. A file
+  // artifact on the ingress must leave the routing machinery completely
+  // untouched and go straight to an external browser (download handler).
+  group('file artifacts are handed to the browser', () {
+    final routed = <String>[];
+    final browserCalls = <String>[];
+
+    setUp(() {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('hermes/browser'),
+            (call) async {
+              if (call.method == 'openExternally') {
+                browserCalls.add(call.arguments['url'] as String);
+              }
+              return true;
+            },
+          );
+      ingress.attach((link) async {
+        routed.add(link.sessionId);
+      });
+    });
+
+    tearDown(() {
+      debugDefaultTargetPlatformOverride = null;
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(
+            const MethodChannel('hermes/browser'),
+            null,
+          );
+      routed.clear();
+      browserCalls.clear();
+    });
+
+    test('an APK notification link downloads instead of dying in the app', () async {
+      ingress.observe(
+        'https://bot.tail592d86.ts.net:8443/hermes-app-v0.14.22-detailblackout-20261024T201051Z-apk-debug.apk',
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(browserCalls, hasLength(1));
+      expect(routed, isEmpty);
+      expect(await store.peekDeepLink(), isNull); // never stashed
+    });
+
+    test('a plain chat route link still routes in-app (no regression)', () async {
+      ingress.observe(
+        'https://bot.tail592d86.ts.net/#/chat?session=sid-apk-x',
+      );
+      await Future<void>.delayed(Duration.zero);
+      expect(browserCalls, isEmpty);
+      expect(routed, ['sid-apk-x']);
+    });
   });
 
   group('one canonical URL shape on every platform', () {
