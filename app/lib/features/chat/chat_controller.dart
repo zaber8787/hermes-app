@@ -17,6 +17,7 @@ import '../settings/local_store.dart';
 import 'dart:math' as math;
 import 'auto_wake.dart';
 import 'approval_inbox.dart';
+import 'clarify_inbox.dart';
 import 'live_turn.dart';
 import 'local_attempt.dart';
 import 'remote_stop.dart';
@@ -1617,6 +1618,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         );
 
   Future<void> _activitySnapshot() async {
+    unawaited(_refreshClarify());
     final token = _turnToken;
     final epoch = _activityEpoch;
     final gen = _currentConnectionGeneration();
@@ -2274,6 +2276,85 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   bool approvalBusy = false;
+
+  // Clarify is session state, independent of the turn settlement gate.
+  final ClarifyInbox clarifyInbox = ClarifyInbox();
+  bool clarifySupported = false;
+  bool _clarifyRefreshing = false;
+
+  Future<void> _refreshClarify() async {
+    if (_disposed || _clarifyRefreshing) return;
+    _clarifyRefreshing = true;
+    final gen = _currentConnectionGeneration();
+    final revision = clarifyInbox.revision;
+    try {
+      final snapshot = await repo.sessionClarify(sid);
+      if (_disposed || gen != _currentConnectionGeneration()) return;
+      clarifySupported = true;
+      // An SSE change after GET began takes precedence over its older view.
+      if (revision == clarifyInbox.revision) clarifyInbox.mergeSnapshot(snapshot);
+      notifyListeners();
+    } on Object {
+      // Unsupported/transient failures are retried by the visible-page poll.
+    } finally {
+      _clarifyRefreshing = false;
+    }
+  }
+
+  void _routeClarifyInbox(dynamic event) {
+    final data = Map<String, dynamic>.from(event.json as Map);
+    if (data['session_id'] != sid) return;
+    if (event.type == 'clarify.request') {
+      clarifyInbox.request(data);
+    } else {
+      clarifyInbox.resolve(data);
+    }
+    notifyListeners();
+  }
+
+  Future<void> answerClarify(String clarifyId, Map<String, String> answers) async {
+    final request = clarifyInbox.find(clarifyId);
+    if (_disposed || request == null || !request.pending || request.busy) return;
+    if (request.questions.any((q) => (answers[q.qid] ?? '').trim().isEmpty)) return;
+    final submitted = Map<String, String>.of(answers);
+    final gen = _currentConnectionGeneration();
+    request.invalidQids.clear();
+    request.busy = true;
+    request.error = null;
+    notifyListeners();
+    try {
+      await repo.answerClarify(sid, clarifyId, submitted);
+      if (_disposed || gen != _currentConnectionGeneration()) return;
+      if (request.outcome == 'answered') request.answers = submitted;
+      if (request.pending) {
+        clarifyInbox.resolve({
+          'clarify_id': clarifyId, 'outcome': 'answered', 'answers': submitted,
+        });
+      }
+    } on ClarifyChoiceRequired catch (e) {
+      if (_disposed || gen != _currentConnectionGeneration()) return;
+      if (request.pending) {
+        request.invalidQids.addAll(request.questions
+            .where((q) => e.qid == null ? q.choices.isNotEmpty : q.qid == e.qid)
+            .map((q) => q.qid));
+        request.error = '請檢查標紅題目的選項';
+      }
+    } on ApiException catch (e) {
+      if (_disposed || gen != _currentConnectionGeneration()) return;
+      if (e.status == 404 && request.pending) {
+        clarifyInbox.resolve({'clarify_id': clarifyId, 'outcome': 'answered',
+          'answers': submitted});
+      } else if (request.pending) {
+        request.error = '傳送失敗，請重試';
+      }
+    } on Object {
+      if (request.pending) request.error = '傳送失敗，請重試';
+      unawaited(_refreshClarify());
+    } finally {
+      request.busy = false;
+      if (!_disposed) notifyListeners();
+    }
+  }
 
   // ---- APPROVALPUSH B3: cross-device approval inbox (spec R6) -------------
   // Cards are keyed by exact request and live OUTSIDE the turn; the turn
@@ -4095,6 +4176,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         _lastOutputAt = _clock();
         _waitingSeconds = null;
         live!.apply(event, sid);
+        if (event.type == 'clarify.request' || event.type == 'clarify.resolved') {
+          _routeClarifyInbox(event);
+        }
         // APPROVALPUSH B3 (R6): the inbox watches the same frames; with the
         // capability ON the exact-request cards live in the panel (terminal
         // frames fail-close their pending cards too).

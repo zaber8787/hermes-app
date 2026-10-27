@@ -21,6 +21,7 @@ import '../attachments/gallery_picker.dart';
 import '../settings/local_store.dart';
 import '../settings/management_page.dart';
 import 'approval_inbox_view.dart';
+import 'clarify_inbox_view.dart';
 import 'notification_inbox.dart';
 import 'remote_steer.dart';
 import 'remote_activity_notice.dart';
@@ -2241,6 +2242,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                               // APPROVALPUSH B3 (R6): exact-request cards for
                               // every pending approval in this session (local OR
                               // remote — never a fake turn row).
+                              _padded(ClarifyInboxView(
+                                requests: c.clarifyInbox.entries,
+                                onAnswer: c.answerClarify,
+                              )),
                               if (c.approvalInboxSupported)
                                 _padded(
                                   PendingApprovalsPanel(

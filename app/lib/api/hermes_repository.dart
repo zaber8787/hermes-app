@@ -25,6 +25,11 @@ import '../platform/stream_keepalive.dart';
 /// locale-free representation for diagnostics — never a UI formatter; a
 /// test/CLI that needs human output resolves [uiMessage] through the
 /// English catalog explicitly via [message].
+class ClarifyChoiceRequired implements Exception {
+  const ClarifyChoiceRequired(this.qid);
+  final String? qid;
+}
+
 class ApiException implements Exception, UiCarriesMessage {
   const ApiException(String rawMessage, [this.status])
     : _rawMessage = rawMessage,
@@ -189,6 +194,7 @@ class HermesRepository {
     Json? body,
     Map<String, String>? query,
     bool sse = false,
+    bool clarifyErrors = false,
     Future<void>? abortTrigger,
     Duration? headersTimeout,
     // R3 §5.1: optional pass-through — only chat threads one; every other
@@ -227,6 +233,19 @@ class HermesRepository {
       final budget = headersTimeout != null && headersTimeout < readTimeout
           ? headersTimeout
           : readTimeout;
+      if (clarifyErrors && response.statusCode == 409) {
+        final raw = await utf8.decoder.bind(response.stream).join().timeout(budget);
+        try {
+          final data = jsonDecode(raw) as Map;
+          final detail = data['detail'] is Map ? data['detail'] as Map : data;
+          if (detail['code'] == 'clarify_choice_required') {
+            throw ClarifyChoiceRequired(detail['qid'] as String?);
+          }
+        } on ClarifyChoiceRequired {
+          rethrow;
+        } catch (_) {}
+        throw const ApiException('Clarify conflict', 409);
+      }
       await response.stream.drain<void>().timeout(budget);
       // Do not expose reflected key or private server body in the UI/logs.
       throw ApiException.local(
@@ -992,6 +1011,21 @@ class HermesRepository {
 
   /// The server's pending-approval snapshot for one run (truth view; an
   /// `available: false` result is UNKNOWN, never "empty").
+  /// GET 200 is the clarify capability probe and pending snapshot.
+  Future<Json> sessionClarify(String sid) => _json(
+    'GET', '/v1/sessions/${Uri.encodeComponent(sid)}/clarify',
+    deadline: metadataTimeout,
+  );
+
+  Future<void> answerClarify(String sid, String clarifyId, Map<String, String> answers) async {
+    final response = await _open('POST',
+      '/v1/sessions/${Uri.encodeComponent(sid)}/clarify/${Uri.encodeComponent(clarifyId)}',
+      body: {'answers': answers},
+      clarifyErrors: true,
+    );
+    await response.stream.drain<void>().timeout(readTimeout);
+  }
+
   Future<Json> runApprovals(String runId) => _json(
     'GET',
     '/v1/runs/${Uri.encodeComponent(runId)}/approvals',
