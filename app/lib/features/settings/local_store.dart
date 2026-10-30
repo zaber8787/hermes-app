@@ -218,6 +218,22 @@ class LocalStore {
     await prefs.setString('server.url', value.url);
   }
 
+  // ---- VOICEUI §4.5: voice-call endpoint overrides (global, never _scope-d)
+  // Both are OPTIONAL overrides: an unset URL derives from server.url
+  // (deriveVoiceUrl), an unset/blank token falls back to the Hermes API key.
+  // A null/empty save REMOVES the key so the fallback path is reachable
+  // again; the token lives in the vault next to `server.key`, never prefs.
+  String? voiceUrl() => prefs.getString('voice.url');
+
+  Future<void> saveVoiceUrl(String? v) =>
+      v == null || v.trim().isEmpty
+      ? prefs.remove('voice.url')
+      : prefs.setString('voice.url', v);
+
+  Future<String> voiceToken() async => await vault.read('voice.token') ?? '';
+
+  Future<void> saveVoiceToken(String v) => vault.write('voice.token', v);
+
   // ---- I18N: global UI language (I18N-PLAN §4.2) --------------------------
   // `ui.locale` is GLOBAL (never _scope-d), independent of credentials: a
   // corrupt/missing value normalizes to English and must never block
