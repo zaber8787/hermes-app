@@ -1356,18 +1356,25 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
 
   /// True once a history refresh shows the server persisted the pending turn
   /// — the pending bubble must then hide or the message renders twice.
-  bool get pendingDelivered {
+  bool get pendingDelivered => ownTurnAnchor != null;
+
+  /// The durable user row that proves THIS device's pending send landed
+  /// (null = not landed / ambiguous). Single source for [pendingDelivered]
+  /// and the live-merge fold's own-turn ownership evidence.
+  Message? get ownTurnAnchor {
     final p = pendingInput;
-    if (p == null) return false;
+    if (p == null) return null;
     // Same shared comparison as every other pending anchor (B1): a
     // cross-platform reformatted row must hide the bubble, not double it.
     if (!_turnAttemptBacked) {
-      return messages.any(
-        (m) =>
-            !_beforeSend.contains(m.id) &&
+      for (final m in messages) {
+        if (!_beforeSend.contains(m.id) &&
             m.isUserTurn &&
-            foldedTurnTextEquals(m.content, p),
-      );
+            foldedTurnTextEquals(m.content, p)) {
+          return m;
+        }
+      }
+      return null;
     }
     // R3 §5.4: for an attempt-backed send text stays a CANDIDATE filter.
     // Only a row that survives BOTH watermarks (not seen before the send;
@@ -1378,6 +1385,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final attempt = _evidenceAttempt;
     final moved = _sendEpochMoved || _attemptEpochMoved(attempt);
     final mark = _turnSendWatermark ?? attempt?.historyAfterId;
+    Message? hit;
     var hits = 0;
     for (final m in messages) {
       if (!m.isUserTurn || _beforeSend.contains(m.id)) continue;
@@ -1387,8 +1395,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       }
       if (!foldedTurnTextEquals(m.content, p)) continue;
       hits++;
+      hit = m;
     }
-    return hits == 1;
+    return hits == 1 ? hit : null;
   }
 
   bool stopBusy = false, steerBusy = false;

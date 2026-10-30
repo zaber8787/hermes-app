@@ -1606,6 +1606,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       durableTail: c.messages,
       projection: toolOverlap,
       liveTail: liveTail,
+      ownAnchor: c.ownTurnAnchor,
     );
     final timelineOverrides = {
       ...toolOverlap.durableOverrides,
