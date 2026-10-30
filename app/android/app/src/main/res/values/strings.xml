@@ -4,4 +4,8 @@
     <string name="app_name" translatable="false">Hermes</string>
     <string name="notification_channel_replies">Hermes replies</string>
     <string name="notification_reply_active">Hermes is replying</string>
+    <!-- PLAN-VOICEUI §4.4: voice-call foreground service. -->
+    <string name="notification_channel_call">Hermes call</string>
+    <string name="notification_call_active">Hermes call · %1$s</string>
+    <string name="notification_call_hangup">Hang up</string>
 </resources>

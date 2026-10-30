@@ -7,12 +7,16 @@ import android.app.Activity
 import android.content.Intent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
+import io.flutter.plugin.common.BasicMessageChannel
+import io.flutter.plugin.common.BinaryCodec
+import io.flutter.plugin.common.EventChannel
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
 
 class MainActivity : FlutterActivity() {
     private var exportResult: MethodChannel.Result? = null
     private var exportFile: File? = null
+    private var micResult: MethodChannel.Result? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -106,6 +110,124 @@ class MainActivity : FlutterActivity() {
                     else -> result.notImplemented()
                 }
             }
+        // Voice call (PLAN-VOICEUI §4.8 row MainActivity.kt): one
+        // MethodChannel for control, an EventChannel for capture frames and
+        // signals, and a BinaryCodec downlink where a length-0 message is
+        // the flush command — play/flush share ONE ordered channel (§4.1).
+        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "hermes/voice-call")
+            .setMethodCallHandler { call, result ->
+                when (call.method) {
+                    "micPermission" -> result.success(micPermissionState())
+                    "requestMic" -> requestMicPermission(result)
+                    "start" -> {
+                        val args = call.arguments as? Map<*, *>
+                        val title = args?.get("title") as? String ?: ""
+                        val speaker = args?.get("speaker") as? Boolean ?: true
+                        try {
+                            VoiceCallService.start(applicationContext, title, speaker, result)
+                        } catch (_: Exception) {
+                            result.error("fgs", "Cannot start call service", null)
+                        }
+                    }
+                    "stop" -> VoiceCallService.stop(applicationContext, result)
+                    "setSpeaker" -> {
+                        VoiceCallService.setSpeaker(
+                            (call.arguments as? Map<*, *>)?.get("on") as? Boolean ?: true)
+                        result.success(null)
+                    }
+                    "openAppSettings" -> {
+                        // micPermanentlyDenied → system page (§4.3).
+                        try {
+                            startActivity(
+                                Intent(
+                                    android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
+                                    android.net.Uri.parse("package:$packageName"),
+                                ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                            )
+                            result.success(null)
+                        } catch (_: Exception) {
+                            result.error("settings", "Cannot open app settings", null)
+                        }
+                    }
+                    else -> result.notImplemented()
+                }
+            }
+        EventChannel(flutterEngine.dartExecutor.binaryMessenger, "hermes/voice-call/uplink")
+            .setStreamHandler(object : EventChannel.StreamHandler {
+                // Remember our own sink so a late onCancel cannot clear a
+                // newer listener's sink.
+                private var sink: EventChannel.EventSink? = null
+
+                override fun onListen(arguments: Any?, events: EventChannel.EventSink?) {
+                    sink = events
+                    VoiceCallService.uplink = events
+                }
+
+                override fun onCancel(arguments: Any?) {
+                    if (VoiceCallService.uplink === sink) VoiceCallService.uplink = null
+                    sink = null
+                }
+            })
+        BasicMessageChannel(flutterEngine.dartExecutor.binaryMessenger,
+            "hermes/voice-call/downlink", BinaryCodec.INSTANCE)
+            .setMessageHandler { message, reply ->
+                // Copy out now: the platform buffer is only valid inside
+                // this callback.
+                val bytes = if (message != null) {
+                    ByteArray(message.remaining()).also { message.get(it) }
+                } else ByteArray(0)
+                if (bytes.isEmpty()) VoiceCallService.flush() else VoiceCallService.play(bytes)
+                reply.reply(null)
+            }
+    }
+
+    /** §4.4: three-state mic answer BEFORE any dialog; anything but
+     *  granted makes Dart fire requestMic (the actual dialog path). */
+    private fun micPermissionState(): String =
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED) "granted" else "denied"
+
+    private fun requestMicPermission(result: MethodChannel.Result) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+            PackageManager.PERMISSION_GRANTED) {
+            result.success("granted")
+            return
+        }
+        val prefs = getSharedPreferences("voice_permissions", MODE_PRIVATE)
+        val askedBefore = prefs.getBoolean("mic_requested", false)
+        if (askedBefore && !shouldShowRequestPermissionRationale(
+                Manifest.permission.RECORD_AUDIO)) {
+            result.success("permanentlyDenied")
+            return
+        }
+        if (micResult != null) {
+            result.error("busy", "Permission request already open", null)
+            return
+        }
+        micResult = result
+        prefs.edit().putBoolean("mic_requested", true).apply()
+        try {
+            requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 2404)
+        } catch (_: Exception) {
+            micResult = null
+            result.success("denied")
+        }
+    }
+
+    override fun onRequestPermissionsResult(
+        requestCode: Int, permissions: Array<out String>, grantResults: IntArray,
+    ) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        if (requestCode != 2404) return
+        val result = micResult ?: return
+        micResult = null
+        val granted = grantResults.isNotEmpty() &&
+            grantResults[0] == PackageManager.PERMISSION_GRANTED
+        result.success(when {
+            granted -> "granted"
+            shouldShowRequestPermissionRationale(Manifest.permission.RECORD_AUDIO) -> "denied"
+            else -> "permanentlyDenied" // §4.4: rationale false after refusal
+        })
     }
 
     override fun onPostResume() {

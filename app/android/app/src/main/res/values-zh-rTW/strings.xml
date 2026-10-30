@@ -3,4 +3,8 @@
     <string name="app_name" translatable="false">Hermes</string>
     <string name="notification_channel_replies">Hermes 回覆中</string>
     <string name="notification_reply_active">Hermes 正在回覆</string>
+    <!-- PLAN-VOICEUI §4.4: voice-call foreground service. -->
+    <string name="notification_channel_call">Hermes 通話</string>
+    <string name="notification_call_active">Hermes 通話中 · %1$s</string>
+    <string name="notification_call_hangup">掛斷</string>
 </resources>

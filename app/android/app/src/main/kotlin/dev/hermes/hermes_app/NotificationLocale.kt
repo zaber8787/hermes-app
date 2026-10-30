@@ -38,4 +38,14 @@ object NotificationLocale {
 
     fun activeTitle(context: Context): String =
         strings(context).getString(R.string.notification_reply_active)
+
+    // Voice-call foreground service strings (PLAN-VOICEUI §4.4/§4.8).
+    fun callChannelName(context: Context): String =
+        strings(context).getString(R.string.notification_channel_call)
+
+    fun callTitle(context: Context, title: String): String =
+        strings(context).getString(R.string.notification_call_active, title)
+
+    fun callHangUp(context: Context): String =
+        strings(context).getString(R.string.notification_call_hangup)
 }
