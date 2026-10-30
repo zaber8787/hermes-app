@@ -13,6 +13,9 @@ import '../chat/chat_page.dart';
 import '../chat/deep_link.dart';
 import '../chat/deep_link_ingress.dart';
 import '../chat/run_link.dart';
+import '../call/call_audio.dart';
+import '../call/call_entry.dart';
+import '../call/call_state.dart';
 import '../chat/viewers.dart';
 import '../settings/local_store.dart';
 import '../settings/management_page.dart';
@@ -567,6 +570,16 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
+                if (callSupported)
+                  ListTile(
+                    key: const ValueKey('sessions.row.call'),
+                    leading: const Icon(Icons.call_outlined),
+                    title: Text(strings.resolve(MessageKey.callStart)),
+                    onTap: () {
+                      Navigator.pop(sheet);
+                      unawaited(openCall(context, ref, SessionCallTarget(s)));
+                    },
+                  ),
                 ListTile(
                   leading: Icon(
                     s.pinned ? Icons.push_pin : Icons.push_pin_outlined,
@@ -782,6 +795,15 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                   tooltip: strings.resolve(MessageKey.sessionsSelect),
                   onPressed: applying ? null : _enterSelection,
                   icon: const Icon(Icons.checklist),
+                ),
+              if (callSupported)
+                IconButton(
+                  key: const ValueKey('sessions.call'),
+                  tooltip: strings.resolve(MessageKey.callStart),
+                  icon: const Icon(Icons.call_outlined),
+                  onPressed: applying
+                      ? null
+                      : () => showCallTargetPicker(context, ref),
                 ),
               IconButton(
                 tooltip: strings.resolve(MessageKey.sessionsM006),

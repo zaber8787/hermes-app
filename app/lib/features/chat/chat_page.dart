@@ -18,6 +18,8 @@ import '../../providers.dart';
 import '../attachments/attachment_controller.dart';
 import '../attachments/file_drop.dart';
 import '../attachments/gallery_picker.dart';
+import '../call/call_entry.dart';
+import '../call/call_state.dart';
 import '../settings/local_store.dart';
 import '../settings/management_page.dart';
 import 'approval_inbox_view.dart';
@@ -1655,6 +1657,9 @@ class _ChatPageState extends ConsumerState<ChatPage> {
           overflow: TextOverflow.ellipsis,
         ),
         actions: [
+          // VOICEUI M3: the call affordance is a first-class button, not a
+          // popup row (§4.8 — the popup's item structure is test-pinned).
+          CallButton(target: SessionCallTarget(widget.session)),
           PopupMenuButton<String>(
             tooltip: strings.resolve(MessageKey.chatM007),
             onSelected: (v) {
