@@ -7,6 +7,9 @@ library;
 
 import 'package:flutter/foundation.dart';
 
+import 'call_audio_native.dart'
+    if (dart.library.js_interop) 'call_audio_web.dart' as impl;
+
 enum MicPermission { granted, denied, permanentlyDenied, unsupported }
 
 /// Out-of-band signals from the platform audio layer (§4.8).
@@ -60,9 +63,32 @@ abstract class CallAudio {
 bool get callSupported =>
     kIsWeb || defaultTargetPlatform == TargetPlatform.android;
 
-// TODO(call7b): newCallAudio() — conditional factory per §4.8:
-// CallAudioAndroid (MethodChannel 'hermes/voice-call' + uplink
-// EventChannel + downlink BasicMessageChannel, Kotlin VoiceCallService
-// next rod), CallAudioWeb (package:web + voice_worklets.js worklets,
-// web rod), CallAudioUnsupported elsewhere (ensurePermission →
-// unsupported).
+/// Platform pick per §4.8: Android rides the microphone-type foreground
+/// service (call_audio_native.dart), Web rides getUserMedia + the two
+/// worklets in web/voice_worklets.js (call_audio_web.dart); everything
+/// else honestly reports `unsupported` (§4.6 callUnsupported) instead of
+/// half-working. Same conditional-import shape as transport.dart:1.
+CallAudio newCallAudio() => impl.newCallAudio();
+
+/// Every promise empty, permission honestly `unsupported` (§4.2 row 1:
+/// `unsupported` → error(unsupported), no dial attempt).
+class CallAudioUnsupported implements CallAudio {
+  @override
+  Future<MicPermission> ensurePermission() async => MicPermission.unsupported;
+  @override
+  Future<void> start({required String title, required bool speaker}) async {}
+  @override
+  Stream<Uint8List> get frames => const Stream<Uint8List>.empty();
+  @override
+  Stream<CallAudioSignal> get signals => const Stream<CallAudioSignal>.empty();
+  @override
+  void play(Uint8List pcm) {}
+  @override
+  void flushPlayback() {}
+  @override
+  Stream<void> get drained => const Stream<void>.empty();
+  @override
+  Future<void> setSpeaker(bool on) async {}
+  @override
+  Future<void> stop() async {}
+}

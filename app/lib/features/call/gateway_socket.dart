@@ -7,6 +7,9 @@ library;
 
 import 'dart:typed_data';
 
+import 'gateway_socket_io.dart'
+    if (dart.library.js_interop) 'gateway_socket_web.dart' as impl;
+
 abstract class GatewaySocket {
   /// Interleaved text and binary frames in wire order.
   Stream<Object> get messages;
@@ -25,8 +28,7 @@ abstract class GatewaySocket {
 
 typedef GatewayConnector = Future<GatewaySocket> Function(Uri url);
 
-// TODO(call7b): defaultGatewayConnector — conditional import of
-// gateway_socket_io.dart (dart:io WebSocket, 5s connect timeout, no
-// pingInterval: app-layer ping instead, §4.1/D22) and
-// gateway_socket_web.dart (package:web WebSocket, binaryType
-// 'arraybuffer'), following the transport.dart:1 import pattern.
+/// Platform default connector (§4.8): dart:io on Android/desktop, the
+/// browser WebSocket on Web. 5s connect timeout both sides; no socket
+/// pingInterval — the controller pings at the app layer (§4.1/D22).
+GatewayConnector get defaultGatewayConnector => impl.connect;
