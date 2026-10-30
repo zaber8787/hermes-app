@@ -249,6 +249,36 @@ void main() {
     c.dispose();
   });
 
+  testWidgets('RENDERFIX2: 39 zombie queue entries are reclaimed by the ledger verdict', (
+    tester,
+  ) async {
+    await seedQueue(store, [for (var i = 0; i < 39; i++) ('${10 + i}', 10 + i)]);
+    final c = await boot(tester);
+    expect(c.wakePendingCount, 39);
+    // The ledger already owns every key (consumed on another device / by the
+    // server self-wake): admit answers `empty` + already_consumed for all.
+    ledger.consumed.addAll([for (var i = 0; i < 39; i++) dk('dk${10 + i}')]);
+    repo.admitHook = null;
+    repo.admitOverride = null;
+    allowAdmit = true;
+    repo.admitHook = (keys) => {
+      'status': 'empty',
+      'rejected': [
+        for (final k in keys)
+          {'delivery_key': k, 'reason': 'already_consumed', 'batch_id': 'wb_old'},
+      ],
+    };
+    await drainOpen(tester, const Duration(seconds: 8));
+    expect(c.wakePendingCount, 0);
+    expect(repo.wakePosts, 0); // reclaimed, never re-sent
+    expect(repo.admits, lessThanOrEqualTo(6)); // 10 per slice, no hot loop
+    expect(
+      (store.wakeState(server, sid)!['queued'] as List),
+      isEmpty,
+    );
+    c.dispose();
+  });
+
   testWidgets('typing pauses dispatch; putting the editor down resumes', (
     tester,
   ) async {

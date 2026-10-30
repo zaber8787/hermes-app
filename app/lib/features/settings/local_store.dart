@@ -303,13 +303,23 @@ class LocalStore {
   // CAS rule — a monotonically bumped revision int, never the text itself,
   // is the write-ownership token. A late callback holding an old revision
   // must not overwrite what a newer editor (or restore) stored.
-  String draft(String server, String sid) =>
-      prefs.getString(_scope(server, sid, 'draft')) ?? '';
+  String draft(String server, String sid) {
+    try {
+      return prefs.getString(_scope(server, sid, 'draft')) ?? '';
+    } on Object {
+      return ''; // wrong-typed residue reads as no draft, never a throw
+    }
+  }
 
   /// Persisted composer-write counter: 0 until the first write. NOT a
   /// content hash — equal text at a new revision is still a new write.
-  int draftRevision(String server, String sid) =>
-      prefs.getInt(_scope(server, sid, 'draftRev')) ?? 0;
+  int draftRevision(String server, String sid) {
+    try {
+      return prefs.getInt(_scope(server, sid, 'draftRev')) ?? 0;
+    } on Object {
+      return 0;
+    }
+  }
 
   /// Write the draft and bump the revision. With `expectedRevision` set,
   /// a stale counter refuses the write outright (false, nothing touched).

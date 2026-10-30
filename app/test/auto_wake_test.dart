@@ -257,4 +257,105 @@ void main() {
       {'3'},
     );
   });
+
+  // RENDERFIX2: the 39-entry zombie queue. Reports the ledger already owns
+  // (consumed elsewhere) used to sit in `queued` forever because an `empty`
+  // admit never pruned; the pending hint counted them for good.
+  group('zombie queue reclaim', () {
+    List<Message> zombies() => [
+      Message(id: '1', role: 'user', content: 'hello'),
+      for (var i = 0; i < 39; i++)
+        report('${10 + i}', 'body $i', exec: 'z${i.toString().padLeft(3, '_')}'),
+    ];
+
+    Future<AutoWakeObserver> seeded() async {
+      final o = make();
+      await commit(o, [Message(id: '1', role: 'user', content: 'hello')]);
+      await commit(o, zombies());
+      return o;
+    }
+
+    test('39 already_consumed verdicts empty the queue and the count', () async {
+      final o = await seeded();
+      expect(o.pendingCount, 39);
+      final keys = [for (final q in queued(o)) q['dk'] as String];
+      final pruned = await o.pruneFromAdmit({
+        'status': 'empty',
+        'rejected': [
+          for (final k in keys)
+            {'delivery_key': k, 'reason': 'already_consumed', 'batch_id': 'wb_x'},
+        ],
+      });
+      expect(pruned, 39);
+      expect(o.pendingCount, 0);
+      expect(o.state!['abandoned'], 39);
+      // Survives restart, and a re-scan of the same history cannot re-queue.
+      final again = make();
+      await commit(again, zombies());
+      expect(again.pendingCount, 0);
+    });
+
+    test('ignored keys are reclaimed too', () async {
+      final o = await seeded();
+      final keys = [for (final q in queued(o)) q['dk'] as String];
+      expect(await o.pruneFromAdmit({'status': 'empty', 'ignored': keys}), 39);
+      expect(o.pendingCount, 0);
+    });
+
+    test('transient verdicts keep the entry queued', () async {
+      final o = await seeded();
+      final k = queued(o).first['dk'] as String;
+      expect(
+        await o.pruneFromAdmit({
+          'status': 'empty',
+          'rejected': [
+            {'delivery_key': k, 'reason': 'causal_suspect'},
+            {'delivery_key': k, 'reason': 'batch_overflow'},
+          ],
+        }),
+        0,
+      );
+      expect(o.pendingCount, 39);
+    });
+
+    test('unknown_provenance prunes only once the entry is stale', () async {
+      var now = DateTime.utc(2026, 9, 27, 12);
+      final o = AutoWakeObserver(
+        store: store,
+        serverUrl: server,
+        sid: sid,
+        now: () => now,
+      );
+      await commit(o, [Message(id: '1', role: 'user', content: 'hello')]);
+      await commit(o, zombies());
+      final k = queued(o).first['dk'] as String;
+      final verdict = {
+        'status': 'empty',
+        'rejected': [
+          {'delivery_key': k, 'reason': 'unknown_provenance'},
+        ],
+      };
+      expect(await o.pruneFromAdmit(verdict), 0); // young: maybe a lineage move
+      now = now.add(AutoWakeObserver.staleUnknownAfter);
+      expect(await o.pruneFromAdmit(verdict), 1);
+      expect(o.pendingCount, 38);
+    });
+
+    test('legacy entries without a created stamp count as stale', () async {
+      final o = await seeded();
+      for (final q in o.state!['queued'] as List) {
+        (q as Map).remove('at');
+      }
+      final k = queued(o).first['dk'] as String;
+      expect(
+        await o.pruneFromAdmit({
+          'status': 'empty',
+          'rejected': [
+            {'delivery_key': k, 'reason': 'unknown_provenance'},
+          ],
+        }),
+        1,
+      );
+    });
+  });
 }

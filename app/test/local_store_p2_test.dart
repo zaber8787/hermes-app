@@ -24,6 +24,18 @@ void main() {
       expect((await store()).draft('http://s', 'x'), '');
     });
 
+    test('wrong-typed draft residue reads as empty, never throws', () async {
+      final scope = '${Uri.encodeComponent('http://s')}.x';
+      SharedPreferences.setMockInitialValues({
+        'flutter.$scope.draft': 7,
+        'flutter.$scope.draftRev': 'junk',
+      });
+      final s = LocalStore(await SharedPreferences.getInstance());
+      expect(s.draft('http://s', 'x'), '');
+      expect(s.draftRevision('http://s', 'x'), 0);
+      SharedPreferences.setMockInitialValues({});
+    });
+
     test('drafts are per-session and per-server', () async {
       final s = await store();
       await s.saveDraft('http://a', 'x', 'A');

@@ -191,7 +191,12 @@ class AutoWakeObserver {
         continue;
       }
       queuedKeys.add(dk);
-      queued.add({'id': found.messageId, 'dk': dk, 'order': found.order});
+      queued.add({
+        'id': found.messageId,
+        'dk': dk,
+        'order': found.order,
+        'at': _now().toIso8601String(), // age basis for stale reclaim
+      });
     }
     queued.sort(
       (a, b) => (a['order'] as num).compareTo(b['order'] as num),
@@ -290,6 +295,60 @@ class AutoWakeObserver {
     ];
     st['batches'] = batches;
     return _persist();
+  }
+
+  /// How long a queued report may sit before a server "unknown_provenance"
+  /// verdict (row gone / compressed away) is trusted as abandonment. 24h
+  /// outlasts any transient lineage move or compression window, while a
+  /// report the server cannot find a day later will never become claimable.
+  static const staleUnknownAfter = Duration(hours: 24);
+
+  /// ZOMBIE RECLAIM: fold the server's admit verdict back into the queue.
+  /// Only SERVER-confirmed terminal answers remove an entry:
+  /// `ignored` / `already_consumed` (the ledger permanently owns the key:
+  /// another device, the server self-wake or a prior batch consumed it) and
+  /// `unknown_provenance` once the entry is older than [staleUnknownAfter]
+  /// (an entry without `at` predates the stamp and counts as old).
+  /// `causal_suspect` / `batch_overflow` are transient and stay queued.
+  /// Pruned keys join ignoredKeys so the next history scan cannot re-queue
+  /// them. Returns the number of entries removed.
+  Future<int> pruneFromAdmit(Map<String, dynamic> admitted) async {
+    final st = _state;
+    if (st == null) return 0;
+    final dead = <String>{
+      for (final k in (admitted['ignored'] as List?) ?? const [])
+        if (k is String) k,
+    };
+    final unknown = <String>{};
+    for (final r in (admitted['rejected'] as List?) ?? const []) {
+      if (r is! Map) continue;
+      final k = r['delivery_key'];
+      if (k is! String) continue;
+      if (r['reason'] == 'already_consumed') dead.add(k);
+      if (r['reason'] == 'unknown_provenance') unknown.add(k);
+    }
+    if (dead.isEmpty && unknown.isEmpty) return 0;
+    final now = _now();
+    final kept = <Map<String, dynamic>>[];
+    final gone = <String>{};
+    for (final q in ((st['queued']) as List?) ?? const []) {
+      final m = Map<String, dynamic>.from(q as Map);
+      final dk = m['dk'] as String;
+      final at = DateTime.tryParse('${m['at']}');
+      final old = at == null || now.difference(at) >= staleUnknownAfter;
+      if (dead.contains(dk) || (unknown.contains(dk) && old)) {
+        gone.add(dk);
+      } else {
+        kept.add(m);
+      }
+    }
+    if (gone.isEmpty) return 0;
+    st['queued'] = kept;
+    st['ignoredKeys'] = (_keySet(st, 'ignoredKeys')..addAll(gone)).toList()
+      ..sort();
+    st['abandoned'] = ((st['abandoned'] as num?)?.toInt() ?? 0) + gone.length;
+    await _persist();
+    return gone.length;
   }
 
   /// A PROVEN release (server freed the rows): drop the mirror row and

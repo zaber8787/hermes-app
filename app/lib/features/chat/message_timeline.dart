@@ -15,6 +15,36 @@ import 'turn_history_match.dart' show foldedTurnTextEquals;
 import 'typing_dots.dart';
 import 'timeline_row_geometry.dart';
 
+/// RENDERFIX2: projection is pure Dart over every message; one malformed
+/// row must skip itself, not blank the timeline. Fast path is the single
+/// whole-list projection; only on failure do rows project one by one.
+List<DisplayEntry> _safeProject(
+  List<Message> all, {
+  required Set<String> wakeRowIds,
+}) {
+  try {
+    return projectMessages(all, wakeRowIds: wakeRowIds);
+  } catch (error, stack) {
+    FlutterError.reportError(
+      FlutterErrorDetails(
+        exception: error,
+        stack: stack,
+        library: 'message timeline',
+        context: ErrorDescription('while projecting the message list'),
+      ),
+    );
+    final out = <DisplayEntry>[];
+    for (final m in all) {
+      try {
+        out.addAll(projectMessages([m], wakeRowIds: wakeRowIds));
+      } catch (_) {
+        // skip this one row only
+      }
+    }
+    return out;
+  }
+}
+
 class MessageTimeline extends StatelessWidget {
   const MessageTimeline({
     super.key,
@@ -52,7 +82,7 @@ class MessageTimeline extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hints = {for (final r in remoteRows) r.message.id: r.hint};
-    var entries = projectMessages([
+    var entries = _safeProject([
       ...messages,
       ...remoteRows.map((r) => r.message),
       ...liveTail,
@@ -283,7 +313,7 @@ class MessageTimelineSliver extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final hints = {for (final r in remoteRows) r.message.id: r.hint};
-    var entries = projectMessages([
+    var entries = _safeProject([
       ...messages,
       ...remoteRows.map((r) => r.message),
       ...liveTail,
@@ -593,8 +623,36 @@ class EntryView extends StatelessWidget {
   /// identity/key/timestamp stay — this only changes what the slot shows
   /// while the paired live/transcript copy is excluded elsewhere.
   final ToolViewPayload? toolOverride;
+
+  /// RENDERFIX2 row boundary: one entry that throws while building degrades
+  /// to a compact placeholder instead of taking the whole timeline (and,
+  /// through the framework's error widget, the page) with it.
   @override
   Widget build(BuildContext context) {
+    try {
+      return _buildEntry(context);
+    } catch (error, stack) {
+      FlutterError.reportError(
+        FlutterErrorDetails(
+          exception: error,
+          stack: stack,
+          library: 'message timeline',
+          context: ErrorDescription('while building entry ${entry.message.id}'),
+        ),
+      );
+      return Padding(
+        key: ValueKey('entry.failed:${entry.message.id}'),
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Icon(
+          Icons.error_outline,
+          size: 16,
+          color: Theme.of(context).colorScheme.outline,
+        ),
+      );
+    }
+  }
+
+  Widget _buildEntry(BuildContext context) {
     final strings = AppStrings.of(context);
     final e = entry;
     final colors = Theme.of(context).colorScheme;

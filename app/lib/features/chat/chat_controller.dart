@@ -502,7 +502,14 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         _wakeSchedule(status == 'busy' ? (retry ?? 5) : (retry ?? 60));
         return;
       }
-      if (status != 'admitted') return; // empty/error: nothing to do
+      // ZOMBIE RECLAIM: the verdict also names keys the ledger already owns
+      // (consumed elsewhere / gone). Without this an `empty` answer left
+      // them queued forever and the pending hint never cleared.
+      final pruned = await wake.pruneFromAdmit(admitted);
+      if (pruned > 0 && !_disposed) notifyListeners();
+      // empty/error: nothing more to do (the finally re-arms the next slice
+      // of a long zombie queue while entries remain).
+      if (status != 'admitted') return;
 
       batchId = admitted['batch_id'] as String?;
       if (batchId == null) return;
