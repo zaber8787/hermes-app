@@ -23,6 +23,13 @@ import 'gateway_socket.dart';
 /// §5.3: the fixed bridge+proxy share of the uplink estimate, in ms.
 const kUplinkFixedMs = 5;
 
+/// Reconnect backoff ceiling (TASK-VOICEBUG4): 0.5s doubling, never above.
+const kReconnectBackoffMax = Duration(seconds: 30);
+
+/// A connection that has stayed ready this long resets the backoff streak;
+/// a ready that drops again sooner keeps doubling the wait.
+const kStableConnection = Duration(seconds: 10);
+
 class CallController extends ChangeNotifier {
   CallController({
     required this.target,
@@ -69,6 +76,17 @@ class CallController extends ChangeNotifier {
   Timer? _pingTimer;
   Timer? _statsTimer;
 
+  /// Drops since the last stable connection; drives the reconnect wait.
+  /// Unlike `state.attempt` it survives a ready, so a connect → ready →
+  /// drop loop backs off instead of redialing every 0.5s.
+  int _dropStreak = 0;
+  DateTime? _readyAt;
+
+  /// Bumped per dial; a dial that resolves after a newer one started (or
+  /// after the call left `connecting`) closes its socket instead of
+  /// adopting it, so one controller never owns two sockets.
+  int _dialSeq = 0;
+
   int _pingId = 0;
   int _pingOutstandingId = -1;
   DateTime? _pingSentAt;
@@ -113,6 +131,7 @@ class CallController extends ChangeNotifier {
   Future<void> retry() async {
     if (_disposed || _state.phase != CallPhase.error) return;
     final kind = _state.errorKind;
+    _dropStreak = 0; // a manual redial starts a fresh backoff
     _set(_state.copyWith(
       phase: CallPhase.connecting,
       attempt: 0,
@@ -195,15 +214,20 @@ class CallController extends ChangeNotifier {
     if (_state.phase != CallPhase.connecting) {
       _set(_state.copyWith(phase: CallPhase.connecting, errorKind: null));
     }
+    _dropSocket();
+    final seq = ++_dialSeq;
     GatewaySocket socket;
     try {
       socket = await connect(url);
     } catch (_) {
+      if (seq != _dialSeq) return;
       _record('call.connect-failed');
       _handleClose(null);
       return;
     }
-    if (_disposed || _state.phase == CallPhase.ended || _state.phase == CallPhase.error) {
+    if (_disposed ||
+        seq != _dialSeq ||
+        _state.phase != CallPhase.connecting) {
       unawaited(socket.close().catchError((Object _) {}));
       return;
     }
@@ -222,7 +246,7 @@ class CallController extends ChangeNotifier {
     }
     _readyTimer?.cancel();
     _readyTimer = Timer(const Duration(seconds: 5), _onReadyTimeout);
-    _msgSub?.cancel();
+    unawaited(_msgSub?.cancel());
     _msgSub = socket.messages.listen(
       _onMessage,
       onDone: () => _handleClose(socket.closeCode),
@@ -264,6 +288,11 @@ class CallController extends ChangeNotifier {
         }
       }
       _pingOutstandingId = -1;
+    }
+    if (event is PongEvent) {
+      // any pong proves the link is alive; without this the 5-ping timeout
+      // fired 5s after every ready and dropped a healthy call (VOICEBUG4)
+      _lastPongAt = now();
     }
     if (event is TurnFinalEvent) {
       _turnFinalAt = now();
@@ -309,6 +338,7 @@ class CallController extends ChangeNotifier {
     }
     _everConnected = true;
     _lastPongAt = now();
+    _readyAt = now();
     _set(reduceEvent(_state, event, now()));
     if (!_audioStarted) {
       _audioStarted = true;
@@ -329,6 +359,12 @@ class CallController extends ChangeNotifier {
       if (_disposed) return;
       final phase = _state.phase;
       if (phase != CallPhase.connected && phase != CallPhase.muted) return;
+      final readyAt = _readyAt;
+      if (_dropStreak > 0 &&
+          readyAt != null &&
+          now().difference(readyAt) >= kStableConnection) {
+        _dropStreak = 0;
+      }
       _pingId++;
       _pingOutstandingId = _pingId;
       _pingSentAt = now();
@@ -377,9 +413,13 @@ class CallController extends ChangeNotifier {
       // §4.2 drop row: flush what was queued, keep the mic, drop frames
       // until the next ready; wantMuted survives (it lives in state).
       audio.flushPlayback();
+      // the dropped socket may still be open (pong timeout, ready timeout):
+      // close it now so the gateway frees the seat before we redial, rather
+      // than leaving a half-open twin that turns the redial into a 4409
+      _dropSocket();
       _set(next);
-      final attempt = next.attempt;
-      final wait = Duration(milliseconds: 500 * (1 << (attempt - 1)));
+      _dropStreak++;
+      final wait = _backoff(_dropStreak);
       unawaited(
         delay(wait).then((_) {
           if (_disposed) return;
@@ -387,6 +427,7 @@ class CallController extends ChangeNotifier {
         }),
       );
     } else if (next.phase == CallPhase.ended) {
+      _dropSocket();
       _set(next);
       unawaited(_stopAudio());
     } else {
@@ -397,6 +438,27 @@ class CallController extends ChangeNotifier {
       if (socket != null) {
         unawaited(socket.close().catchError((Object _) {}));
       }
+    }
+  }
+
+  /// 0.5s, 1s, 2s … capped at [kReconnectBackoffMax].
+  static Duration _backoff(int streak) {
+    final shift = streak < 1 ? 0 : (streak > 17 ? 16 : streak - 1);
+    final ms = 500 * (1 << shift);
+    return ms >= kReconnectBackoffMax.inMilliseconds
+        ? kReconnectBackoffMax
+        : Duration(milliseconds: ms);
+  }
+
+  /// Detach and close the current socket (if any) without routing its
+  /// close back through [_handleClose].
+  void _dropSocket() {
+    final socket = _socket;
+    _socket = null;
+    unawaited(_msgSub?.cancel());
+    _msgSub = null;
+    if (socket != null) {
+      unawaited(socket.close().catchError((Object _) {}));
     }
   }
 
@@ -465,6 +527,10 @@ class CallController extends ChangeNotifier {
   }
 
   Future<void> _stopAudio() async {
+    // a stopped mic must be restarted by the next ready (manual redial after
+    // an error); otherwise the redialed call sends zero frames and the
+    // gateway stall-closes it every 5s (VOICEBUG4)
+    _audioStarted = false;
     try {
       await audio.stop();
     } catch (_) {

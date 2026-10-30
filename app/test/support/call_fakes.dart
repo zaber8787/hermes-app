@@ -88,6 +88,7 @@ class FakeCallAudio implements CallAudio {
   MicPermission permission = MicPermission.granted;
   int flushes = 0;
   bool stopped = false;
+  int starts = 0;
   String? startTitle;
   bool? startSpeaker;
 
@@ -96,6 +97,8 @@ class FakeCallAudio implements CallAudio {
 
   @override
   Future<void> start({required String title, required bool speaker}) async {
+    starts++;
+    stopped = false;
     startTitle = title;
     startSpeaker = speaker;
   }

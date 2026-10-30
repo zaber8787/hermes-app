@@ -267,4 +267,106 @@ void main() {
     await pumpEventQueue();
     expect(controller.state.assistantSpeaking, isFalse);
   });
+
+  // ---- TASK-VOICEBUG4: the 4409 reconnect storm ---------------------------
+
+  CallController makeFastPing() {
+    connector = FakeConnector();
+    audio = FakeCallAudio();
+    waits = [];
+    clock = DateTime(2026, 1, 1);
+    return CallController(
+      target: const StandaloneCallTarget(),
+      url: Uri.parse('ws://test.invalid/'),
+      token: 'tk-1',
+      connect: connector.call,
+      audio: audio,
+      delay: (d) {
+        waits.add(d);
+        return Future.value();
+      },
+      now: clockNow,
+      pingInterval: const Duration(milliseconds: 40),
+    );
+  }
+
+  test('(19) answered pings keep the call up past the pong timeout', () async {
+    // 19:11:01 ready → 19:11:07 redial: the pong timestamp was never
+    // refreshed, so every healthy call dropped itself 5 pings after ready.
+    controller = makeFastPing();
+    await controller.start();
+    connector.sockets.last.emit(kReadyJson);
+    await pumpEventQueue();
+    for (var i = 0; i < 10; i++) {
+      clock = clock.add(const Duration(milliseconds: 60)); // 600ms ≫ 200ms
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+      final pings = connector.sockets.last.texts
+          .where((t) => t.contains('"type":"ping"'));
+      if (pings.isNotEmpty) {
+        final id = RegExp(r'"id":(\d+)').firstMatch(pings.last)!.group(1);
+        connector.sockets.last.emit(eventJson('pong', {'id': int.parse(id!)}));
+        await pumpEventQueue();
+      }
+    }
+    expect(controller.state.phase, CallPhase.connected);
+    expect(connector.calls, 1);
+  });
+
+  test('(20) a pong-timeout drop closes the old socket before redialing', () async {
+    controller = makeFastPing();
+    await controller.start();
+    connector.sockets.last.emit(kReadyJson);
+    await pumpEventQueue();
+    for (var i = 0; i < 8 && controller.state.phase == CallPhase.connected; i++) {
+      clock = clock.add(const Duration(milliseconds: 60));
+      await Future<void>.delayed(const Duration(milliseconds: 30));
+    }
+    await pumpEventQueue();
+    expect(connector.calls, 2);
+    // the first socket is closed by us, not left half-open as a ghost that
+    // keeps the gateway seat and turns the redial into a 4409
+    expect(connector.sockets.first.closeCalledWith, isNotNull);
+    expect(connector.sockets.last.closeCalledWith, isNull);
+  });
+
+  test('(21) 4409 stops redialing; a manual retry restarts the mic', () async {
+    await startConnected();
+    expect(audio.starts, 1);
+    await connector.sockets.last.peerClose(1006);
+    await pumpEventQueue();
+    await connector.sockets.last.peerClose(closeBusy);
+    await pumpEventQueue();
+    expect(controller.state.phase, CallPhase.error);
+    expect(controller.state.errorKind, CallErrorKind.busy);
+    expect(connector.calls, 2);
+    expect(waits, hasLength(1)); // only the 1006 redial, none after 4409
+    expect(audio.stopped, isTrue);
+    await controller.retry();
+    connector.sockets.last.emit(kReadyJson);
+    await pumpEventQueue();
+    expect(controller.state.phase, CallPhase.connected);
+    expect(audio.starts, 2); // was 1: the redialed call never sent a frame
+    expect(audio.stopped, isFalse);
+  });
+
+  test('(22) connect → ready → drop loops back off exponentially to 30s', () async {
+    await startConnected();
+    for (var i = 0; i < 8; i++) {
+      await connector.sockets.last.peerClose(closeStalled);
+      await pumpEventQueue();
+      connector.sockets.last.emit(kReadyJson);
+      await pumpEventQueue();
+    }
+    expect(waits, [
+      const Duration(milliseconds: 500),
+      const Duration(seconds: 1),
+      const Duration(seconds: 2),
+      const Duration(seconds: 4),
+      const Duration(seconds: 8),
+      const Duration(seconds: 16),
+      const Duration(seconds: 30),
+      const Duration(seconds: 30),
+    ]);
+    expect(connector.calls, 9);
+  });
 }
