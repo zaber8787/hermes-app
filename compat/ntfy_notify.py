@@ -139,6 +139,27 @@ def publish(server: str, topic: str, title: str, message: str, *,
         log.debug("ntfy publish enqueue failed: %s", type(exc).__name__)
 
 
+def _click_targets(click):
+    """TASK-DEEPLINKFIX R2: (click to send, https fallback for the body or
+    None). Behind deeplink_scheme_enabled (default off = the click is sent
+    unchanged); any failure also keeps the original click."""
+    if not click:
+        return click, None
+    try:
+        try:
+            from . import notification_events
+        except ImportError:  # flat import context (unit tests)
+            import notification_events
+        if not notification_events.deeplink_scheme_enabled():
+            return click, None
+        scheme = notification_events.scheme_link(click)
+        if scheme is None:
+            return click, None
+        return scheme, str(click)
+    except Exception:
+        return click, None
+
+
 def publish_json(server: str, topic: str, title: str, message: str, *,
                  priority: str = "default", tags: list[str] | None = None,
                  on_result=None, click: str | None = None) -> bool:
@@ -149,6 +170,12 @@ def publish_json(server: str, topic: str, title: str, message: str, *,
     if not server or not topic:
         return False
     title = utf8_cut(title, TITLE_BYTES)
+    click, fallback = _click_targets(click)
+    if fallback:
+        # the full https URL stays in the body for a manual tap when the
+        # scheme has no handler; the cap counts it so it is never cut off
+        suffix = "\n" + fallback
+        message = utf8_cut(message, max(0, BODY_BYTES - len(suffix.encode("utf-8")))) + suffix
     message = utf8_cut(message, BODY_BYTES)
     safe_tags = ["hermes-agent"] + [
         tag for tag in (tags or []) if tag and tag != "hermes-agent"]

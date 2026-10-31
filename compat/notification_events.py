@@ -58,6 +58,39 @@ def _click_base() -> str:
         pass
     return "https://hermes.invalid"
 
+
+def deeplink_scheme_enabled() -> bool:
+    """TASK-DEEPLINKFIX R2: ntfy clicks use the hermes:// scheme only when
+    app_compat.notification_events.deeplink_scheme_enabled is literally
+    true. Default false keeps the https click: an old APK that does not
+    claim the scheme would turn every notification into a dead end."""
+    try:
+        from hermes_cli.config import get_config_path
+        from utils import fast_safe_load
+        with open(get_config_path(), encoding="utf-8-sig") as handle:
+            raw = fast_safe_load(handle)
+        block = (((raw or {}).get("app_compat") or {}).get("notification_events") or {})
+        return block.get("deeplink_scheme_enabled") is True
+    except Exception:
+        return False
+
+
+def scheme_link(url):
+    """https://<entry>[/path][?query][#frag] -> hermes://link/<path>[?query][#frag].
+    Android App Links never verify on a tailnet host, so the click goes
+    straight to the app's custom scheme; path, query and fragment ride
+    along verbatim for the client's ONE RunLink parser. Anything but an
+    HTTPS URL returns None (caller keeps the original)."""
+    from urllib.parse import urlsplit, urlunsplit
+    try:
+        parts = urlsplit(str(url or ""))
+    except ValueError:
+        return None
+    if parts.scheme != "https" or not parts.netloc:
+        return None
+    return urlunsplit(("hermes", "link", parts.path or "/",
+                       parts.query, parts.fragment))
+
 _capability_on = False
 _registry = None
 MAX_WATCHERS = 256
