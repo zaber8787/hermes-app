@@ -213,11 +213,15 @@ All tests inject a temporary archive root.
 
 Core refuses an API turn into a foreign-surface session
 (`gateway/session_api_turn.py`, `permission_denied`). This unit wraps both
-session chat routes: a `discord` session is handed to the core plugin
-injection seam (`PluginContext.inject_message` with the session's own
-`session_key`), so its Discord adapter runs the turn and replies in the
-original thread. api_server sessions, unknown sessions and wake batches stay on
-the native path. Requires, in the plugin's profile `config.yaml`:
+session chat routes: a `discord` thread session gets the text posted into its
+thread over Discord REST (`POST /api/v10/channels/{thread_id}/messages`, 10s
+timeout, mentions suppressed) with the bot token the Discord plugin reads
+(`PlatformConfig.token`, then `DISCORD_BOT_TOKEN`). Delivered means 2xx with a
+message id. The Discord adapter drops the bot's own messages, so the unit then
+asks the core injection seam (`PluginContext.inject_message` with the
+session's `session_key`) to run a turn; a refused trigger is only logged and
+recorded on the spool row (`trigger`). Without the setting below every trigger
+is `inject_refused`: the message shows in the thread but no agent reply comes.
 
 ```yaml
 plugins:
@@ -226,8 +230,11 @@ plugins:
       allow_gateway_injection: true
 ```
 
-Every message is spooled to `$HERMES_HOME/crosssource_spool.db` before the
-first attempt; at most 3 attempts. Success answers the live-owner handoff
-shape (`run.queued` + `done`, or 202 `hermes.session.chat.queued`). A final
-failure answers 502 `kind=bridge_unavailable` with the spool id and keeps the
-text. Design and evidence: `docs/crosssource-20261101.md`.
+api_server sessions, unknown sessions and wake batches stay on the native
+path. Every message is spooled to `$HERMES_HOME/crosssource_spool.db` first;
+a resend of the same text to the same session folds into its row. At most 3
+attempts per delivery. Success answers the live-owner handoff shape
+(`run.queued` + `done`, or 202 `hermes.session.chat.queued`). A final failure
+answers 502 `kind=bridge_unavailable` with the spool id and keeps the text.
+Each load drains recent `pending` and `failed` rows once.
+Design and evidence: `docs/crosssource-20261101.md`.

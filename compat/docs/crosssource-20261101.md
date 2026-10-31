@@ -63,3 +63,15 @@ B. core 正式跨面接口：`PluginContext.inject_message(content, session_key=
 - `run.queued` 之後 app 的唯讀 reconcile 只讀一次，Discord 回覆較慢時要靠既有的 activity／輪詢才會出現在 app 畫面。
 - `is_connected` 在 discord.py 自動重連期間是否仍為真，未實測，所以「Discord API 掛」可能有一段時間被判為可送，訊息此時會進 FIFO 等 adapter 恢復。
 - 若 thread 的 `session_key` 已輪替到新 session（`/new`），訊息會進新 session，app 正在看的舊 session 不會出現回覆。
+
+## TASK-CROSSSOURCE2：投遞改走 Discord REST（2026-11-01）
+
+上線後 app 三連發全部 `inject_refused`，spool 留下 4 列 `failed`（同一段 `test from app` 文字，05:33:56、05:34:01、05:34:06、05:35:13）。`~/.hermes/config.yaml` 沒有 `allow_gateway_injection`，而 `hermes_cli/plugins.py:640` 只在該值為 `True` 時放行，所以推論 refused 的直接原因是這個開關未開，尚未在 live gateway 以 log 證實。不論原因，投遞已不再依賴 inject。
+
+投遞段改為 Discord REST 直發 `POST /api/v10/channels/{thread_id}/messages`。thread_id 取自 `session_key` 尾段（`agent:<profile>:discord:thread:<channel>:<thread>`，其他形狀記 `session_key_unparsed`）。token 照 discord plugin 的讀法（`plugins/platforms/discord/adapter.py:7123-7127`）：先取 live Discord adapter 的 `config.token`，再取 runner 的 `PlatformConfig.token`，最後 `get_secret("DISCORD_BOT_TOKEN")`，沒有新增配置項。client 用 aiohttp，因為 compat（`self_wake.py`）與 discord plugin 的 standalone send 都是 aiohttp；proxy 也照 plugin 的 `resolve_proxy_url(platform_env_var="DISCORD_PROXY")`。成功條件是 HTTP 2xx 且回應帶 message id，log 記一行 message id，token 不進 log。payload 帶 `allowed_mentions: {parse: []}`，app 打的 `@everyone` 不會真的 ping。
+
+送達後照舊呼叫一次 `inject_message` 嘗試觸發 turn，因為 bot 自己的訊息會被 adapter self-skip（`adapter.py:1679`），只靠 REST 不會有回覆。觸發結果寫進 spool 的 `trigger` 欄（`injected`、`inject_refused`、`inject_error`、`plugin_context_missing`），失敗只降級成 warning，不算投遞失敗也不重試。
+
+spool 新增 `message_id`、`trigger` 兩欄，舊檔開啟時以 `ALTER TABLE` 補上。狀態改為 `pending`、`delivered`、`failed`、`merged`。去重規則：同 session 同文字時，24 小時內有未送達列就併進最舊的那列並重送（retry 鈕因此救得回 failed 列），否則 60 秒內已送達的列直接回成功不重發；同一列同時只有一個投遞在跑。drain 撈 24 小時內的 `pending` 與 `failed`，同 session 同文字的列先收斂到最舊一列（其餘標 `merged`），再各給一輪 3 次嘗試。每次 plugin 載入後 drain 一次：冷啟動由 api_server 的 route sync factory 觸發，熱重載由 live adapter 掃描觸發，延遲 10 秒讓平台先連上。超過 2000 字（含尾註）的訊息在進 spool 前回 413 `crosssource_too_long`。
+
+待測：live gateway 上的 REST 實發與 drain 實際觸發點未實測；`allow_gateway_injection` 開啟前，訊息會出現在 thread，但 agent 不會回覆。

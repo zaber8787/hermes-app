@@ -474,6 +474,7 @@ def install(ctx):
                                 # for a full day (audit ticks dead 12h+)
                                 log.warning("selfwake re-arm failed: %s: %s",
                                             type(exc).__name__, exc)
+                            _crosssource_drain_arm(adapter, "factory")
 
                         # The wiring table dedupes by qualname, so a force
                         # reload (NEW function objects, same plugin) must
@@ -752,6 +753,7 @@ def _sync_live_adapters():
             loop = getattr(getattr(ref, "gateway_runner", None), "_gateway_loop", None)
             if loop is not None:
                 cron_connect_arm(loop, get_hermes_home())
+            _crosssource_drain_arm(ref, "install-live-adapters", loop)
 
 
 def _install_clarify(tx):
@@ -775,6 +777,22 @@ def _install_crosssource(tx):
     state["crosssource"] = crosssource.install(
         api, cls, tx, ctx_getter=lambda: state.get("plugin_ctx"),
         spool_path=Path(get_hermes_home()) / "crosssource_spool.db")
+
+
+def _crosssource_drain_arm(adapter, why, loop=None):
+    """CROSSSOURCE2 R3: one spool drain per load, on the api_server adapter's
+    loop (the running one inside a factory call). The bridge keeps the
+    once-per-load guard; a missing bridge or loop is a no-op."""
+    try:
+        bridge = (getattr(api, _STATE, None) or {}).get("crosssource")
+        if bridge is None or adapter is None:
+            return
+        if loop is None:
+            loop = asyncio.get_running_loop()
+        if bridge.schedule_drain(adapter, loop):
+            log.info("crosssource drain armed (%s)", why)
+    except Exception as exc:
+        log.warning("crosssource drain arm failed: %s", type(exc).__name__)
 
 
 def _install_limits(tx):
