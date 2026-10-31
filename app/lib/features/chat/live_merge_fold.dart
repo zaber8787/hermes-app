@@ -40,8 +40,13 @@ Set<String> liveMergeFoldExclusions({
   } else {
     final user = activeRuns.single.user;
     if (user == null) return const {};
-    if (user.afterId != null
-        ? user.afterId.toString() != anchor.id
+    // GHOSTRUN: compat's after_id is the session's last row id read BEFORE
+    // the run's user row lands — a watermark, never the user row itself.
+    // The anchor must be the ONE user turn past it; equality never held
+    // once the run was listed, so the live row re-rendered the whole tail.
+    final after = user.afterId;
+    if (after != null
+        ? !_ownsPastWatermark(durableTail, anchor, after)
         : user.text != anchor.content) {
       return const {};
     }
@@ -54,4 +59,15 @@ Set<String> liveMergeFoldExclusions({
     return const {};
   }
   return {for (final e in tools) toolSlotKeyFor(e, projection.scope)};
+}
+
+bool _ownsPastWatermark(List<Message> rows, Message anchor, int after) {
+  final id = int.tryParse(anchor.id);
+  if (id == null || id <= after) return false;
+  for (final m in rows) {
+    if (!m.isUserTurn || identical(m, anchor)) continue;
+    final n = int.tryParse(m.id);
+    if (n != null && n > after) return false;
+  }
+  return true;
 }
