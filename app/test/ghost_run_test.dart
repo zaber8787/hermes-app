@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -260,6 +262,126 @@ void main() {
           reason: 'ghost: durable vision_analyze + live copy at the bottom',
         );
         expect(find.text('terminal').evaluate().length, 1);
+        await closeAll(tester);
+      },
+    );
+
+    testWidgets(
+      'GHOSTRUN R3: 5 tools back-to-back + turn settles: exactly 5 rows, '
+      'execution order, nothing appended at the bottom',
+      (tester) async {
+        await store.setDetailed('http://test.invalid', 's', true);
+        final ts0 = DateTime.now().millisecondsSinceEpoch / 1000.0 - 60;
+        repo.history = [
+          Message(id: '1', role: 'user', content: '舊話', timestamp: ts0),
+        ];
+        repo.revCount = repo.revLatest = 1;
+        await openPage(tester);
+        await sendUi(tester, q);
+        repo.events.add(
+          const SseEvent('run.started', '{"run_id":"r1","session_id":"s"}'),
+        );
+        await tester.pump();
+        final names = [for (var i = 1; i <= 5; i++) 'step$i'];
+        final pat = RegExp(r'^step\d$');
+        final ts = DateTime.now().millisecondsSinceEpoch / 1000.0;
+        Message call(int i) => Message(
+          id: '${1 + 2 * i}',
+          role: 'assistant',
+          timestamp: ts,
+          toolCalls: [ToolCall('C$i', 'step$i', '{"n":"step$i"}')],
+        );
+        Message result(int i) => Message(
+          id: '${2 + 2 * i}',
+          role: 'tool',
+          toolCallId: 'C$i',
+          toolName: 'step$i',
+          content: 'out$i',
+          timestamp: ts,
+        );
+
+        void expectFive(String when) {
+          final shown = toolTexts(tester, pat);
+          expect(shown, names, reason: '$when: rows = execution order, once');
+          final ys = [
+            for (final n in names) tester.getTopLeft(find.text(n)).dy,
+          ];
+          for (var i = 1; i < ys.length; i++) {
+            expect(ys[i - 1] < ys[i], isTrue, reason: '$when: ${names[i]}');
+          }
+        }
+
+        for (final n in names) {
+          repo.events.add(
+            SseEvent('tool.started', '{"tool_name":"$n","args":{"n":"$n"}}'),
+          );
+          await tester.pump();
+          repo.events.add(
+            SseEvent('tool.completed', '{"tool_name":"$n","preview":"out"}'),
+          );
+          await tester.pump();
+        }
+        // Mid-run: the run is listed and the first 3 steps are durable.
+        repo.active = [runOf(runId: 'r1', userText: q, afterId: 1)];
+        repo.post([
+          Message(id: '2', role: 'user', content: q, timestamp: ts),
+          for (var i = 1; i <= 3; i++) ...[call(i), result(i)],
+        ]);
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pump();
+        expect(ctrl().observedActivity?.activeRuns.length, 1);
+        expectFive('mid-run, 3 durable');
+
+        // All 5 durable, still running.
+        repo.post([
+          for (var i = 4; i <= 5; i++) ...[call(i), result(i)],
+        ]);
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pump();
+        expectFive('mid-run, 5 durable');
+
+        // Turn settles: terminal frame with the transcript, final reply.
+        final transcript = [
+          {'role': 'user', 'content': q},
+          for (var i = 1; i <= 5; i++) ...[
+            {
+              'role': 'assistant',
+              'content': '',
+              'tool_calls': [
+                {
+                  'id': 'C$i',
+                  'function': {'name': 'step$i', 'arguments': '{"n":"step$i"}'},
+                },
+              ],
+            },
+            {
+              'role': 'tool',
+              'tool_call_id': 'C$i',
+              'tool_name': 'step$i',
+              'content': 'out$i',
+            },
+          ],
+          {'role': 'assistant', 'content': 'done'},
+        ];
+        repo.events.add(
+          SseEvent(
+            'run.completed',
+            jsonEncode({
+              'run_id': 'r1',
+              'session_id': 's',
+              'messages': transcript,
+            }),
+          ),
+        );
+        repo.active = [];
+        repo.post([
+          Message(id: '13', role: 'assistant', content: 'done', timestamp: ts),
+        ]);
+        await tester.pump();
+        expectFive('terminal frame');
+        await tester.pump(const Duration(seconds: 6));
+        await tester.pump();
+        expectFive('settled');
         await closeAll(tester);
       },
     );
