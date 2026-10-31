@@ -57,6 +57,14 @@ class CallAudioAndroid implements CallAudio {
   Future<List<AudioInputDevice>> listInputs() async => const [];
 
   @override
+  Future<void> switchInput(String? deviceId) async {
+    // null is the only input this platform ever opens: already current
+    if (deviceId != null) {
+      throw UnsupportedError('input selection is web-only for now');
+    }
+  }
+
+  @override
   Future<void> start({
     required String title,
     required bool speaker,

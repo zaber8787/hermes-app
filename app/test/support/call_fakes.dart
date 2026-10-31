@@ -95,10 +95,11 @@ class FakeCallAudio implements CallAudio {
   @override
   Future<MicPermission> ensurePermission() async => permission;
 
-  /// MICPICK: what listInputs returns and the deviceId of every start();
-  /// ids in [failingInputs] fail to open.
+  /// MICPICK: what listInputs returns, the deviceId of every start(), and
+  /// every switchInput() target; ids in [failingInputs] fail to open.
   List<AudioInputDevice> inputs = const [];
   final startDeviceIds = <String?>[];
+  final switches = <String?>[];
   Set<String?> failingInputs = {};
   String? liveInput;
 
@@ -122,6 +123,14 @@ class FakeCallAudio implements CallAudio {
   @override
   Future<List<AudioInputDevice>> listInputs() async => inputs;
 
+  @override
+  Future<void> switchInput(String? deviceId) async {
+    switches.add(deviceId);
+    if (failingInputs.contains(deviceId)) {
+      throw StateError('cannot open $deviceId');
+    }
+    liveInput = deviceId;
+  }
 
   @override
   Stream<Uint8List> get frames => framesCtl.stream;

@@ -41,6 +41,7 @@ class CallController extends ChangeNotifier {
     this.now = DateTime.now,
     this.clientTag = 'hermes-app',
     String? inputDeviceId,
+    this.saveInputDevice,
     Duration pingInterval = const Duration(seconds: 1),
   }) : _preferredInput = inputDeviceId,
        _pingInterval = pingInterval,
@@ -58,6 +59,8 @@ class CallController extends ChangeNotifier {
   final DateTime Function() now;
   final String clientTag;
 
+  /// MICPICK R3: an in-call pick is remembered for the next call too.
+  final Future<void> Function(String? deviceId)? saveInputDevice;
   final Duration _pingInterval;
   final Duration _pongTimeout;
 
@@ -69,6 +72,7 @@ class CallController extends ChangeNotifier {
   bool _everConnected = false;
   bool _audioStarted = false;
   bool _closing = false;
+  bool _switching = false;
 
   /// The saved pick (MICPICK R2) and the input actually live right now;
   /// null = system default for both.
@@ -162,7 +166,7 @@ class CallController extends ChangeNotifier {
     }
   }
 
-  /// The picker's list (MICPICK R1); a platform failure is an empty
+  /// The picker's list (MICPICK R1/R3); a platform failure is an empty
   /// list (system default only), never a thrown error into the UI.
   Future<List<AudioInputDevice>> listInputs() async {
     try {
@@ -171,6 +175,39 @@ class CallController extends ChangeNotifier {
       _record('call.mic-list-failed');
       return const [];
     }
+  }
+
+  /// MICPICK R3: swap the capture input mid-call. Only the audio seam is
+  /// touched — the socket, the ping loop and the call phase stay exactly
+  /// as they are. false = nothing changed (not live, busy, or the device
+  /// failed to open; the seam contract keeps the old input running).
+  Future<bool> switchInput(String? deviceId) async {
+    if (_disposed || _switching || !_audioStarted) return false;
+    final phase = _state.phase;
+    if (phase == CallPhase.ended || phase == CallPhase.error) return false;
+    if (deviceId == _inputDeviceId) return true;
+    _switching = true;
+    try {
+      await audio.switchInput(deviceId);
+    } catch (_) {
+      _record('call.mic-switch-failed');
+      return false;
+    } finally {
+      _switching = false;
+    }
+    if (_disposed) return false;
+    _inputDeviceId = deviceId;
+    _preferredInput = deviceId;
+    final save = saveInputDevice;
+    if (save != null) {
+      unawaited(save(deviceId).catchError((Object _) {
+        _record('call.mic-save-failed');
+      }));
+    }
+    _set(_state.copyWith(
+      captions: _appendSystem(_state.captions, MessageKey.callMicSwitched),
+    ));
+    return true;
   }
 
   Future<void> setSpeaker(bool on) async {
@@ -404,6 +441,31 @@ class CallController extends ChangeNotifier {
     _inputDeviceId = deviceId;
   }
 
+  /// R4: the live device vanished mid-call → system default. The saved
+  /// pick is kept, so re-plugging it restores it on the next call.
+  Future<void> _onInputLost() async {
+    if (_disposed || !_audioStarted || _switching) return;
+    _record('call.mic-lost');
+    _switching = true;
+    try {
+      await audio.switchInput(null);
+      _inputDeviceId = null;
+      if (!_disposed) _micFallbackCaption();
+    } catch (_) {
+      _record('call.mic-switch-failed');
+      if (!_disposed) {
+        _set(_state.copyWith(
+          captions: _appendSystem(
+            _state.captions,
+            MessageKey.callMicSwitchFailed,
+          ),
+        ));
+      }
+    } finally {
+      _switching = false;
+    }
+  }
+
   void _micFallbackCaption() => _set(_state.copyWith(
         captions: _appendSystem(_state.captions, MessageKey.callMicFallback),
       ));
@@ -558,6 +620,8 @@ class CallController extends ChangeNotifier {
           unawaited(hangUp()); // notification action / web pagehide (§4.4)
         case CaptureStats(:final inputLatencyMs):
           _inputLatencyMs = inputLatencyMs;
+        case InputLost():
+          unawaited(_onInputLost());
       }
     });
     _drainedSub ??= audio.drained.listen((_) {

@@ -14,6 +14,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../l10n/app_strings.dart';
 import '../../l10n/message_key.dart';
 import '../../models/session.dart';
+import 'call_audio.dart';
 import 'call_controller.dart';
 import 'call_providers.dart';
 import 'call_settings.dart';
@@ -332,6 +333,65 @@ class _CallPageState extends ConsumerState<CallPage> {
     );
   }
 
+  /// MICPICK R3: the in-call quick switch. Only the capture input moves;
+  /// a failed switch keeps the old device (controller contract) and says
+  /// so in a toast.
+  Future<void> _showMicPicker(CallController controller) async {
+    final strings = AppStrings.of(context);
+    final picked = await showModalBottomSheet<({String? id})>(
+      context: context,
+      builder: (sheet) => SafeArea(
+        child: FutureBuilder<List<AudioInputDevice>>(
+          future: controller.listInputs(),
+          builder: (context, snap) {
+            final mics = snap.data ?? const <AudioInputDevice>[];
+            final current = controller.inputDeviceId;
+            Widget tile(String? id, String label, Key key) => ListTile(
+              key: key,
+              leading: Icon(
+                id == current ? Icons.radio_button_checked : Icons.radio_button_off,
+              ),
+              title: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis),
+              onTap: () => Navigator.pop(sheet, (id: id)),
+            );
+            return ListView(
+              key: const ValueKey('call.micPicker'),
+              shrinkWrap: true,
+              children: [
+                ListTile(
+                  title: Text(
+                    strings.resolve(MessageKey.callMicPick),
+                    style: const TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+                tile(
+                  null,
+                  strings.resolve(MessageKey.callMicDefault),
+                  const ValueKey('call.micPicker.default'),
+                ),
+                for (final (i, d) in mics.indexed)
+                  tile(
+                    d.id,
+                    micDisplayName(strings, d, i),
+                    ValueKey('call.micPicker.${d.id}'),
+                  ),
+                if (snap.connectionState != ConnectionState.done)
+                  const LinearProgressIndicator(),
+              ],
+            );
+          },
+        ),
+      ),
+    );
+    if (picked == null || !mounted) return;
+    final ok = await controller.switchInput(picked.id);
+    if (!ok && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(strings.resolve(MessageKey.callMicSwitchFailed))),
+      );
+    }
+  }
+
   void _showDiagnostics(CallState s) {
     showDialog<void>(
       context: context,
@@ -419,6 +479,12 @@ class _CallPageState extends ConsumerState<CallPage> {
             ),
             icon: Icon(muted ? Icons.mic_off : Icons.mic),
             onPressed: controller.toggleMute,
+          ),
+          IconButton(
+            key: const ValueKey('call.micPick'),
+            tooltip: strings.resolve(MessageKey.callMicPick),
+            icon: const Icon(Icons.settings_voice_outlined),
+            onPressed: () => unawaited(_showMicPicker(controller)),
           ),
           IconButton(
             key: const ValueKey('call.hangup'),

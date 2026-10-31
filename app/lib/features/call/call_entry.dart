@@ -57,6 +57,7 @@ Future<void> openCall(
       connect: ref.read(gatewayConnectorProvider),
       audio: ref.read(callAudioFactoryProvider)(),
       inputDeviceId: store.voiceMicId(),
+      saveInputDevice: store.saveVoiceMicId,
     );
     ref.read(activeCallProvider.notifier).set(controller);
     _pushCallPage(context);

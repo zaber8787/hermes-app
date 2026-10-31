@@ -20,6 +20,7 @@ CallAudio newCallAudio() => CallAudioWeb();
 class CallAudioWeb implements CallAudio {
   web.AudioContext? _ctx;
   web.MediaStream? _stream;
+  web.MediaStreamAudioSourceNode? _source;
   web.AudioWorkletNode? _capture;
   web.AudioWorkletNode? _playback;
 
@@ -91,9 +92,19 @@ class CallAudioWeb implements CallAudio {
     return web.window.navigator.mediaDevices.getUserMedia(constraints).toDart;
   }
 
+  /// R4: an unplugged device ends its track; the controller falls back.
+  /// stop() never fires `ended`, and [_stopStream] clears it before we stop a
+  /// stream ourselves anyway.
+  void _arm(web.MediaStream stream) {
+    for (final t in stream.getAudioTracks().toDart) {
+      t.onended = ((web.Event _) => _signals.add(const InputLost())).toJS;
+    }
+  }
+
   static void _stopStream(web.MediaStream? stream) {
     if (stream == null) return;
     for (final t in stream.getTracks().toDart) {
+      t.onended = null;
       t.stop();
     }
   }
@@ -107,6 +118,29 @@ class CallAudioWeb implements CallAudio {
     return filterAudioInputs(
       all.map((d) => (kind: d.kind, id: d.deviceId, label: d.label)),
     );
+  }
+
+  @override
+  Future<void> switchInput(String? deviceId) async {
+    final ctx = _ctx;
+    final capture = _capture;
+    if (ctx == null || capture == null) {
+      throw StateError('capture is not running');
+    }
+    // open first: a failure here leaves the old stream feeding the worklet
+    final next = await _openStream(deviceId);
+    if (!identical(_ctx, ctx) || !identical(_capture, capture)) {
+      _stopStream(next); // torn down while the prompt was open
+      throw StateError('capture stopped during switch');
+    }
+    final source = ctx.createMediaStreamSource(next);
+    _source?.disconnect();
+    source.connect(capture);
+    final old = _stream;
+    _source = source;
+    _stream = next;
+    _arm(next);
+    _stopStream(old);
   }
 
   String _moduleUrl() => Uri.base.resolve('voice_worklets.js').toString();
@@ -136,7 +170,9 @@ class CallAudioWeb implements CallAudio {
       }
       final stream = _stream ?? await _openStream();
       _stream = stream;
+      _arm(stream);
       final source = ctx.createMediaStreamSource(stream);
+      _source = source;
       final capture = web.AudioWorkletNode(ctx, 'vg-capture');
       capture.port.onmessage = ((web.MessageEvent e) {
         final data = e.data;
@@ -205,8 +241,10 @@ class CallAudioWeb implements CallAudio {
       _pagehideArmed = false;
       web.window.removeEventListener('pagehide', _onPagehide);
     }
+    _source?.disconnect();
     _capture?.disconnect();
     _playback?.disconnect();
+    _source = null;
     _capture = null;
     _playback = null;
     final stream = _stream;

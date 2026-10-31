@@ -34,6 +34,12 @@ class CaptureStats extends CallAudioSignal {
   final double? inputLatencyMs;
 }
 
+/// The live capture track ended on its own (device unplugged, TASK-MICPICK
+/// R4) — never fired by our own stop()/switchInput().
+class InputLost extends CallAudioSignal {
+  const InputLost();
+}
+
 /// One system audio input (TASK-MICPICK R1). [label] may be empty (the
 /// platform hid it); the UI then numbers it "Microphone N". A null id
 /// anywhere in this seam means "system default" (no deviceId constraint).
@@ -101,6 +107,11 @@ abstract class CallAudio {
   /// anonymous rows, which [filterAudioInputs] drops.
   Future<List<AudioInputDevice>> listInputs();
 
+  /// MICPICK R3: swap ONLY the capture source of a running call (old
+  /// stream stopped after the new one is live). Throws and leaves the
+  /// current input untouched when the new device cannot be opened.
+  Future<void> switchInput(String? deviceId);
+
   /// 640-byte 16 kHz mono s16le frames, 20 ms apart (§3.1).
   Stream<Uint8List> get frames;
   Stream<CallAudioSignal> get signals;
@@ -141,6 +152,9 @@ class CallAudioUnsupported implements CallAudio {
   }) async {}
   @override
   Future<List<AudioInputDevice>> listInputs() async => const [];
+  @override
+  Future<void> switchInput(String? deviceId) async =>
+      throw UnsupportedError('no capture on this platform');
   @override
   Stream<Uint8List> get frames => const Stream<Uint8List>.empty();
   @override
