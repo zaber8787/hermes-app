@@ -95,6 +95,19 @@
                     android:port="8443"
                     android:pathPrefix="${deepLinkPath}"/>
             </intent-filter>
+            <!-- TASK-DEEPLINKFIX R1: custom-scheme direct link. App Links
+                 on a tailnet host can never pass Google's Digital Asset
+                 Links check, so ntfy clicks become
+                 hermes://link/<https path+query+#fragment> (server switch
+                 deeplink_scheme_enabled). Scheme only: every host and path
+                 is accepted here and judged by the ONE RunLink parser, which
+                 feeds the same ingress and resolveDeepLink as https. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="hermes"/>
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->

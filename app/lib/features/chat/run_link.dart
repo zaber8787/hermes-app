@@ -3,6 +3,8 @@
 ///
 ///   `https://<entry>/#/chat?session=<sid>&run=<rid>&event=<eid>[&request=<id>]`
 ///
+/// (or its custom-scheme twin `hermes://link/#/chat?...`, TASK-DEEPLINKFIX).
+///
 /// Parsing is EXACT: only the HTTPS(S) canonical form is trusted, ids are
 /// percent-decoded VERBATIM, and a key, token or topic in a link is a hard
 /// parse failure — a secret never rides a navigable URL, in either direction.
@@ -26,7 +28,11 @@ class RunLink {
   static RunLink? tryParse(String url) {
     final uri = Uri.tryParse(url);
     if (uri == null) return null;
-    if (uri.scheme != 'https' && uri.scheme != 'http') return null;
+    // TASK-DEEPLINKFIX R1: hermes://link/<path>#/chat?.. is the SAME link
+    // with the scheme swapped (ntfy clicks skip App Link verification);
+    // any other custom-scheme host is not a link.
+    final custom = uri.scheme == 'hermes' && uri.host == 'link';
+    if (!custom && uri.scheme != 'https' && uri.scheme != 'http') return null;
     final fragment = uri.fragment;
     if (!fragment.startsWith('/chat')) return null;
     final q = fragment.indexOf('?');

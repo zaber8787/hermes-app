@@ -145,6 +145,81 @@ void main() {
     });
   });
 
+  // TASK-DEEPLINKFIX R1/R4: ntfy clicks arrive as hermes://link/<path+query
+  // +#fragment> (server switch deeplink_scheme_enabled). The intent must
+  // land in the SAME stash and parse to the SAME RunLink as the https
+  // canonical URL; no second router.
+  group('hermes:// custom scheme rides the same pipeline', () {
+    const schemeCanonical =
+        'hermes://link/#/chat?session=s%2F1&run=r9&event=e7&request=q3';
+
+    test('parses to the identical RunLink as the https canonical', () {
+      final viaScheme = RunLink.tryParse(schemeCanonical)!;
+      final viaHttps = RunLink.tryParse(serverCanonical)!;
+      expect(viaScheme.sessionId, viaHttps.sessionId);
+      expect(viaScheme.runId, viaHttps.runId);
+      expect(viaScheme.eventId, viaHttps.eventId);
+      expect(viaScheme.requestId, viaHttps.requestId);
+      expect(
+        RunLink.tryParse('hermes://link/hermes/?x=1#/chat?session=sub')
+            ?.sessionId,
+        'sub',
+        reason: 'a sub-path entry and a real query survive the mapping',
+      );
+    });
+
+    test('cold intent waits in the stash and routes exactly once', () async {
+      source.add(schemeCanonical);
+      await pumpEventQueue();
+      expect(store.peekDeepLink(), schemeCanonical);
+
+      final seen = <RunLink>[];
+      ingress.attach((link) async => seen.add(link));
+      await pumpEventQueue();
+      expect(store.peekDeepLink(), isNull);
+      expect(seen.single.sessionId, 's/1');
+      expect(seen.single.runId, 'r9');
+      expect(seen.single.eventId, 'e7');
+      expect(seen.single.requestId, 'q3');
+    });
+
+    test('warm intent routes immediately', () async {
+      final seen = <String>[];
+      ingress.attach((link) async => seen.add(link.sessionId));
+      source.add(schemeCanonical);
+      await pumpEventQueue();
+      expect(seen, ['s/1']);
+    });
+
+    test('other hosts, secrets and a hermes:// "file" are honest nothing',
+        () async {
+      debugDefaultTargetPlatformOverride = TargetPlatform.android;
+      final browserCalls = <Object?>[];
+      TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+          .setMockMethodCallHandler(const MethodChannel('hermes/browser'),
+              (call) async {
+        browserCalls.add(call.arguments);
+        return true;
+      });
+      addTearDown(() {
+        debugDefaultTargetPlatformOverride = null;
+        TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+            .setMockMethodCallHandler(
+                const MethodChannel('hermes/browser'), null);
+      });
+      expect(RunLink.tryParse('hermes://other/#/chat?session=s'), isNull);
+      expect(RunLink.tryParse('evil://link/#/chat?session=s'), isNull);
+      expect(RunLink.tryParse('hermes://link/#/chat?session=s&token=X'),
+          isNull);
+      source.add('hermes://other/#/chat?session=s');
+      source.add('hermes://link/update.apk');
+      await pumpEventQueue();
+      expect(store.peekDeepLink(), isNull);
+      expect(browserCalls, isEmpty,
+          reason: 'a custom-scheme URL handed to the browser bounces back');
+    });
+  });
+
   group('warm start with a router attached', () {
     test('temporary route failure waits for explicit retry', () async {
       var calls = 0;

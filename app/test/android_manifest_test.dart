@@ -79,6 +79,32 @@ void main() {
       }
     });
 
+    test('hermes:// scheme filter is BROWSABLE and accepts every host/path',
+        () {
+      // TASK-DEEPLINKFIX R1: ntfy clicks use hermes://link/... because a
+      // tailnet host never passes App Link verification.
+      final scheme = _filters(_manifest())
+          .where((f) => f
+              .findAllElements('data')
+              .any((d) => _attr(d, 'scheme') == 'hermes'))
+          .toList();
+      expect(scheme, hasLength(1));
+      final f = scheme.single;
+      expect(f.findAllElements('action').map((a) => _attr(a, 'name')),
+          contains('android.intent.action.VIEW'));
+      expect(
+          f.findAllElements('category').map((c) => _attr(c, 'name')),
+          containsAll(['android.intent.category.DEFAULT',
+              'android.intent.category.BROWSABLE']));
+      expect(_attr(f, 'autoVerify'), isNull,
+          reason: 'a custom scheme has nothing to verify');
+      final data = f.findAllElements('data').single;
+      expect(_attr(data, 'host'), isNull, reason: 'host is eaten whole');
+      expect(_attr(data, 'pathPrefix'), isNull, reason: 'path is eaten whole');
+      expect(_attr(data, 'path'), isNull);
+      expect(_attr(data, 'pathPattern'), isNull);
+    });
+
     test('Flutter engine deep-linking is opted out (plugin owns the intent)',
         () {
       final meta = _manifest()

@@ -119,6 +119,9 @@ class DeepLinkIngress {
   static bool _isFileArtifact(String href) {
     final uri = Uri.tryParse(href);
     if (uri == null) return false;
+    // a hermes:// "file" handed to the browser would bounce straight back
+    // to this activity; only a web URL can be downloaded externally
+    if (uri.scheme != 'https' && uri.scheme != 'http') return false;
     final path = uri.path.toLowerCase();
     return path.endsWith('.apk') || path.endsWith('.zip');
   }
