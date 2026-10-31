@@ -33,7 +33,7 @@ EXTRA_MIMES = frozenset({
 })
 UNITS = ("limits", "upload", "media", "history", "approval", "skills", "activity", "push",
          "approval_inbox", "cron_bridge", "wake", "selfwake", "steer_inbox",
-         "notification_events", "messages_timing", "media_persist", "clarify")
+         "notification_events", "messages_timing", "media_persist", "clarify", "crosssource")
 log = logging.getLogger("hermes-app-compat")
 _STATE = "_hermes_app_compat_state_v1"
 _MISSING = object()
@@ -355,6 +355,9 @@ def install(ctx):
             log.warning("DUPGUARD: skipped (%s)", _dg_exc)
         # PluginContext is recreated by loader calls; manager+plugin is the owner.
         owner = (id(getattr(ctx, "_manager", ctx)), "hermes-app-compat")
+        # CROSSSOURCE: the injection seam is a PluginContext method; the unit
+        # reads the latest live context at send time, never at install time.
+        state["plugin_ctx"] = ctx
 
         def guard():
             if _abandoned(ctx):
@@ -754,6 +757,24 @@ def _sync_live_adapters():
 def _install_clarify(tx):
     from . import patch_clarify
     patch_clarify.install(api, getattr(api, _STATE), tx)
+
+
+def _install_crosssource(tx):
+    """TASK-CROSSSOURCE: app chat into a Discord session through the core
+    plugin injection seam (see crosssource.py). Must stay last in UNITS so it
+    wraps the approval/wake chat wrappers and only foreign targets bypass them."""
+    from . import crosssource
+    from hermes_constants import get_hermes_home
+    state = getattr(api, _STATE)
+    cls = api.APIServerAdapter
+    _require(cls, "_handle_session_chat", "_handle_session_chat_stream", "_check_auth",
+             "_draining_response", "_get_existing_session_or_404", "_read_json_body",
+             "_prepare_sse_response")
+    _require(api, "_error_response", "_sse_frame")
+    _signature(cls, "_prepare_sse_response", "request", "session_id", "gateway_session_key")
+    state["crosssource"] = crosssource.install(
+        api, cls, tx, ctx_getter=lambda: state.get("plugin_ctx"),
+        spool_path=Path(get_hermes_home()) / "crosssource_spool.db")
 
 
 def _install_limits(tx):

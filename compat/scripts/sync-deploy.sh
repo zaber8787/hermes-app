@@ -10,7 +10,7 @@
 #
 # Without --prune a deploy-only file aborts the sync before anything is
 # written: it is drift that has to be pulled into the repo (or approved for
-# deletion) first. Repo-only material (docs/, tools/) is never deployed.
+# deletion) first. Repo-only material (docs/, scripts/) is never deployed.
 # Bash 3.2 compatible (macOS system shell). Never restarts any service.
 set -euo pipefail
 
@@ -20,7 +20,7 @@ target=${SYNC_DEPLOY_TARGET:-"$plugins/hermes-app-compat"}
 # Tarballs, not an expanded copy: plugin discovery scans dot-dirs under
 # plugins/, and an expanded tree would carry a second plugin.yaml.
 backup_dir=${SYNC_DEPLOY_BACKUP_DIR:-"$plugins/.hermes-app-compat.bak-pluginsync"}
-excludes=(--exclude=__pycache__ --exclude=.pytest_cache --exclude=/docs --exclude=/tools)
+excludes=(--exclude=__pycache__ --exclude=.pytest_cache --exclude=/docs --exclude=/scripts)
 
 mode=sync
 case "${1:-}" in
@@ -34,11 +34,11 @@ esac
 # Content-level comparison, same view as `diff -rq` minus cache/repo-only dirs.
 check() {
   local out
-  out=$(diff -rq -x __pycache__ -x .pytest_cache -x docs -x tools "$src" "$target" 2>&1 || true)
-  # docs/ and tools/ are excluded by name at every depth; only the top-level
+  out=$(diff -rq -x __pycache__ -x .pytest_cache -x docs -x scripts "$src" "$target" 2>&1 || true)
+  # docs/ and scripts/ are excluded by name at every depth; only the top-level
   # ones are repo-only, so make sure nothing deeper is hiding behind that.
   local nested
-  nested=$(cd "$src" && find . -mindepth 2 \( -name docs -o -name tools \) -not -path "*/__pycache__/*" | head -1)
+  nested=$(cd "$src" && find . -mindepth 2 \( -name docs -o -name scripts \) -not -path "*/__pycache__/*" | head -1)
   if [ -n "$nested" ]; then
     echo "sync-deploy: nested $nested is not compared; refusing to vouch" >&2
     return 2

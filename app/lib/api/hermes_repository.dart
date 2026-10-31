@@ -34,16 +34,29 @@ class ApiException implements Exception, UiCarriesMessage {
   const ApiException(String rawMessage, [this.status])
     : _rawMessage = rawMessage,
       _key = null,
-      _args = null;
+      _args = null,
+      kind = null;
 
-  const ApiException.local(MessageKey key, {this.status, this._args = const {}})
-    : _rawMessage = null,
-      _key = key;
+  const ApiException.local(
+    MessageKey key, {
+    this.status,
+    this._args = const {},
+    this.kind,
+  }) : _rawMessage = null,
+       _key = key;
 
   final String? _rawMessage;
   final MessageKey? _key;
   final Map<String, Object?>? _args;
   final int? status;
+
+  /// Server-declared failure class, read only where a route documents one
+  /// (TASK-CROSSSOURCE: 502 `kind=bridge_unavailable`). Null otherwise.
+  final String? kind;
+
+  /// The cross-source bridge (compat crosssource unit) gave up after its
+  /// retries; the server kept the text, nothing reached the foreign thread.
+  static const bridgeUnavailable = 'bridge_unavailable';
 
   /// Bridge for descriptor-valued helpers: local hints keep their key,
   /// raw text keeps the legacy raw form.
@@ -245,6 +258,27 @@ class HermesRepository {
           rethrow;
         } catch (_) {}
         throw const ApiException('Clarify conflict', 409);
+      }
+      if (response.statusCode == 502) {
+        // TASK-CROSSSOURCE R3: only the documented `kind` is read from the
+        // body; the server text itself never reaches the UI.
+        final raw = await utf8.decoder
+            .bind(response.stream)
+            .join()
+            .timeout(budget);
+        String? kind;
+        try {
+          final data = jsonDecode(raw);
+          if (data is Map) kind = data['kind']?.toString();
+        } catch (_) {}
+        if (kind == ApiException.bridgeUnavailable) {
+          throw const ApiException.local(
+            MessageKey.apiM029,
+            status: 502,
+            kind: ApiException.bridgeUnavailable,
+          );
+        }
+        throw const ApiException.local(MessageKey.apiM007, status: 502);
       }
       await response.stream.drain<void>().timeout(budget);
       // Do not expose reflected key or private server body in the UI/logs.

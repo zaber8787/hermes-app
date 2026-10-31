@@ -208,3 +208,26 @@ Validation: `python -m pytest -q tests/test_media_persist.py`. In environments
 without pytest and package network access, `python tests/run_media_persist_offline.py`
 executes the same cases using an explicitly identified unittest adapter.
 All tests inject a temporary archive root.
+
+### Cross-source chat (`crosssource`)
+
+Core refuses an API turn into a foreign-surface session
+(`gateway/session_api_turn.py`, `permission_denied`). This unit wraps both
+session chat routes: a `discord` session is handed to the core plugin
+injection seam (`PluginContext.inject_message` with the session's own
+`session_key`), so its Discord adapter runs the turn and replies in the
+original thread. api_server sessions, unknown sessions and wake batches stay on
+the native path. Requires, in the plugin's profile `config.yaml`:
+
+```yaml
+plugins:
+  entries:
+    hermes-app-compat:
+      allow_gateway_injection: true
+```
+
+Every message is spooled to `$HERMES_HOME/crosssource_spool.db` before the
+first attempt; at most 3 attempts. Success answers the live-owner handoff
+shape (`run.queued` + `done`, or 202 `hermes.session.chat.queued`). A final
+failure answers 502 `kind=bridge_unavailable` with the spool id and keeps the
+text. Design and evidence: `docs/crosssource-20261101.md`.

@@ -1,4 +1,4 @@
-"""TASK-PLUGINSYNC R3: compat/tools/sync-deploy.sh against a throwaway deploy
+"""TASK-PLUGINSYNC R3: compat/scripts/sync-deploy.sh against a throwaway deploy
 dir. --check must see content drift, a sync must back up before writing and
 clear __pycache__, and a deploy-only file must stop the sync unless --prune."""
 import os
@@ -9,7 +9,7 @@ import tempfile
 import unittest
 
 COMPAT = pathlib.Path(__file__).resolve().parent.parent / "compat"
-SCRIPT = COMPAT / "tools" / "sync-deploy.sh"
+SCRIPT = COMPAT / "scripts" / "sync-deploy.sh"
 
 
 class SyncDeploy(unittest.TestCase):
@@ -20,7 +20,7 @@ class SyncDeploy(unittest.TestCase):
         shutil.copytree(COMPAT, self.target,
                         ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache"))
         shutil.rmtree(self.target / "docs", ignore_errors=True)
-        shutil.rmtree(self.target / "tools", ignore_errors=True)
+        shutil.rmtree(self.target / "scripts", ignore_errors=True)
 
     def tearDown(self):
         shutil.rmtree(self.tmp, ignore_errors=True)

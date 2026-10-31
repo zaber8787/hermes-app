@@ -47,6 +47,7 @@ enum MessageKey {
   apiM026,
   apiM027,
   apiM028,
+  apiM029,
   settingsM001,
   settingsM002,
   settingsM003,

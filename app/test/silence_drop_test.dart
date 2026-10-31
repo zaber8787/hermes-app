@@ -391,6 +391,34 @@ void main() {
   });
 
   testWidgets(
+    'TASK-CROSSSOURCE: 502 bridge_unavailable settles as a visible rejection, '
+    'never a recovery',
+    (tester) async {
+      final waits = <Completer<void>>[];
+      final c = make(tester, waits);
+      final sending = c.send('hello');
+      await launch(tester, c);
+
+      repo.events.addError(
+        const ApiException.local(
+          MessageKey.apiM029,
+          status: 502,
+          kind: ApiException.bridgeUnavailable,
+        ),
+      );
+      await tester.pump();
+      await tester.pump();
+      expect(c.phase, ChatPhase.idle);
+      expect(c.reconnects, 0);
+      final error = c.error! as UiLocal;
+      expect(error.key, MessageKey.chatStateM023);
+      expect((error.args['error']! as UiLocal).key, MessageKey.apiM029);
+      await sending;
+      c.dispose();
+    },
+  );
+
+  testWidgets(
     'EOF during a silence backoff upgrades the cause without a second loop '
     '(§4.5)',
     (tester) async {

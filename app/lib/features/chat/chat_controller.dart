@@ -4327,8 +4327,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         await _retireNeverDispatched(token, claim: claim);
         return;
       }
-      if (e.status != null && e.status! >= 400 && e.status! < 500) {
+      if ((e.status != null && e.status! >= 400 && e.status! < 500) ||
+          e.kind == ApiException.bridgeUnavailable) {
         // 4xx = the server rejected the POST outright: nothing to recover.
+        // TASK-CROSSSOURCE: a 502 bridge_unavailable is the same verdict:
+        // the bridge spooled the text and gave up, no turn exists to observe.
         // Settle through the gate so the send gate stays shut until the
         // pending record is really cleared (AUDIT-12/04).
         sendOutcome = SendOutcome.rejected;
