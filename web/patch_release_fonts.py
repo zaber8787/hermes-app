@@ -34,7 +34,13 @@ ANCHOR = "_flutter.loader.load({"
 # (measured: config set+read, chunks still fetched from gstatic). Every chunk
 # download does go through window.fetch with the absolute gstatic URL, so a
 # tiny fetch shim reroutes exactly those URLs into the release.
-TABLE_RE = re.compile(r'A\.f\("Noto Sans [A-Z]{2} \d+","(notosans[a-z]{2}/v\d+/[^"]+)"\)')
+# Single source of truth: reuse make-cjk-mirror's table regex. Two divergent
+# copies of this pattern caused the 2026-10-31 tofu regression (mirror check
+# passed while the release copy loop matched nothing).
+from importlib.util import spec_from_file_location, module_from_spec
+_mcm_spec = spec_from_file_location("make_cjk_mirror", pathlib.Path(__file__).resolve().parent / "make-cjk-mirror.py")
+_mcm = module_from_spec(_mcm_spec); _mcm_spec.loader.exec_module(_mcm)
+TABLE_RE = _mcm.TABLE_RE
 # B2 (as prefetch): the engine preloads every declared font only AFTER JS
 # boot (serial tail; per-font deferral needs an engine switch this build
 # lacks). A low-priority prefetch starts the instant the entry script's
