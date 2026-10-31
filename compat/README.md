@@ -173,3 +173,38 @@ pending intents void at next tick, in-flight runs finish under the existing
 shutdown drain. Ledger/bridge rows stay for audit; there is nothing to
 migrate back. Full disable of the feature binary-wise is removing this plugin
 section only — wake/bridge/ntfy paths do not depend on `self_wake.py`.
+
+### MEDIA persistence (`media_persist`, contract 1)
+
+Enabled by default; disable both mirroring and archive fallback with:
+
+```yaml
+app_compat:
+  media_persist:
+    enabled: false
+```
+
+The reviewed `_message_row_params` persistence seam queues assistant `MEDIA:`
+files on a dedicated worker; synchronous database workers wait for the copy,
+while the existing async `_run_agent` completion wrapper drains queued copies
+before returning the completed reply. The download wrapper also mirrors successful
+native downloads, covering older messages whose files still exist. All config,
+hash, file, and SQLite operations run off the event loop.
+
+Files up to 64 MiB are atomically mirrored into
+`~/.hermes/media-archive/<sha256-first-16><extension>`. `map.db` uses WAL;
+`media_map(orig_path, archive_name, first_seen)` keeps the first successful mapping,
+and `media_types` preserves the MIME type inferred from the original filename.
+The original authenticated download handler runs first. On its media validation
+400 or missing-file 404, an authenticated mapping hit returns archived bytes;
+misses preserve the original response. Capability output includes
+`features.media_persist = {enabled, contract_version: 1}`.
+
+Files deleted before any mirror was recorded cannot be recovered. No source
+messages or host files are rewritten. Unsupported host seams skip this unit
+through the plugin's existing transaction rollback and manifest mechanism.
+
+Validation: `python -m pytest -q tests/test_media_persist.py`. In environments
+without pytest and package network access, `python tests/run_media_persist_offline.py`
+executes the same cases using an explicitly identified unittest adapter.
+All tests inject a temporary archive root.

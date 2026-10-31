@@ -9,7 +9,7 @@ import asyncio
 import contextvars
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
-from contextlib import suppress
+from contextlib import closing, suppress
 from functools import wraps
 import hashlib
 import inspect
@@ -33,7 +33,7 @@ EXTRA_MIMES = frozenset({
 })
 UNITS = ("limits", "upload", "media", "history", "approval", "skills", "activity", "push",
          "approval_inbox", "cron_bridge", "wake", "selfwake", "steer_inbox",
-         "notification_events", "messages_timing")
+         "notification_events", "messages_timing", "media_persist", "clarify")
 log = logging.getLogger("hermes-app-compat")
 _STATE = "_hermes_app_compat_state_v1"
 _MISSING = object()
@@ -344,6 +344,15 @@ def install(ctx):
         if state.get("backend") is None:
             state["backend"] = _detect_backend(api.APIServerAdapter)
         _BACKEND = state["backend"]
+        # DUPGUARD (2026-10-25): verify-or-install the message double-write
+        # triggers on <plugin dir>/state.db — idempotent short WAL txn, so a
+        # schema rebuild that dropped them heals on the next load.
+        try:
+            from . import patch_dupguard as _dupguard
+            from hermes_constants import get_hermes_home as _ghh
+            _dupguard.install(Path(_ghh()) / "state.db", log)
+        except Exception as _dg_exc:
+            log.warning("DUPGUARD: skipped (%s)", _dg_exc)
         # PluginContext is recreated by loader calls; manager+plugin is the owner.
         owner = (id(getattr(ctx, "_manager", ctx)), "hermes-app-compat")
 
@@ -740,6 +749,11 @@ def _sync_live_adapters():
             loop = getattr(getattr(ref, "gateway_runner", None), "_gateway_loop", None)
             if loop is not None:
                 cron_connect_arm(loop, get_hermes_home())
+
+
+def _install_clarify(tx):
+    from . import patch_clarify
+    patch_clarify.install(api, getattr(api, _STATE), tx)
 
 
 def _install_limits(tx):
@@ -4608,4 +4622,217 @@ def _install_notification_events(tx):
             log.warning("notification_events advertisement failed: %s",
                         type(exc).__name__)
             return response
+    tx.set(cls, "_handle_capabilities", capabilities)
+
+# MEDIA-PERSIST: only reviewed persistence seams; all archive I/O stays on workers.
+_MEDIA_ARCHIVE_ROOT = Path.home() / ".hermes" / "media-archive"
+_MEDIA_MAX_BYTES = 64 * 1024 * 1024
+_MEDIA_PATH_RE = re.compile(r'''MEDIA:\s*(?:"(?P<double>/[^"\n]+)"|'(?P<single>/[^'\n]+)'|`(?P<tick>/[^`\n]+)`|(?P<bare>/[^\s`"'<>]+))''')
+
+
+def _media_persist_enabled():
+    try:
+        from hermes_cli.config import get_config_path
+        from utils import fast_safe_load
+        with open(get_config_path(), encoding="utf-8-sig") as handle:
+            raw = fast_safe_load(handle)
+        block = (raw or {}).get("app_compat", {}).get("media_persist", {})
+        return bool(block.get("enabled", True))
+    except Exception:
+        return True
+
+
+def _media_mirror(content):
+    """Worker-only, best effort. A path's first successful mapping wins."""
+    import sqlite3
+    import mimetypes
+    import os
+    import tempfile
+    if not isinstance(content, str) or "MEDIA:" not in content:
+        return
+    try:
+        root = _MEDIA_ARCHIVE_ROOT
+        root.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(root / "map.db", timeout=10)) as db:
+            db.execute("PRAGMA journal_mode=WAL")
+            db.execute("CREATE TABLE IF NOT EXISTS media_map (orig_path TEXT PRIMARY KEY, archive_name TEXT, first_seen REAL)")
+            # Separate metadata preserves compatibility with the requested three-column map.
+            db.execute("CREATE TABLE IF NOT EXISTS media_types (orig_path TEXT PRIMARY KEY, content_type TEXT)")
+            paths = set()
+            spans = []
+            # Recognize unquoted spaced filenames ending in an extension, then
+            # use the whitespace-bounded fallback for extensionless paths.
+            spaced = re.compile(r"MEDIA:\s*(/[^\n`\"'<>]+?\.[A-Za-z0-9]+)(?=$|[\s,;:)\]}]|\.(?:\s|$))")
+            for match in spaced.finditer(content):
+                paths.add(match.group(1))
+                spans.append(match.span())
+            for match in _MEDIA_PATH_RE.finditer(content):
+                if not any(start <= match.start() < end for start, end in spans):
+                    path = next(v for v in match.groupdict().values() if v is not None)
+                    paths.add(path.rstrip(".,;:)]}") if match.group("bare") else path)
+            for orig in paths:
+                if db.execute("SELECT 1 FROM media_map WHERE orig_path=?", (orig,)).fetchone():
+                    continue
+                temporary = None
+                try:
+                    source = Path(orig)
+                    if source.stat().st_size > _MEDIA_MAX_BYTES:
+                        log.debug("media_persist skipped oversized file: %s", orig)
+                        continue
+                    with source.open("rb") as stream:
+                        data = stream.read(_MEDIA_MAX_BYTES + 1)
+                    if len(data) > _MEDIA_MAX_BYTES:
+                        log.debug("media_persist skipped growing oversized file: %s", orig)
+                        continue
+                    name = hashlib.sha256(data).hexdigest()[:16] + source.suffix
+                    target = root / name
+                    if not target.exists():
+                        with tempfile.NamedTemporaryFile(dir=root, delete=False) as stream:
+                            temporary = stream.name
+                            stream.write(data)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        os.replace(temporary, target)
+                        temporary = None
+                    db.execute("INSERT OR IGNORE INTO media_map VALUES (?, ?, ?)", (orig, name, time.time()))
+                    db.execute("INSERT OR IGNORE INTO media_types VALUES (?, ?)",
+                               (orig, mimetypes.guess_type(orig)[0] or "application/octet-stream"))
+                    db.commit()
+                except Exception:
+                    log.debug("media_persist mirror skipped: %s", orig, exc_info=True)
+                finally:
+                    if temporary:
+                        with suppress(OSError):
+                            os.unlink(temporary)
+    except Exception:
+        log.debug("media_persist archive unavailable", exc_info=True)
+
+
+def _media_restore(orig):
+    """Worker-only; map is the allowlist, never resolve user input under archive."""
+    import sqlite3
+    import mimetypes
+    try:
+        root = _MEDIA_ARCHIVE_ROOT.resolve()
+        if not (root / "map.db").is_file():
+            return None
+        with closing(sqlite3.connect((root / "map.db").as_uri() + "?mode=ro", uri=True)) as db:
+            row = db.execute("SELECT archive_name FROM media_map WHERE orig_path=?", (orig,)).fetchone()
+            if not row or Path(row[0]).name != row[0]:
+                return None
+            path = (root / row[0]).resolve()
+            if path.parent != root or path.stat().st_size > _MEDIA_MAX_BYTES:
+                return None
+            mime = mimetypes.guess_type(orig)[0] or "application/octet-stream"
+            with suppress(sqlite3.Error):
+                meta = db.execute("SELECT content_type FROM media_types WHERE orig_path=?", (orig,)).fetchone()
+                if meta:
+                    mime = meta[0]
+            return path.read_bytes(), mime
+    except Exception:
+        log.debug("media_persist lookup skipped", exc_info=True)
+        return None
+
+
+def _install_media_persist(tx):
+    from hermes_state_messages import SessionMessagesMixin
+    _cron_fingerprint(SessionMessagesMixin, "_message_row_params")
+    cls = api.APIServerAdapter
+    _require(cls, "_handle_media_download", "_check_auth", "_handle_capabilities", "_run_agent")
+    pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="media-persist")
+    tx.cleanups.append(lambda: pool.shutdown(wait=False))
+    old_agent = cls._run_agent
+    old_row = SessionMessagesMixin._message_row_params
+    old_download = cls._handle_media_download
+    old_caps = cls._handle_capabilities
+
+    @wraps(old_row)
+    def row(self, session_id, role, msg, *args, **kwargs):
+        result = old_row(self, session_id, role, msg, *args, **kwargs)
+        if role == "assistant" and isinstance(msg.get("content"), str) and "MEDIA:" in msg["content"]:
+            # Config reads also run off-loop. Sync DB workers wait for durability;
+            # callers on an event loop enqueue without blocking that loop.
+            content = msg["content"]
+            def mirror():
+                if _media_persist_enabled():
+                    _media_mirror(content)
+            try:
+                future = pool.submit(mirror)
+                try:
+                    asyncio.get_running_loop()
+                except RuntimeError:
+                    future.result()
+            except Exception:
+                log.debug("media_persist enqueue skipped", exc_info=True)
+        return result
+
+    @wraps(old_agent)
+    async def agent(self, *args, **kwargs):
+        try:
+            return await old_agent(self, *args, **kwargs)
+        finally:
+            # Existing async completion seam: finish queued row mirrors before
+            # publishing the completed reply, without blocking the event loop.
+            try:
+                await asyncio.get_running_loop().run_in_executor(pool, lambda: None)
+            except Exception:
+                log.debug("media_persist drain skipped", exc_info=True)
+
+    @wraps(old_download)
+    async def download(self, request, *args, **kwargs):
+        response = await old_download(self, request, *args, **kwargs)
+        if response.status not in (200, 400, 404):
+            return response
+        if not await asyncio.to_thread(_media_persist_enabled):
+            return response
+        if response.status == 200:
+            # Old history may have no mapping yet: archive successful native
+            # downloads while their source bytes are still available.
+            orig = (request.query.get("path") or "").strip()
+            glued = re.search(r"/[^\n`\"'<>]+?\.[A-Za-z0-9]+(?=$|\s)", orig)
+            if glued and glued.group(0) != orig:
+                orig = glued.group(0)
+            await asyncio.to_thread(_media_mirror, "MEDIA:" + json.dumps(orig, ensure_ascii=False))
+            return response
+        # Original handler has already run its auth; explicit recheck ensures
+        # a future host's error ordering cannot turn a 400 into an auth bypass.
+        auth_error = self._check_auth(request)
+        if auth_error is not None:
+            return auth_error
+        if response.status == 400:
+            try:
+                if "not an allowed media file" not in json.loads(response.body)["error"]["message"]:
+                    return response
+            except Exception:
+                return response
+        orig = (request.query.get("path") or "").strip()
+        # A stale/legacy client may request the whole MEDIA: tail (path plus
+        # trailing text/URLs glued by newlines). Normalize to the first
+        # line-ending extension token so lookups hit the clean keys.
+        glued = re.search(r"/[^\n`\"'<>]+?\.[A-Za-z0-9]+(?=$|\s)", orig)
+        if glued and glued.group(0) != orig:
+            orig = glued.group(0)
+        restored = await asyncio.to_thread(_media_restore, orig)
+        if restored is None:
+            return response
+        data, mime = restored
+        return api.web.Response(body=data, headers={"Content-Type": mime})
+
+    @wraps(old_caps)
+    async def capabilities(self, request, **kwargs):
+        response = await old_caps(self, request, **kwargs)
+        if response.status != 200:
+            return response
+        try:
+            payload = json.loads(response.body)
+            payload.setdefault("features", {})["media_persist"] = {
+                "enabled": await asyncio.to_thread(_media_persist_enabled), "contract_version": 1}
+            return api.web.json_response(payload, status=response.status)
+        except Exception:
+            log.debug("media_persist capability skipped", exc_info=True)
+            return response
+
+    tx.set(SessionMessagesMixin, "_message_row_params", row)
+    tx.set(cls, "_run_agent", agent)
+    tx.set(cls, "_handle_media_download", download)
     tx.set(cls, "_handle_capabilities", capabilities)

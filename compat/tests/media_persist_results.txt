@@ -1,0 +1,17 @@
+Offline unittest adapter executing pytest-style cases
+test_capability_and_worker_io (__main__.MediaPersistTests.test_capability_and_worker_io) ... ok
+test_disabled_passthrough (__main__.MediaPersistTests.test_disabled_passthrough) ... ok
+test_disabled_success_does_not_archive (__main__.MediaPersistTests.test_disabled_success_does_not_archive) ... ok
+test_download_auth (__main__.MediaPersistTests.test_download_auth) ... ok
+test_download_restore_and_miss (__main__.MediaPersistTests.test_download_restore_and_miss) ... ok
+test_mirror_idempotent (__main__.MediaPersistTests.test_mirror_idempotent) ... ok
+test_missing_source (__main__.MediaPersistTests.test_missing_source) ... ok
+test_oversized (__main__.MediaPersistTests.test_oversized) ... ok
+test_successful_old_history_download_mirrored (__main__.MediaPersistTests.test_successful_old_history_download_mirrored) ... ok
+test_unreviewed_backend_rejected (__main__.MediaPersistTests.test_unreviewed_backend_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 0.034s
+
+OK
+PASS syntax; 14 v022 digests; 3 disk fallbacks; 6 fail-closed checks
