@@ -34,6 +34,53 @@ class CaptureStats extends CallAudioSignal {
   final double? inputLatencyMs;
 }
 
+/// One system audio input (TASK-MICPICK R1). [label] may be empty (the
+/// platform hid it); the UI then numbers it "Microphone N". A null id
+/// anywhere in this seam means "system default" (no deviceId constraint).
+@immutable
+class AudioInputDevice {
+  const AudioInputDevice({required this.id, required this.label});
+  final String id;
+  final String label;
+
+  @override
+  bool operator ==(Object other) =>
+      other is AudioInputDevice && other.id == id && other.label == label;
+
+  @override
+  int get hashCode => Object.hash(id, label);
+}
+
+/// Pseudo-entries Chrome adds next to the real devices; our own "system
+/// default" item already stands for them, listing them would duplicate it.
+const _pseudoInputIds = {'default', 'communications'};
+
+/// R1 filter over a raw enumerateDevices() dump: audio inputs only, minus
+/// the pseudo-entries, minus anonymous rows (an empty deviceId is what a
+/// browser hands out before mic permission — unusable as a constraint),
+/// de-duplicated by id in platform order.
+List<AudioInputDevice> filterAudioInputs(
+  Iterable<({String kind, String id, String label})> raw,
+) {
+  final seen = <String>{};
+  return [
+    for (final d in raw)
+      if (d.kind == 'audioinput' &&
+          d.id.isNotEmpty &&
+          !_pseudoInputIds.contains(d.id) &&
+          seen.add(d.id))
+        AudioInputDevice(id: d.id, label: d.label.trim()),
+  ];
+}
+
+/// R4: the device id a call should actually open. A saved id that is no
+/// longer present (unplugged, other machine's id) falls back to the system
+/// default (null) instead of failing the call.
+String? resolveInputDevice(String? saved, List<AudioInputDevice> available) {
+  if (saved == null || saved.isEmpty) return null;
+  return available.any((d) => d.id == saved) ? saved : null;
+}
+
 abstract class CallAudio {
   /// Checked before the socket is even opened; denied paths map straight
   /// to CallErrorKind (§4.2 first row).
@@ -42,6 +89,12 @@ abstract class CallAudio {
   /// Starts capture (and the Android foreground service). [title] feeds
   /// the notification; [speaker] the initial route (D9: speaker on).
   Future<void> start({required String title, required bool speaker});
+
+  /// System audio inputs, empty when the platform cannot enumerate them
+  /// (Android today: only the system default is offered, R4). Callers run
+  /// [ensurePermission] first — before it a browser only returns
+  /// anonymous rows, which [filterAudioInputs] drops.
+  Future<List<AudioInputDevice>> listInputs();
 
   /// 640-byte 16 kHz mono s16le frames, 20 ms apart (§3.1).
   Stream<Uint8List> get frames;
@@ -77,6 +130,8 @@ class CallAudioUnsupported implements CallAudio {
   Future<MicPermission> ensurePermission() async => MicPermission.unsupported;
   @override
   Future<void> start({required String title, required bool speaker}) async {}
+  @override
+  Future<List<AudioInputDevice>> listInputs() async => const [];
   @override
   Stream<Uint8List> get frames => const Stream<Uint8List>.empty();
   @override

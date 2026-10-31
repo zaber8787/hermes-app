@@ -333,6 +333,17 @@ const Map<MessageKey, String> catalogEn = {
       'Invalid URL: use a ws:// or wss:// address without credentials or parameters.',
   MessageKey.callSettingsNeedsWss:
       'HTTPS pages can only connect to wss:// URLs.',
+  MessageKey.callMicLabel: 'Microphone',
+  MessageKey.callMicDefault: 'System default',
+  MessageKey.callMicNumbered: 'Microphone {n}',
+  MessageKey.callMicNeedsPermission:
+      'Devices appear after microphone access is granted.',
+  MessageKey.callMicPick: 'Choose microphone',
+  MessageKey.callMicSwitched: 'Switched. This mic should sound clearer.',
+  MessageKey.callMicSwitchFailed:
+      'Could not switch microphone; staying on the current one.',
+  MessageKey.callMicFallback:
+      'Selected microphone is unavailable; using the system default.',
   MessageKey.chatStopRemoteChecking: 'Checking stop status',
   MessageKey.chatStopRemoteUnavailable:
       'This run is unavailable; refreshing status',
@@ -902,6 +913,14 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.callSettingsTokenHint: '留空即使用 Hermes API key。',
   MessageKey.callSettingsUrlInvalid: 'URL 無效：請輸入 ws:// 或 wss:// 開頭的位址，不含帳密或查詢參數。',
   MessageKey.callSettingsNeedsWss: 'HTTPS 頁面只能連 wss://。',
+  MessageKey.callMicLabel: '麥克風',
+  MessageKey.callMicDefault: '系統預設',
+  MessageKey.callMicNumbered: '麥克風 {n}',
+  MessageKey.callMicNeedsPermission: '授權後可見裝置',
+  MessageKey.callMicPick: '選擇麥克風',
+  MessageKey.callMicSwitched: '換了，這顆清晰點',
+  MessageKey.callMicSwitchFailed: '切換麥克風失敗，維持原裝置',
+  MessageKey.callMicFallback: '選的麥克風不在了，改用系統預設',
   MessageKey.chatStopRemoteChecking: '正在核對停止狀態',
   MessageKey.chatStopRemoteUnavailable: '此運行已不可用，正在更新狀態',
   MessageKey.chatStopRemoteNoRunId: '伺服器未提供運行識別碼，無法從此處停止',

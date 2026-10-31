@@ -532,4 +532,12 @@ enum MessageKey {
   callSettingsTokenHint,
   callSettingsUrlInvalid,
   callSettingsNeedsWss,
+  callMicLabel,
+  callMicDefault,
+  callMicNumbered,
+  callMicNeedsPermission,
+  callMicPick,
+  callMicSwitched,
+  callMicSwitchFailed,
+  callMicFallback,
 }

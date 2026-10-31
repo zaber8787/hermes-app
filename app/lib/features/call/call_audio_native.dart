@@ -51,6 +51,11 @@ class CallAudioAndroid implements CallAudio {
     };
   }
 
+  /// VoiceCallService records from the system default source only; the
+  /// picker therefore offers just "system default" here (MICPICK R2/R4).
+  @override
+  Future<List<AudioInputDevice>> listInputs() async => const [];
+
   @override
   Future<void> start({required String title, required bool speaker}) async {
     // Subscribe BEFORE the service starts producing, or the first frames

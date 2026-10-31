@@ -234,6 +234,18 @@ class LocalStore {
 
   Future<void> saveVoiceToken(String v) => vault.write('voice.token', v);
 
+  // MICPICK R2: the picked call input, global like the endpoint fields. A
+  // browser deviceId is per-origin and per-machine, which is exactly the
+  // scope prefs already have; null/empty = system default (key removed).
+  String? voiceMicId() {
+    final v = prefs.getString('voice.mic');
+    return v == null || v.isEmpty ? null : v;
+  }
+
+  Future<void> saveVoiceMicId(String? v) => v == null || v.isEmpty
+      ? prefs.remove('voice.mic')
+      : prefs.setString('voice.mic', v);
+
   // ---- I18N: global UI language (I18N-PLAN §4.2) --------------------------
   // `ui.locale` is GLOBAL (never _scope-d), independent of credentials: a
   // corrupt/missing value normalizes to English and must never block

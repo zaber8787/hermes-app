@@ -82,6 +82,17 @@ class CallAudioWeb implements CallAudio {
     return web.window.navigator.mediaDevices.getUserMedia(constraints).toDart;
   }
 
+  @override
+  Future<List<AudioInputDevice>> listInputs() async {
+    if (!web.window.isSecureContext) return const [];
+    final all =
+        (await web.window.navigator.mediaDevices.enumerateDevices().toDart)
+            .toDart;
+    return filterAudioInputs(
+      all.map((d) => (kind: d.kind, id: d.deviceId, label: d.label)),
+    );
+  }
+
   String _moduleUrl() => Uri.base.resolve('voice_worklets.js').toString();
 
   @override
