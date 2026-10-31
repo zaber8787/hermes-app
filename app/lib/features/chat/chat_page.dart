@@ -1608,7 +1608,14 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       liveTail: liveTail,
       ownAnchor: c.ownTurnAnchor,
     );
+    // DUPDURABLE: compression-rebuild copies of the same durable call id
+    // collapse onto the first-seen slot; the live fold above is unchanged.
+    final durableDedup = dedupDurableToolCalls(toolOverlap.scope, c.messages);
+    final timelineExclusions = durableDedup.excluded.isEmpty
+        ? foldExclusions
+        : {...foldExclusions, ...durableDedup.excluded};
     final timelineOverrides = {
+      ...durableDedup.overrides,
       ...toolOverlap.durableOverrides,
       for (final e in projectMessages(liveTail))
         if (e.call != null)
@@ -2104,7 +2111,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                 sliver: _timelineSliver(
                                   messages: c.messages,
                                   liveTail: liveTail,
-                                  toolExclusions: foldExclusions,
+                                  toolExclusions: timelineExclusions,
                                   remoteRows: c.remoteRows,
                                   wakeRowIds: c.wakeRowIds,
                                   detailed: c.detailed,

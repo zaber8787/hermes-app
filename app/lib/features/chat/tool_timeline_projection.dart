@@ -644,3 +644,65 @@ Map<int, String> _segmentUserRows(List<Message> rows) {
   }
   return out;
 }
+
+/// DUPDURABLE: core compression rebuilds re-append old rows (tool_calls
+/// included) under NEW row ids, so one wire call id lands on 2-3 durable
+/// rows. Per-row projection cannot see that; this pass walks the durable
+/// rows in render order with a seen-call-id set and drops every second+
+/// tool slot for the same id. The first-seen slot keeps its position and
+/// key; a later copy that carries fuller facts (arguments/name/result the
+/// first lacks) upgrades it through an override — never a new row. Only
+/// tool slots are touched: duplicated text rows render as before, and
+/// rows without a call id are never collapsed (no identity, no merge).
+class DurableToolDedup {
+  const DurableToolDedup({
+    this.excluded = const {},
+    this.overrides = const {},
+  });
+  final Set<String> excluded;
+  final Map<String, ToolViewPayload> overrides;
+}
+
+DurableToolDedup dedupDurableToolCalls(String scope, List<Message> rows) {
+  final refs = toolRefsFromRows(scope, rows);
+  final first = <String, ToolRef>{};
+  final best = <String, ToolViewPayload>{};
+  final excluded = <String>{};
+  for (final r in refs) {
+    final id = r.callId;
+    if (id == null) continue;
+    final keep = first[id];
+    if (keep == null) {
+      first[id] = r;
+      continue;
+    }
+    excluded.add(r.slotKey);
+    final cur = best[id] ??
+        ToolViewPayload(
+          name: keep.name,
+          arguments: keep.isOrphanResult ? null : keep.arguments,
+          result: keep.result,
+          timestamp: keep.timestamp,
+        );
+    final upgraded = ToolViewPayload(
+      name: cur.name.isNotEmpty ? cur.name : r.name,
+      arguments: _known(cur.arguments)
+          ? cur.arguments
+          : (_known(r.arguments) ? r.arguments : cur.arguments),
+      result: _known(cur.result) ? cur.result : (r.result ?? cur.result),
+      timestamp: cur.timestamp > 0 ? cur.timestamp : r.timestamp,
+    );
+    if (upgraded.name != cur.name ||
+        upgraded.arguments != cur.arguments ||
+        upgraded.result != cur.result ||
+        upgraded.timestamp != cur.timestamp) {
+      best[id] = upgraded;
+    }
+  }
+  return DurableToolDedup(
+    excluded: excluded,
+    overrides: {
+      for (final e in best.entries) first[e.key]!.slotKey: e.value,
+    },
+  );
+}
