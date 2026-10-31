@@ -28,7 +28,9 @@ import sys
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
-TABLE_RE = re.compile(r'A\.f\("Noto Sans [A-Z]{2} \d+","(notosans[a-z]{2}/v\d+/[^"]+)"\)')
+# The minified registrar letter drifts across engine builds (`.f` in 3.24-era,
+# `.h` observed 2026-10-31). Match any lowercase method on the `A` namespace.
+TABLE_RE = re.compile(r'A\.[a-z]\("Noto Sans [A-Z]{2} \d+","(notosans[a-z]{2}/v\d+/[^"]+)"\)')
 
 
 def main():
