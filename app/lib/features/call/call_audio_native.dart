@@ -57,7 +57,11 @@ class CallAudioAndroid implements CallAudio {
   Future<List<AudioInputDevice>> listInputs() async => const [];
 
   @override
-  Future<void> start({required String title, required bool speaker}) async {
+  Future<void> start({
+    required String title,
+    required bool speaker,
+    String? deviceId,
+  }) async {
     // Subscribe BEFORE the service starts producing, or the first frames
     // fall on the floor (EventChannel buffers only while listened).
     await _uplinkSub?.cancel();

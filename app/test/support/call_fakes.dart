@@ -95,19 +95,33 @@ class FakeCallAudio implements CallAudio {
   @override
   Future<MicPermission> ensurePermission() async => permission;
 
-  /// MICPICK: what listInputs returns.
+  /// MICPICK: what listInputs returns and the deviceId of every start();
+  /// ids in [failingInputs] fail to open.
   List<AudioInputDevice> inputs = const [];
+  final startDeviceIds = <String?>[];
+  Set<String?> failingInputs = {};
+  String? liveInput;
 
   @override
-  Future<List<AudioInputDevice>> listInputs() async => inputs;
-
-  @override
-  Future<void> start({required String title, required bool speaker}) async {
+  Future<void> start({
+    required String title,
+    required bool speaker,
+    String? deviceId,
+  }) async {
+    startDeviceIds.add(deviceId);
+    if (failingInputs.contains(deviceId)) {
+      throw StateError('cannot open $deviceId');
+    }
     starts++;
     stopped = false;
     startTitle = title;
     startSpeaker = speaker;
+    liveInput = deviceId;
   }
+
+  @override
+  Future<List<AudioInputDevice>> listInputs() async => inputs;
+
 
   @override
   Stream<Uint8List> get frames => framesCtl.stream;

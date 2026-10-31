@@ -70,16 +70,32 @@ class CallAudioWeb implements CallAudio {
 
   /// §4.1: echoCancellation + noiseSuppression + autoGainControl, mono.
   /// No sampleRate constraint — the capture worklet downsamples (§4.1
-  /// point 3, Firefox rule).
-  Future<web.MediaStream> _openStream() {
-    final track = web.MediaTrackConstraints(
-      echoCancellation: true.toJS,
-      autoGainControl: true.toJS,
-      noiseSuppression: true.toJS,
-      channelCount: 1.toJS,
-    );
+  /// point 3, Firefox rule). [deviceId] is an `exact` constraint (MICPICK
+  /// R2): a vanished device must fail loudly, not silently open another.
+  Future<web.MediaStream> _openStream([String? deviceId]) {
+    final track = deviceId == null
+        ? web.MediaTrackConstraints(
+            echoCancellation: true.toJS,
+            autoGainControl: true.toJS,
+            noiseSuppression: true.toJS,
+            channelCount: 1.toJS,
+          )
+        : web.MediaTrackConstraints(
+            deviceId: web.ConstrainDOMStringParameters(exact: deviceId.toJS),
+            echoCancellation: true.toJS,
+            autoGainControl: true.toJS,
+            noiseSuppression: true.toJS,
+            channelCount: 1.toJS,
+          );
     final constraints = web.MediaStreamConstraints(audio: track);
     return web.window.navigator.mediaDevices.getUserMedia(constraints).toDart;
+  }
+
+  static void _stopStream(web.MediaStream? stream) {
+    if (stream == null) return;
+    for (final t in stream.getTracks().toDart) {
+      t.stop();
+    }
   }
 
   @override
@@ -96,7 +112,11 @@ class CallAudioWeb implements CallAudio {
   String _moduleUrl() => Uri.base.resolve('voice_worklets.js').toString();
 
   @override
-  Future<void> start({required String title, required bool speaker}) async {
+  Future<void> start({
+    required String title,
+    required bool speaker,
+    String? deviceId,
+  }) async {
     final existing = _ctx;
     if (existing != null) {
       // Reconnect keeps the same graph; just make sure audio is running.
@@ -107,6 +127,13 @@ class CallAudioWeb implements CallAudio {
     _ctx = ctx;
     try {
       await ctx.audioWorklet.addModule(_moduleUrl()).toDart;
+      // ensurePermission's probe stream is the system default; a picked
+      // device replaces it (the probe is stopped, never left recording)
+      if (deviceId != null) {
+        final picked = await _openStream(deviceId);
+        _stopStream(_stream);
+        _stream = picked;
+      }
       final stream = _stream ?? await _openStream();
       _stream = stream;
       final source = ctx.createMediaStreamSource(stream);
@@ -184,7 +211,7 @@ class CallAudioWeb implements CallAudio {
     _playback = null;
     final stream = _stream;
     _stream = null;
-    stream?.getTracks().toDart.forEach((t) => t.stop());
+    _stopStream(stream);
     final ctx = _ctx;
     _ctx = null;
     if (ctx != null) await ctx.close().toDart;

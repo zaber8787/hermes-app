@@ -87,8 +87,13 @@ abstract class CallAudio {
   Future<MicPermission> ensurePermission();
 
   /// Starts capture (and the Android foreground service). [title] feeds
-  /// the notification; [speaker] the initial route (D9: speaker on).
-  Future<void> start({required String title, required bool speaker});
+  /// the notification; [speaker] the initial route (D9: speaker on);
+  /// [deviceId] the input to open, null = system default (MICPICK R2).
+  Future<void> start({
+    required String title,
+    required bool speaker,
+    String? deviceId,
+  });
 
   /// System audio inputs, empty when the platform cannot enumerate them
   /// (Android today: only the system default is offered, R4). Callers run
@@ -129,7 +134,11 @@ class CallAudioUnsupported implements CallAudio {
   @override
   Future<MicPermission> ensurePermission() async => MicPermission.unsupported;
   @override
-  Future<void> start({required String title, required bool speaker}) async {}
+  Future<void> start({
+    required String title,
+    required bool speaker,
+    String? deviceId,
+  }) async {}
   @override
   Future<List<AudioInputDevice>> listInputs() async => const [];
   @override

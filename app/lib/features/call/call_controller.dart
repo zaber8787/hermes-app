@@ -40,8 +40,10 @@ class CallController extends ChangeNotifier {
     this.delay = Future.delayed,
     this.now = DateTime.now,
     this.clientTag = 'hermes-app',
+    String? inputDeviceId,
     Duration pingInterval = const Duration(seconds: 1),
-  }) : _pingInterval = pingInterval,
+  }) : _preferredInput = inputDeviceId,
+       _pingInterval = pingInterval,
        _state = CallState(target: target),
        _pongTimeout = pingInterval * 5;
 
@@ -55,6 +57,7 @@ class CallController extends ChangeNotifier {
   final Future<void> Function(Duration) delay;
   final DateTime Function() now;
   final String clientTag;
+
   final Duration _pingInterval;
   final Duration _pongTimeout;
 
@@ -66,6 +69,12 @@ class CallController extends ChangeNotifier {
   bool _everConnected = false;
   bool _audioStarted = false;
   bool _closing = false;
+
+  /// The saved pick (MICPICK R2) and the input actually live right now;
+  /// null = system default for both.
+  String? _preferredInput;
+  String? _inputDeviceId;
+  String? get inputDeviceId => _inputDeviceId;
 
   GatewaySocket? _socket;
   StreamSubscription<Object>? _msgSub;
@@ -150,6 +159,17 @@ class CallController extends ChangeNotifier {
       _set(_state.copyWith(phase: CallPhase.muted, wantMuted: true));
     } else if (_state.phase == CallPhase.muted) {
       _set(_state.copyWith(phase: CallPhase.connected, wantMuted: false));
+    }
+  }
+
+  /// The picker's list (MICPICK R1); a platform failure is an empty
+  /// list (system default only), never a thrown error into the UI.
+  Future<List<AudioInputDevice>> listInputs() async {
+    try {
+      return await audio.listInputs();
+    } catch (_) {
+      _record('call.mic-list-failed');
+      return const [];
     }
   }
 
@@ -342,15 +362,51 @@ class CallController extends ChangeNotifier {
     _set(reduceEvent(_state, event, now()));
     if (!_audioStarted) {
       _audioStarted = true;
-      await audio
-          .start(title: _audioTitle, speaker: _state.speakerOn)
-          .catchError((Object e) {
-            _record('call.audio-start-failed');
-            _enterError(CallErrorKind.unsupported);
-          });
+      await _startAudio();
     }
     _startPing();
   }
+
+  /// MICPICK R2/R4: open the saved input when it is still present; a
+  /// missing or unopenable one falls back to the system default with a
+  /// caption instead of failing the call.
+  Future<void> _startAudio() async {
+    String? deviceId;
+    final preferred = _preferredInput;
+    if (preferred != null) {
+      deviceId = resolveInputDevice(preferred, await listInputs());
+      if (_disposed) return;
+      if (deviceId == null) _micFallbackCaption();
+    }
+    try {
+      await audio.start(
+        title: _audioTitle,
+        speaker: _state.speakerOn,
+        deviceId: deviceId,
+      );
+    } catch (_) {
+      if (deviceId == null || _disposed) {
+        _record('call.audio-start-failed');
+        if (!_disposed) _enterError(CallErrorKind.unsupported);
+        return;
+      }
+      _record('call.mic-pick-failed');
+      _micFallbackCaption();
+      deviceId = null;
+      try {
+        await audio.start(title: _audioTitle, speaker: _state.speakerOn);
+      } catch (_) {
+        _record('call.audio-start-failed');
+        if (!_disposed) _enterError(CallErrorKind.unsupported);
+        return;
+      }
+    }
+    _inputDeviceId = deviceId;
+  }
+
+  void _micFallbackCaption() => _set(_state.copyWith(
+        captions: _appendSystem(_state.captions, MessageKey.callMicFallback),
+      ));
 
   void _startPing() {
     _pingTimer?.cancel();
@@ -531,6 +587,7 @@ class CallController extends ChangeNotifier {
     // an error); otherwise the redialed call sends zero frames and the
     // gateway stall-closes it every 5s (VOICEBUG4)
     _audioStarted = false;
+    _inputDeviceId = null;
     try {
       await audio.stop();
     } catch (_) {

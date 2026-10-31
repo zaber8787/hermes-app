@@ -49,12 +49,14 @@ Future<void> openCall(
       ref.read(settingsProvider),
     );
     if (!context.mounted) return;
+    final store = ref.read(localStoreProvider);
     final controller = CallController(
       target: target,
       url: endpoint.url,
       token: endpoint.token,
       connect: ref.read(gatewayConnectorProvider),
       audio: ref.read(callAudioFactoryProvider)(),
+      inputDeviceId: store.voiceMicId(),
     );
     ref.read(activeCallProvider.notifier).set(controller);
     _pushCallPage(context);
