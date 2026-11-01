@@ -774,9 +774,16 @@ def _install_crosssource(tx):
              "_prepare_sse_response")
     _require(api, "_error_response", "_sse_frame")
     _signature(cls, "_prepare_sse_response", "request", "session_id", "gateway_session_key")
+    # PROGRESSBRIDGE: the live follow reads core session-authority internals. A broken seam
+    # disables only the follow (stream answers the queued handoff), loudly, never silently.
+    broken = crosssource.check_progress_seams()
+    state["crosssource_progress"] = {"status": "disabled", "reason": broken} if broken else {"status": "applied"}
+    if broken:
+        log.error("CROSSSOURCE PROGRESS DISABLED: core seam drifted (%s); Discord-session streams "
+                  "fall back to run.queued + done until compat is reviewed against this core", broken)
     state["crosssource"] = crosssource.install(
         api, cls, tx, ctx_getter=lambda: state.get("plugin_ctx"),
-        spool_path=Path(get_hermes_home()) / "crosssource_spool.db")
+        spool_path=Path(get_hermes_home()) / "crosssource_spool.db", progress=broken is None)
 
 
 def _crosssource_drain_arm(adapter, why, loop=None):

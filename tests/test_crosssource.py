@@ -11,7 +11,11 @@ kind=bridge_unavailable, and drain retries pending and failed rows. Rows
 spooled by the retired bot-forwarding bridge drain with the mark stripped.
 
 Sessions live in a real SessionDB tmp file; the gateway is a fake and the
-plugin context is a scripted ``inject_message`` stand-in.
+plugin context is a scripted ``inject_message`` stand-in. TASK-PROGRESSBRIDGE:
+where a stream follows the injected turn, the session authority is a fake whose
+live entries hold core's real ``SessionEvents``, and ``ScriptedTurn`` publishes
+the frames core publishes for an admitted plugin turn, built by core's own
+payload functions.
 """
 import asyncio
 import json
@@ -20,8 +24,11 @@ import pathlib
 import shutil
 import sqlite3
 import tempfile
+import threading
 import time
 import unittest
+import uuid
+from dataclasses import asdict
 from unittest import mock
 
 from aiohttp import web
@@ -59,17 +66,101 @@ class FakeRunner:
 
 
 class FakeCtx:
-    """PluginContext.inject_message stand-in; scripted per-call results."""
-    def __init__(self, results):
+    """PluginContext.inject_message stand-in; scripted per-call results. ``on_inject`` runs for
+    an accepted call, as core's dispatch runs after ``inject_message`` returned True."""
+    def __init__(self, results, on_inject=None):
         self.results = list(results)
         self.calls = []
+        self.on_inject = on_inject
 
     def inject_message(self, content, role="user", *, session_key=None, origin=None):
         self.calls.append({"content": content, "session_key": session_key})
         result = self.results.pop(0) if self.results else True
         if isinstance(result, BaseException):
             raise result
+        if result and self.on_inject is not None:
+            self.on_inject(content, session_key)
         return result
+
+
+class FakeLive:
+    def __init__(self):
+        from gateway.session_events import SessionEvents
+        self.event_stream = SessionEvents()
+
+
+class FakeAuthority:
+    """The slice of SessionAuthority the follow reads: live entries and logical_owner."""
+    runner = None
+
+    def __init__(self):
+        self.sessions = {}
+
+    def logical_owner(self, session_id):
+        return session_id
+
+
+def plugin_identity(session_key):
+    """The request_id core gives a plugin injection (run_plugin_injection._admit_plugin_injection)."""
+    return json.dumps(["plugin", "hermes-app-compat", session_key, uuid.uuid4().hex], separators=(",", ":"))
+
+
+class ScriptedTurn:
+    """Core's frames for one admitted plugin turn on ``owner``: the commit's session.info, the
+    claim's message.start, the agent's deltas and tools, the settlement's message.complete.
+    Published on a worker thread (the agent's callbacks run there). ``steps``: ("delta", text),
+    ("tool", name, args, result, is_error), ("other", text) (another admission's delta),
+    ("pause", seconds); ``outcome`` is the settled outcome."""
+
+    def __init__(self, authority, owner, steps, *, outcome="completed", response="", create_live=True,
+                 sync=False, sequence=5):
+        self.authority, self.owner, self.steps = authority, owner, steps
+        self.outcome, self.response, self.create_live, self.sync = outcome, response, create_live, sync
+        self.sequence = sequence
+        self.admission_id = f"adm_{uuid.uuid4().hex[:8]}"
+        self.thread = None
+
+    def __call__(self, content, session_key):
+        if self.create_live:
+            self.authority.sessions.setdefault(self.owner, FakeLive())
+        identity = plugin_identity(session_key)
+        if self.sync:
+            self.run(content, identity)
+        else:
+            self.thread = threading.Thread(target=self.run, args=(content, identity), daemon=True)
+            self.thread.start()
+
+    def run(self, content, identity):
+        from gateway.run_turn_progress import _tool_complete_payload, _tool_lifecycle_payload
+        from gateway.session_contract import PendingAdmission, SessionRef
+        from gateway.session_settlement_recovery import completion_payload
+        events = self.authority.sessions[self.owner].event_stream
+        pending = PendingAdmission(admission_id=self.admission_id, ref=SessionRef("default", self.owner),
+                                   sequence=self.sequence, status="queued", outcome=None, authority_epoch=1,
+                                   execution_generation=None, input_id=identity, text=content)
+        events.publish(self.owner, {"stored_session_id": self.owner, "pending": [asdict(pending)]},
+                       event_type="session.info")
+        stamp = {"authority_epoch": 1, "execution_generation": 1, "admission_id": self.admission_id}
+        with events.lock:
+            events.execution = stamp
+            events.publish(self.owner, {}, event_type="message.start")
+        for n, step in enumerate(self.steps):
+            if step[0] == "delta":
+                events.publish(self.owner, {"text": step[1]}, event_type="message.delta")
+            elif step[0] == "other":
+                other = {"authority_epoch": 1, "execution_generation": 9, "admission_id": "adm_other"}
+                events.publish(self.owner, {"text": step[1]}, event_type="message.delta", execution=other)
+            elif step[0] == "tool":
+                _, name, args, result, is_error = step
+                events.publish(self.owner, _tool_lifecycle_payload(f"call_{n}", name, args), event_type="tool.start")
+                events.publish(self.owner, _tool_complete_payload(f"call_{n}", name, args, result, is_error=is_error),
+                               event_type="tool.complete")
+            elif step[0] == "pause":
+                time.sleep(step[1])
+        row = {"admission_id": self.admission_id, "request_id": identity}
+        events.publish(self.owner, completion_payload(row, {"outcome": self.outcome}, self.response, None))
+        with events.lock:
+            events.execution = {}
 
 
 class NoInjectCtx:
@@ -87,7 +178,7 @@ class SSESink:
     def events(self):
         out = []
         for block in self.frames.decode().split("\n\n"):
-            if not block.strip():
+            if not block.strip() or block.startswith(":"):
                 continue
             lines = dict(line.split(": ", 1) for line in block.splitlines())
             out.append((lines.get("event"), json.loads(lines["data"])))
@@ -182,13 +273,20 @@ class CrossSourceBase(unittest.TestCase):
     def spool_path(self):
         return self.tmp / "crosssource_spool.db"
 
-    def install(self):
+    def install(self, **kw):
         async def no_sleep(seconds):
             self.sleeps.append(seconds)
         self.bridge = crosssource.install(
             FakeApi, self.cls, Tx(), ctx_getter=lambda: self.ctx, spool_path=self.spool_path,
-            sleep=no_sleep)
+            sleep=no_sleep, **kw)
         return self.bridge
+
+    def follow_turn(self, steps, **kw):
+        """Install with a session authority and script the turn core runs for the injection."""
+        self.authority = FakeAuthority()
+        self.turn = ScriptedTurn(self.authority, DISCORD_SID, steps, **kw)
+        self.ctx = FakeCtx([], on_inject=self.turn)
+        return self.install(authority_getter=lambda adapter: self.authority, admission_wait=2, keepalive=5)
 
     def drive(self, *calls):
         async def main():
@@ -217,17 +315,19 @@ class RoutingRedGreen(CrossSourceBase):
         self.assertEqual(200, response.status)
 
     def test_green_discord_stream_injects_the_plain_text_once(self):
-        self.install()
+        self.follow_turn([("delta", "好"), ("tool", "terminal", {"command": "ls"}, "a\nb", False),
+                          ("delta", "了")], response="好了")
         response = self.drive(self.stream("從 app 發的"))
         self.assertEqual([], self.cls.native_calls)
         self.assertEqual([{"content": "從 app 發的", "session_key": DISCORD_KEY}], self.ctx.calls)
         events = self.adapter.sinks[0].events()
-        self.assertEqual(["run.started", "run.queued", "done"], [name for name, _ in events])
-        queued = events[1][1]
-        self.assertEqual(("queued", "discord", DISCORD_SID), (queued["status"], queued["via"], queued["session_id"]))
+        self.assertEqual(["run.started", "message.started", "assistant.delta", "tool.started", "tool.completed",
+                          "assistant.delta", "assistant.completed", "run.completed", "done"],
+                         [name for name, _ in events])
+        self.assertEqual({DISCORD_SID}, {payload["session_id"] for _, payload in events})
+        self.assertEqual("好了", events[6][1]["content"])
         rows = self.spool_rows()
         self.assertEqual(1, len(rows))
-        self.assertEqual(queued["delivery_id"], rows[0]["id"])
         self.assertEqual(("delivered", 1, "injected"), (rows[0]["status"], rows[0]["attempts"], rows[0]["trigger"]))
 
     def test_injected_text_carries_no_bot_mark(self):

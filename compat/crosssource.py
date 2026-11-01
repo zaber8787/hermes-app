@@ -12,6 +12,23 @@ no bot-forwarded copy of the user's text; a bot never speaks for the user.
 Every other target, a missing session and every wake batch stay on the native
 path.
 
+Live progress (TASK-PROGRESSBRIDGE): under a session authority the injected
+text is a durable automation admission of the Discord session, and its turn
+publishes ``message.start`` / ``message.delta`` / ``tool.start`` /
+``tool.complete`` / ``message.complete`` on that session's canonical
+``SessionEvents`` stream. The stream route attaches an observer there (plus the
+replay ring for frames published before the attach), finds its own admission by
+the injection identity in the ``session.info`` pending list, and forwards it as
+the session SSE events the app already renders (``message.started``,
+``assistant.delta``, ``tool.started``, ``tool.completed`` / ``tool.failed``,
+``assistant.completed``, ``run.<status>``, ``done``). The follow ends at the
+admission's completion, at the gateway inactivity timeout
+(``HERMES_AGENT_TIMEOUT``, the turn's own), or when the client leaves; a client
+leaving never stops the turn, which belongs to the Discord session. When the
+seams fail the load-time check, no authority serves the session, or the
+admission is never seen, the route answers the earlier handoff shape
+(``run.queued`` + ``done``) and the app reconciles from the transcript.
+
 Resilience: the text is spooled (SQLite, plugin-owned file) before the first
 attempt, and a resend of the same text to the same session folds into the
 existing row instead of adding one. At most ``MAX_ATTEMPTS`` attempts per
@@ -26,8 +43,10 @@ from __future__ import annotations
 import asyncio
 from contextlib import closing
 from functools import wraps
+import inspect
 import json
 import logging
+import os
 from pathlib import Path
 import re
 import sqlite3
@@ -53,6 +72,17 @@ DRAIN_MAX_AGE_SECONDS = 24 * 3600
 # Load-time drain waits this long so the platform adapters can connect first.
 DRAIN_DELAY_SECONDS = 10
 _THREAD_KEY = re.compile(r"^agent:[^:]+:discord:thread:(\d+):(\d+)$")
+# Live progress: how long the follow waits for its admission to show up on the
+# session's event stream before it answers the queued handoff instead. Not a
+# turn timeout (that one is HERMES_AGENT_TIMEOUT); it only bounds the case where
+# the injection was accepted but never became an admission.
+ADMISSION_WAIT_SECONDS = 30
+# Poll step while the session's live entry does not exist yet.
+ATTACH_POLL_SECONDS = 0.05
+# core gateway/run_turn.py: inactivity timeout, env wins (config is exported to it), 0 = unlimited.
+_TURN_TIMEOUT_ENV, _TURN_TIMEOUT_DEFAULT = "HERMES_AGENT_TIMEOUT", 1800.0
+_KEEPALIVE_DEFAULT = 10.0
+_KEEPALIVE_FRAME = b": keepalive\n\n"
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS outbox (
@@ -184,7 +214,8 @@ class Bridge:
         return "injected" if accepted else "inject_refused"
 
     async def _run(self, api_adapter, row_id):
-        """Up to MAX_ATTEMPTS attempts for one spooled row. Returns ``(row_id, error)``."""
+        """Up to MAX_ATTEMPTS attempts for one spooled row. Returns ``(row_id, error, injected)``;
+        ``injected`` is False for a row that was already delivered (no new turn started)."""
         lock = self._locks.get(row_id)
         if lock is None:
             lock = self._locks[row_id] = asyncio.Lock()
@@ -192,7 +223,7 @@ class Bridge:
             row = await asyncio.to_thread(self.outbox.get, row_id)
             if row["status"] == "delivered":
                 log.info("crosssource %s already delivered as message %s", row_id, row["message_id"])
-                return row_id, None
+                return row_id, None, False
             platform, session_key, text = row["platform"], row["session_key"], row["text"]
             text = text.removesuffix(_LEGACY_MARK)
             attempts, error = row["attempts"], None
@@ -205,16 +236,16 @@ class Bridge:
                                             trigger="injected")
                     log.info("crosssource %s injected into %s session %s (attempt %d)",
                              row_id, platform, row["session_id"], attempt)
-                    return row_id, None
+                    return row_id, None, True
                 await asyncio.to_thread(self.outbox.record, row_id, attempts=attempts,
                                         status="failed" if final else "pending", error=error)
                 log.warning("crosssource %s attempt %d/%d failed: %s", row_id, attempt, MAX_ATTEMPTS, error)
                 if not final:
                     await self.sleep(BACKOFF_SECONDS[attempt - 1])
-            return row_id, error
+            return row_id, error, False
 
     async def deliver(self, api_adapter, session, text):
-        """Spool (folding a resend into its row), then deliver. Returns ``(row_id, error)``."""
+        """Spool (folding a resend into its row), then deliver. Returns ``(row_id, error, injected)``."""
         row_id, merged = await asyncio.to_thread(
             self.outbox.enqueue, session_id=session["id"], session_key=session["session_key"],
             platform=session["source"], text=text)
@@ -262,14 +293,251 @@ class Bridge:
         return True
 
 
+def turn_timeout():
+    """The gateway turn's inactivity timeout in seconds (``None`` = unlimited), read as core reads it."""
+    raw = os.environ.get(_TURN_TIMEOUT_ENV)
+    try:
+        value = float(raw) if raw not in (None, "") else _TURN_TIMEOUT_DEFAULT
+    except (TypeError, ValueError):
+        value = _TURN_TIMEOUT_DEFAULT
+    return value if value > 0 else None
+
+
+def check_progress_seams():
+    """Load-time drift check of every core seam the live follow reads. Returns ``None`` when they
+    all hold, else the first broken one; the caller logs it loudly and keeps the queued handoff."""
+    try:
+        from gateway import session_authorities, session_automation, session_settlement_recovery
+        from gateway.session_authority import LiveSession, SessionAuthority
+        from gateway.session_events import SessionEvents
+        from gateway import run_plugin_injection
+    except Exception as exc:
+        return f"import:{type(exc).__name__}"
+    events = SessionEvents()
+    checks = (
+        ("active_authority", callable(getattr(session_authorities, "active_authority", None))),
+        ("SessionAuthority.logical_owner", callable(getattr(SessionAuthority, "logical_owner", None))),
+        ("LiveSession.event_stream", "event_stream" in getattr(LiveSession, "__dataclass_fields__", {})),
+        ("SessionEvents.observers", isinstance(getattr(events, "observers", None), set)),
+        ("SessionEvents.lock", hasattr(getattr(events, "lock", None), "__enter__")),
+        ("SessionEvents.watermark", callable(getattr(events, "watermark", None))),
+        ("SessionEvents.since", callable(getattr(events, "since", None))),
+    )
+    for name, ok in checks:
+        if not ok:
+            return name
+    # Frame contracts the follow decodes, checked in the producers' own source.
+    sources = (
+        (SessionAuthority._stamp_claim, ("'admission_id': row['admission_id']", "event_type='message.start'")),
+        (SessionAuthority._pending_receipt, ("input_id=row['request_id']",)),
+        (SessionAuthority.publish_execution, ("live.event_stream.publish(session_id, payload, event_type=event_type)",)),
+        (session_settlement_recovery.completion_payload, ("'admission_id': row['admission_id']", "'status'")),
+        (session_automation.admit_automation, ("request_id=identity",)),
+        (run_plugin_injection.GatewayPluginInjectionMixin._admit_plugin_injection
+         if hasattr(run_plugin_injection, "GatewayPluginInjectionMixin") else None,
+         ('json.dumps(["plugin", plugin_id, session_key,',)),
+    )
+    for func, needles in sources:
+        if func is None:
+            return "run_plugin_injection._admit_plugin_injection"
+        try:
+            text = inspect.getsource(func)
+        except (OSError, TypeError):
+            return f"source:{getattr(func, '__qualname__', func)}"
+        for needle in needles:
+            if needle not in text:
+                return f"{func.__qualname__}:{needle}"
+    return None
+
+
+def _ours(pending, session_key, text):
+    """A ``session.info`` pending entry is this route's injection: plugin identity on this key, same text."""
+    try:
+        identity = json.loads(pending.get("input_id") or "")
+    except (TypeError, ValueError):
+        return False
+    if not (isinstance(identity, list) and len(identity) >= 3 and identity[0] == "plugin"
+            and identity[2] == session_key):
+        return False
+    seen = pending.get("text")
+    return not isinstance(seen, str) or not seen or seen == text
+
+
+def _terminal(payload):
+    """``message.complete`` -> the session SSE terminal event name (api_server ``run.<status>``)."""
+    status = payload.get("status")
+    if status == "complete":
+        return "run.completed"
+    if status == "interrupted":
+        return "run.interrupted"
+    if status == "error":
+        return "run.failed"
+    return "run.cancelled" if payload.get("outcome") == "cancelled" else "run.completed"
+
+
+class Follow:
+    """One injected turn's live projection from the session's canonical event stream.
+
+    ``prepare`` runs before the injection (watermark of a live entry that already exists);
+    ``frames`` attaches, replays what it missed and yields ``(event, payload)`` pairs in the
+    session SSE vocabulary until the admission completes. ``None`` from ``frames`` means
+    it never saw its admission (or went idle past the turn timeout): answer the queued handoff.
+    """
+
+    def __init__(self, authority, owner, session_key, text, *, admission_wait=ADMISSION_WAIT_SECONDS,
+                 idle_timeout=None, keepalive=_KEEPALIVE_DEFAULT):
+        self.authority, self.owner = authority, owner
+        self.session_key, self.text = session_key, text
+        self.admission_wait, self.idle_timeout, self.keepalive = admission_wait, idle_timeout, keepalive
+        self.message_id = f"msg_{uuid.uuid4().hex}"
+        self.mark = None
+        self.events = None
+        self.ended = None
+        self._queue = asyncio.Queue()
+        self._loop = asyncio.get_running_loop()
+
+    def prepare(self):
+        live = self.authority.sessions.get(self.owner)
+        if live is not None:
+            self.mark = (live.event_stream, live.event_stream.watermark())
+
+    def _observe(self, frame):
+        # Runs inside SessionEvents.publish, under its lock, often on the agent's worker thread.
+        params = frame.get("params") if isinstance(frame, dict) else None
+        if isinstance(params, dict):
+            try:
+                self._loop.call_soon_threadsafe(self._queue.put_nowait, params)
+            except RuntimeError:
+                pass  # the request's loop is gone; the turn itself never depends on this observer
+
+    async def _attach(self, deadline):
+        while True:
+            live = self.authority.sessions.get(self.owner)
+            if live is not None:
+                break
+            if self._loop.time() >= deadline:
+                return False
+            await asyncio.sleep(ATTACH_POLL_SECONDS)
+        events = live.event_stream
+        with events.lock:
+            events.observers.add(self._observe)
+            self.events = events
+            if self.mark is not None and self.mark[0] is events:
+                epoch, sequence = self.mark[1]
+            else:
+                epoch, sequence = events.watermark()[0], 0
+            replay = events.since(epoch, sequence)
+        for params in replay.get("events") or ():
+            self._queue.put_nowait(params)
+        return True
+
+    def close(self):
+        events, self.events = self.events, None
+        if events is not None:
+            with events.lock:
+                events.observers.discard(self._observe)
+
+    async def _next(self, timeout):
+        """The next frame's params, ``None`` on a keepalive tick, ``False`` past ``timeout``."""
+        tick = self.keepalive if timeout is None else min(self.keepalive, max(timeout, 0))
+        try:
+            return await asyncio.wait_for(self._queue.get(), timeout=tick)
+        except asyncio.TimeoutError:
+            return False if timeout is not None and timeout <= tick else None
+
+    async def frames(self):
+        """Async generator of ``(event, payload)``; ``(None, None)`` is a keepalive tick."""
+        loop = self._loop
+        deadline = loop.time() + self.admission_wait
+        if not await self._attach(deadline):
+            self.ended = "no_live_session"
+            return
+        target, candidates, started = None, {}, False
+        last = loop.time()
+        while True:
+            if target is None:
+                left = deadline - loop.time()
+            else:
+                left = None if self.idle_timeout is None else last + self.idle_timeout - loop.time()
+            params = await self._next(left)
+            if params is False:
+                self.ended = "admission_not_seen" if target is None else "idle_timeout"
+                return
+            if params is None:
+                yield None, None
+                continue
+            kind, payload = params.get("type"), params.get("payload") or {}
+            if kind == "session.info" and not started:
+                for pending in payload.get("pending") or ():
+                    if isinstance(pending, dict) and _ours(pending, self.session_key, self.text):
+                        candidates[pending.get("admission_id")] = pending.get("sequence") or 0
+                if candidates:
+                    # The newest matching row is this send; an older identical one queued earlier is not.
+                    target = max(candidates, key=candidates.get)
+                continue
+            admission = params.get("admission_id") or payload.get("admission_id")
+            if target is None or admission != target:
+                continue
+            last = loop.time()
+            mid = self.message_id
+            if kind == "message.start" and not started:
+                started = True
+                yield "message.started", {"message": {"id": mid, "role": "assistant"}}
+            elif kind == "message.delta":
+                if isinstance(payload.get("text"), str) and payload["text"]:
+                    yield "assistant.delta", {"message_id": mid, "delta": payload["text"]}
+            elif kind == "tool.start":
+                yield "tool.started", {"message_id": mid, "tool_name": payload.get("tool_name") or payload.get("name"),
+                                       "preview": payload.get("context"), "args": payload.get("args")}
+            elif kind == "tool.complete":
+                yield ("tool.failed" if payload.get("is_error") else "tool.completed"), {
+                    "message_id": mid, "tool_name": payload.get("tool_name") or payload.get("name"),
+                    "preview": None, "args": payload.get("args")}
+            elif kind == "message.complete":
+                content = payload.get("text") if isinstance(payload.get("text"), str) else ""
+                terminal = _terminal(payload)
+                yield "assistant.completed", {"message_id": mid, "content": content}
+                closing_payload = {"message_id": mid, "messages": [], "usage": {}, "runtime": {}}
+                if terminal == "run.failed":
+                    surface = payload.get("error_surface") if isinstance(payload.get("error_surface"), dict) else {}
+                    closing_payload["error"] = (payload.get("failure_reason") or payload.get("warning")
+                                                or surface.get("message") or "turn failed")
+                yield terminal, closing_payload
+                self.ended = terminal
+                return
+
+
 def _foreign(session):
     return (session.get("source") in PLATFORMS and isinstance(session.get("session_key"), str)
             and session["session_key"].strip() != "")
 
 
-def install(api, cls, tx, *, ctx_getter, spool_path, sleep=asyncio.sleep):
-    """Wrap ``cls._handle_session_chat`` and ``cls._handle_session_chat_stream``."""
+def _core_authority(api_adapter):
+    from gateway.session_authorities import active_authority
+    return active_authority(getattr(api_adapter, "gateway_runner", None))
+
+
+def _owner(authority, session):
+    """The admission owner core computes for this key (``session_automation._owner``): the
+    logical root of the route's current session, else of the app's own session id."""
+    sid = session["id"]
+    store = getattr(getattr(authority, "runner", None), "session_store", None)
+    try:
+        entry = store.lookup_by_session_key(session["session_key"]) if store is not None else None
+    except Exception:
+        entry = None
+    if entry is not None and getattr(entry, "session_id", None):
+        sid = entry.session_id
+    return authority.logical_owner(sid)
+
+
+def install(api, cls, tx, *, ctx_getter, spool_path, sleep=asyncio.sleep, authority_getter=_core_authority,
+            progress=True, admission_wait=ADMISSION_WAIT_SECONDS, keepalive=None):
+    """Wrap ``cls._handle_session_chat`` and ``cls._handle_session_chat_stream``. ``progress``
+    False (a failed seam check) keeps the queued handoff on the stream route."""
     bridge = Bridge(Outbox(spool_path), ctx_getter, sleep)
+    if keepalive is None:
+        keepalive = float(getattr(api, "CHAT_COMPLETIONS_SSE_KEEPALIVE_SECONDS", _KEEPALIVE_DEFAULT))
     old_chat = cls._handle_session_chat
     old_stream = cls._handle_session_chat_stream
 
@@ -312,7 +580,7 @@ def install(api, cls, tx, *, ctx_getter, spool_path, sleep=asyncio.sleep):
         if not isinstance(routed, tuple):
             return routed
         session, raw = routed
-        row_id, error = await bridge.deliver(self, session, raw)
+        row_id, error, _ = await bridge.deliver(self, session, raw)
         if error is not None:
             return unavailable(session, row_id, error)
         return api.web.json_response(
@@ -328,10 +596,24 @@ def install(api, cls, tx, *, ctx_getter, spool_path, sleep=asyncio.sleep):
         if not isinstance(routed, tuple):
             return routed
         session, raw = routed
+        follow = None
+        if progress:
+            try:
+                authority = authority_getter(self)
+                if authority is not None:
+                    follow = Follow(authority, _owner(authority, session), session["session_key"], raw,
+                                    admission_wait=admission_wait, idle_timeout=turn_timeout(),
+                                    keepalive=keepalive)
+                    follow.prepare()
+            except Exception as exc:
+                log.warning("crosssource progress follow unavailable for %s: %s", session["id"], type(exc).__name__)
+                follow = None
         # Deliver before the SSE head: a final failure is still a plain 502 the client reads.
-        row_id, error = await bridge.deliver(self, session, raw)
+        row_id, error, injected = await bridge.deliver(self, session, raw)
         if error is not None:
             return unavailable(session, row_id, error)
+        if not injected:
+            follow = None  # a resend folded into a delivered row started no turn to follow
         sid, run_id, seq = session["id"], f"run_{uuid.uuid4().hex}", 0
         response = await self._prepare_sse_response(request, sid, None)
 
@@ -343,12 +625,27 @@ def install(api, cls, tx, *, ctx_getter, spool_path, sleep=asyncio.sleep):
 
         try:
             await write("run.started", {"user_message": {"role": "user", "content": raw}, "runtime": {}})
+            if follow is not None:
+                async for name, payload in follow.frames():
+                    if name is None:
+                        await response.write(_KEEPALIVE_FRAME)
+                    else:
+                        await write(name, payload)
+                if (follow.ended or "").startswith("run."):
+                    await write("done", {})
+                    return response
+                log.info("crosssource %s progress follow ended without a terminal frame (%s)", row_id, follow.ended)
             # The live-owner handoff shape: the app ends the stream on purpose and reconciles
             # read-only; the reply arrives through the session transcript and the thread.
             await write("run.queued", {"status": "queued", "delivery_id": row_id, "via": session["source"]})
             await write("done", {})
         except (ConnectionResetError, ConnectionAbortedError, BrokenPipeError, OSError):
             log.info("crosssource SSE client left after %s was delivered", row_id)
+        finally:
+            # A client that leaves (or a cancelled request task) only drops this observer; the
+            # turn belongs to the Discord session and keeps running there.
+            if follow is not None:
+                follow.close()
         return response
 
     tx.set(cls, "_handle_session_chat", chat)
