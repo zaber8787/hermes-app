@@ -38,24 +38,59 @@ async def _respond(adapter, run_id, body):
     return await respond_run(adapter, run_id, body, kind='clarify')
 
 
+async def _respond_session(adapter, sid, body):
+    """respond_run for a session whose turn is not an API admission: core's run_admission only
+    resolves ``principal_id='api'``, so this attaches to ``sid`` itself with the same actor shape."""
+    import uuid
+    from gateway.session_contract import Principal, SessionRef
+    from hermes_state_runtime import RuntimeStoreError
+    authority = _authority(adapter)
+    if authority is None:
+        raise RuntimeStoreError('not_found')
+    ref = SessionRef(authority.profile_id, sid)
+    actor = Principal('api', authority.profile_id, frozenset({'session:read', 'session:respond'}),
+                      'api-control:' + uuid.uuid4().hex)
+    snapshot = await authority.attach(actor, ref)
+    try:
+        if not any(p['prompt_id'] == body['request_id'] and p['kind'] == 'clarify' for p in snapshot.prompts):
+            raise RuntimeStoreError('approval_not_pending')
+        return await authority.respond(actor, ref, body['execution_generation'], body['request_id'],
+                                       {'answer': body['answer']}, kind='clarify')
+    finally:
+        await authority.detach(actor, snapshot.subscription_id)
+
+
+# Turns the profile owner starts outside the API: Discord/Telegram threads (``messaging:``) and
+# their routed agent turns (``automation:``). They carry no run owner scope, so the owner's API key
+# (``_check_auth``; a room grant never passes it) is the whole check. Any other principal fails closed.
+_OWNER_PRINCIPALS = ('automation:', 'messaging:')
+
+
+def _request_owns_admission(adapter, request, row):
+    if row['principal_id'] == 'api':
+        return adapter._request_owns_run(request, row['request_id'])
+    return str(row['principal_id']).startswith(_OWNER_PRINCIPALS)
+
+
 def _authority_prompts(adapter, sid, request):
-    """Canonical API sessions (``api_...``) run on core's session authority. Its TurnRunner replaces
-    agent.clarify_callback, so this bridge never sees those questions: each one is a PendingControls
-    prompt the app only reaches through this route. Yields ``(run_id, generation, prompt)``."""
+    """Canonical API sessions (``api_...``) and messaging threads run on core's session authority. Its
+    TurnRunner replaces agent.clarify_callback, so this bridge never sees those questions: each one is
+    a PendingControls prompt the app only reaches through this route. The session id keys the lookup;
+    the principal only decides ownership. Yields ``(run_id, generation, prompt, api)``."""
     from hermes_state_runtime import _row
     authority = _authority(adapter)
     live = authority.sessions.get(sid) if authority is not None else None
     if live is None:
         return
     with authority.db._read_ctx() as conn:
-        rows = conn.execute("SELECT * FROM session_admissions WHERE principal_id='api'"
-                            " AND target_session_id=? AND status='started'", (sid,)).fetchall()
+        rows = conn.execute("SELECT * FROM session_admissions WHERE target_session_id=? AND status='started'",
+                            (sid,)).fetchall()
     for row in map(_row, rows):
-        if not adapter._request_owns_run(request, row['request_id']):
+        if not _request_owns_admission(adapter, request, row):
             continue
         for prompt in live.controls.snapshot(sid, row['generation']):
             if prompt.get('kind') == 'clarify':
-                yield row['request_id'], row['generation'], prompt
+                yield row['request_id'], row['generation'], prompt, row['principal_id'] == 'api'
 
 
 def _authority_form(sid, run_id, prompt):
@@ -139,7 +174,7 @@ class Bridge:
             with self.lock:
                 pending = self.pending(adapter, sid, request)
             pending += [_authority_form(sid, run_id, prompt)
-                        for run_id, _, prompt in _authority_prompts(adapter, sid, request)]
+                        for run_id, _, prompt, _ in _authority_prompts(adapter, sid, request)]
             return self.api.web.json_response({'pending': pending})
         try:
             body = await request.json()
@@ -179,7 +214,7 @@ class Bridge:
     async def answer_authority(self, adapter, request, sid, cid, body):
         from tools import clarify_gateway as core
         from hermes_state_runtime import RuntimeStoreError
-        owner = next(((run_id, generation) for run_id, generation, prompt
+        owner = next(((run_id, generation, api) for run_id, generation, prompt, api
                       in _authority_prompts(adapter, sid, request) if prompt['prompt_id'] == cid), None)
         entry = core.get_pending(cid)
         if owner is None or entry is None:
@@ -196,10 +231,10 @@ class Bridge:
                                             code='clarify_choice_required')
         if raw.startswith('other:'):
             core.mark_awaiting_text(cid)
-        run_id, generation = owner
+        run_id, generation, api = owner
+        body = dict(request_id=cid, execution_generation=generation, answer=value)
         try:
-            result = await _respond(adapter, run_id, dict(request_id=cid, execution_generation=generation,
-                                                          answer=value))
+            result = await (_respond(adapter, run_id, body) if api else _respond_session(adapter, sid, body))
         except RuntimeStoreError:
             return self.api._error_response('Clarify expired', 404)
         if result.get('status') != 'resolved':
