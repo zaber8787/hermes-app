@@ -7,6 +7,66 @@ import time
 from uuid import uuid4
 
 
+def _coerce(core, entry, raw):
+    """App answer -> clarify_gateway response; None when a choice prompt got no valid choice."""
+    if raw.startswith('other:'):
+        return raw[6:]
+    if raw.casefold() == 'skip':
+        return core.SKIPPED
+    if not entry.choices:
+        return raw
+    tokens = raw.split(',') if entry.multi_select else [raw]
+    labels = [core._match_label(t.strip(), entry.choices) for t in tokens]
+    if not labels or any(v is None for v in labels):
+        return None
+    return json.dumps(labels, ensure_ascii=False) if entry.multi_select else labels[0]
+
+
+def _authority(adapter):
+    """Core's session authority, or None (no runner, or a core without canonical API sessions)."""
+    if getattr(adapter, 'gateway_runner', None) is None:
+        return None
+    try:
+        from gateway.platforms.api_server_authority_runs import _authority as active
+    except ImportError:
+        return None
+    return active(adapter)
+
+
+async def _respond(adapter, run_id, body):
+    from gateway.platforms.api_server_authority_runs import respond_run
+    return await respond_run(adapter, run_id, body, kind='clarify')
+
+
+def _authority_prompts(adapter, sid, request):
+    """Canonical API sessions (``api_...``) run on core's session authority. Its TurnRunner replaces
+    agent.clarify_callback, so this bridge never sees those questions: each one is a PendingControls
+    prompt the app only reaches through this route. Yields ``(run_id, generation, prompt)``."""
+    from hermes_state_runtime import _row
+    authority = _authority(adapter)
+    live = authority.sessions.get(sid) if authority is not None else None
+    if live is None:
+        return
+    with authority.db._read_ctx() as conn:
+        rows = conn.execute("SELECT * FROM session_admissions WHERE principal_id='api'"
+                            " AND target_session_id=? AND status='started'", (sid,)).fetchall()
+    for row in map(_row, rows):
+        if not adapter._request_owns_run(request, row['request_id']):
+            continue
+        for prompt in live.controls.snapshot(sid, row['generation']):
+            if prompt.get('kind') == 'clarify':
+                yield row['request_id'], row['generation'], prompt
+
+
+def _authority_form(sid, run_id, prompt):
+    """One prompt as a one-question form; the prompt id names both the form and its question."""
+    pid = prompt['prompt_id']
+    return dict(clarify_id=pid, session_id=sid, run_id=run_id, timeout_seconds=prompt.get('timeout_s'),
+                questions=[dict(qid=pid, clarify_id=pid, question=prompt['question'],
+                                choices=prompt.get('choices') or None,
+                                multi_select=bool(prompt.get('multi_select')))])
+
+
 class Bridge:
     def __init__(self, api, state):
         self.api, self.state = api, state
@@ -77,11 +137,16 @@ class Bridge:
         cid = request.match_info.get('clarify_id')
         if cid is None:
             with self.lock:
-                return self.api.web.json_response({'pending': self.pending(adapter, sid, request)})
+                pending = self.pending(adapter, sid, request)
+            pending += [_authority_form(sid, run_id, prompt)
+                        for run_id, _, prompt in _authority_prompts(adapter, sid, request)]
+            return self.api.web.json_response({'pending': pending})
         try:
             body = await request.json()
         except Exception:
             return self.api._error_response('Invalid JSON', 422)
+        if cid not in self.forms:
+            return await self.answer_authority(adapter, request, sid, cid, body)
         with self.lock, core._lock:
             form = self.forms.get(cid)
             if (form is None or form['adapter'] is not adapter or form['submitted']
@@ -96,19 +161,10 @@ class Bridge:
                 raw = answers[qid]
                 if not isinstance(raw, str):
                     return self.api._error_response('Answers must be strings', 422)
-                if raw.startswith('other:'):
-                    value = raw[6:]
-                elif raw.casefold() == 'skip':
-                    value = core.SKIPPED
-                elif entry.choices:
-                    tokens = raw.split(',') if entry.multi_select else [raw]
-                    labels = [core._match_label(t.strip(), entry.choices) for t in tokens]
-                    if not labels or any(v is None for v in labels):
-                        return self.api._error_response('Choose an option or use other:', 409,
-                                                        code='clarify_choice_required')
-                    value = json.dumps(labels, ensure_ascii=False) if entry.multi_select else labels[0]
-                else:
-                    value = raw
+                value = _coerce(core, entry, raw)
+                if value is None:
+                    return self.api._error_response('Choose an option or use other:', 409,
+                                                    code='clarify_choice_required')
                 if entry.event.is_set():
                     return self.api._error_response('Clarify already resolved', 404)
                 values.append((entry, raw, value))
@@ -118,6 +174,36 @@ class Bridge:
                 if not core.resolve_gateway_clarify(entry.clarify_id, value):
                     return self.api._error_response('Clarify expired', 404)
             form['submitted'] = True
+        return self.api.web.json_response({'clarify_id': cid, 'outcome': 'answered'})
+
+    async def answer_authority(self, adapter, request, sid, cid, body):
+        from tools import clarify_gateway as core
+        from hermes_state_runtime import RuntimeStoreError
+        owner = next(((run_id, generation) for run_id, generation, prompt
+                      in _authority_prompts(adapter, sid, request) if prompt['prompt_id'] == cid), None)
+        entry = core.get_pending(cid)
+        if owner is None or entry is None:
+            return self.api._error_response('Unknown clarify form', 404)
+        answers = body.get('answers') if isinstance(body, dict) else None
+        raw = answers.get(cid) if isinstance(answers, dict) else None
+        if raw is None:
+            return self.api._error_response('Every question requires an answer', 422)
+        if not isinstance(raw, str):
+            return self.api._error_response('Answers must be strings', 422)
+        value = _coerce(core, entry, raw)
+        if value is None:
+            return self.api._error_response('Choose an option or use other:', 409,
+                                            code='clarify_choice_required')
+        if raw.startswith('other:'):
+            core.mark_awaiting_text(cid)
+        run_id, generation = owner
+        try:
+            result = await _respond(adapter, run_id, dict(request_id=cid, execution_generation=generation,
+                                                          answer=value))
+        except RuntimeStoreError:
+            return self.api._error_response('Clarify expired', 404)
+        if result.get('status') != 'resolved':
+            return self.api._error_response('Clarify expired', 404)
         return self.api.web.json_response({'clarify_id': cid, 'outcome': 'answered'})
 
 

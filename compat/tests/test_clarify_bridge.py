@@ -3,6 +3,7 @@ import asyncio
 import importlib.util
 import json
 from pathlib import Path
+import sys
 import threading
 from types import SimpleNamespace
 
@@ -107,3 +108,73 @@ def test_multiselect_skip_and_wrong_session(env):
     result = finish(env)
     assert result['responses'][0]['user_response'] == ['A', 'B']
     assert result['responses'][1]['status'] == 'skipped'
+
+
+# TASK-CLARIFYUI: an `api_...` session runs on core's session authority, whose TurnRunner
+# replaces agent.clarify_callback; its questions live only in PendingControls.
+@pytest.fixture
+def authority(env, monkeypatch):
+    import sqlite3
+    from contextlib import contextmanager
+    from gateway.session_pending_controls import PendingControls
+    # Importing gateway.run re-executes the interpreter; PendingControls only needs its redactor.
+    monkeypatch.setitem(sys.modules, 'gateway.run', SimpleNamespace(_redact_approval_command=str))
+    conn = sqlite3.connect(':memory:')
+    conn.row_factory = sqlite3.Row
+    conn.execute('CREATE TABLE session_admissions (admission_id, request_id, principal_id, target_session_id,'
+                 ' lineage_json, payload_json, payload_digest, status, generation)')
+    conn.execute("INSERT INTO session_admissions VALUES ('adm', 'run_api', 'api', 'api_1', '{}', '{}', '', "
+                 "'started', 3)")
+    controls = PendingControls(SimpleNamespace(lock=threading.RLock(), publish=lambda *a, **k: None))
+    db = SimpleNamespace(_read_ctx=contextmanager(lambda: (yield conn)))
+    fake = SimpleNamespace(sessions={'api_1': SimpleNamespace(controls=controls)}, db=db)
+    monkeypatch.setattr(p, '_authority', lambda adapter: fake)
+    async def respond(adapter, run_id, body):
+        assert run_id == 'run_api'
+        return controls.respond('api_1', body['execution_generation'], body['request_id'],
+                                {'answer': body['answer']}, kind='clarify')
+    monkeypatch.setattr(p, '_respond', respond)
+    waits = []
+    def ask(cid, question, choices=None, multi_select=False):
+        entry = core.register(cid, 'api-key', question, choices, multi_select)
+        controls.register_clarify('api_1', 3, entry, timeout_s=600)
+        result = {}
+        thread = threading.Thread(target=lambda: result.update(value=core.wait_for_response(cid, 2)))
+        thread.start()
+        waits.append(thread)
+        def answered():
+            thread.join(3)
+            return result['value']
+        return answered
+    yield SimpleNamespace(ask=ask, controls=controls)
+    core.clear_session('api-key')
+    for thread in waits:
+        thread.join(3)
+
+
+def test_authority_prompt_is_pending_and_answer_resumes_turn(env, authority):
+    result = authority.ask('c1', 'Which chapter?', ['Ch1', 'Ch2'])
+    pending = json.loads(call(env, env.request(sid='api_1')).body)['pending']
+    assert pending == [{'clarify_id': 'c1', 'session_id': 'api_1', 'run_id': 'run_api', 'timeout_seconds': 600,
+                        'questions': [{'qid': 'c1', 'clarify_id': 'c1', 'question': 'Which chapter?',
+                                       'choices': ['Ch1', 'Ch2'], 'multi_select': False}]}]
+    bad = call(env, env.request('c1', {'c1': 'prose'}, sid='api_1'))
+    assert bad.status == 409 and json.loads(bad.body)['error']['code'] == 'clarify_choice_required'
+    assert call(env, env.request('c1', {'c1': 'ch2'}, sid='api_1')).status == 200
+    assert result() == 'Ch2'
+    assert json.loads(call(env, env.request(sid='api_1')).body) == {'pending': []}
+    assert call(env, env.request('c1', {'c1': 'Ch1'}, sid='api_1')).status == 404
+
+
+def test_authority_multiselect_other_and_ownership(env, authority):
+    multi = authority.ask('m1', 'Topics', ['A', 'B', 'C'], multi_select=True)
+    free = authority.ask('o1', 'Pick', ['X'])
+    assert call(env, env.request('m1', {'m1': 'A,C'}, sid='other')).status == 404
+    assert call(env, env.request('m1', {'m1': 'A,C'}, sid='api_1')).status == 200
+    assert call(env, env.request('o1', {'o1': 'other:my own'}, sid='api_1')).status == 200
+    assert json.loads(multi()) == ['A', 'C']
+    assert free() == 'my own'
+    authority.ask('h1', 'Hidden?')
+    env.adapter._request_owns_run = lambda r, rid: False
+    assert json.loads(call(env, env.request(sid='api_1')).body) == {'pending': []}
+    assert call(env, env.request('h1', {'h1': 'x'}, sid='api_1')).status == 404
