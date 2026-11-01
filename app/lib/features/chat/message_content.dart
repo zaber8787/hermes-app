@@ -131,6 +131,12 @@ class _ServerPathImageState extends ConsumerState<ServerPathImage> {
     _track(ref.read(repositoryProvider));
     return FutureBuilder<Uint8List>(
       future: _future,
+      // ATTACHJANK: a row re-entering the viewport (SliverList re-creates
+      // off-screen children) paints its settled bytes in the FIRST frame;
+      // a FutureBuilder over a completed future still spends one frame
+      // waiting, and that 120px spinner frame flipped the row's height
+      // under every upward scroll.
+      initialData: _settledDownloads[_future!],
       builder: (context, snapshot) {
         if (snapshot.hasError) {
           final repo = _repo!;
@@ -987,24 +993,64 @@ class _MessageImageState extends ConsumerState<MessageImage> {
   }
 }
 
+/// ATTACHJANK: bytes of a download future that already settled, so a widget
+/// re-mounting on that future can paint synchronously (FutureBuilder
+/// initialData) instead of a one-frame spinner.
+final Expando<Uint8List> _settledDownloads = Expando('settledDownloads');
+
+Future<Uint8List> _rememberSettled(Future<Uint8List> future) {
+  future.then<void>(
+    (bytes) => _settledDownloads[future] = bytes,
+    onError: (Object _) {},
+  );
+  return future;
+}
+
 final _downloads = <String, Future<Uint8List>>{};
 final _artifactCache = newByteCache();
+
+/// ATTACHJANK: settled artifact downloads stay in memory (same 120-entry /
+/// 64 MB FIFO bound as server files). Without it every viewport re-entry of
+/// a pasted screenshot re-read the disk cache into a FRESH byte copy — an
+/// async spinner frame plus a full re-decode, since MemoryImage keys the
+/// decoded-image cache on byte identity.
+final LinkedHashMap<String, Future<Uint8List>> _artifactMemory =
+    LinkedHashMap();
+final Map<String, int> _artifactMemorySizes = {};
+
 Future<Uint8List> cachedArtifact(
   HermesRepository repo,
   String id, {
   Object? directory,
 }) {
   final key = '${sha256.convert(utf8.encode(repo.baseUrl)).toString()}/$id';
-  return _downloads.putIfAbsent(key, () async {
-    try {
-      return await _artifactCache.getOrCreate(
-        key,
-        () => repo.downloadAttachment(id),
-        root: directory,
-      );
-    } finally {
-      _downloads.remove(key);
-    }
+  final settled = _artifactMemory[key];
+  if (settled != null) return settled;
+  return _downloads.putIfAbsent(key, () {
+    late final Future<Uint8List> future;
+    future = _rememberSettled(() async {
+      try {
+        final bytes = await _artifactCache.getOrCreate(
+          key,
+          () => repo.downloadAttachment(id),
+          root: directory,
+        );
+        while (_artifactMemory.length >= 120 ||
+            (_artifactMemorySizes.isNotEmpty &&
+                _artifactMemorySizes.values.fold<int>(0, (a, b) => a + b) >
+                    64 * 1024 * 1024)) {
+          final victim = _artifactMemory.keys.first;
+          _artifactMemory.remove(victim);
+          _artifactMemorySizes.remove(victim);
+        }
+        _artifactMemory[key] = future;
+        _artifactMemorySizes[key] = bytes.length;
+        return bytes;
+      } finally {
+        _downloads.remove(key);
+      }
+    }());
+    return future;
   });
 }
 
@@ -1058,7 +1104,7 @@ Future<Uint8List> cachedServerFile(HermesRepository repo, String path) {
     inflight.remove(victim);
     byteSizes.remove(victim);
   }
-  final future = () async {
+  final future = _rememberSettled(() async {
     try {
       final bytes = await repo.downloadServerFile(path);
       cooldown.remove(path);
@@ -1069,7 +1115,7 @@ Future<Uint8List> cachedServerFile(HermesRepository repo, String path) {
       inflight.remove(path);
       rethrow;
     }
-  }();
+  }());
   inflight[path] = future;
   return future;
 }
