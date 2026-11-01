@@ -121,8 +121,8 @@ V022_FINGERPRINTS = {
 #     already read and returns the (result, usage) tuple untouched, so they still
 #     hold. What does NOT hold is anything relying on the executor body itself:
 #     _active_run_agents / tools.approval gateway queues are not populated on
-#     the authority path. steer_inbox binds through exactly that, so it stays
-#     fail-closed on this backend (see _install_steer_inbox); activity's
+#     the authority path. steer_inbox binds through the authority on this
+#     backend instead (TASK-STEERAUTH, see _install_steer_inbox); activity's
 #     compression-rotation follow and approval_inbox capture degrade to no-ops
 #     there (native approval answers pass through untouched).
 VNEW_FINGERPRINTS = {
@@ -4090,7 +4090,8 @@ def _install_approval_inbox(tx):
 
 # STEERWEB (B1+): the run-scoped durable steer inbox. Five hooks must ALL be
 # live before the capability may claim enabled: admission (POST steer route),
-# agent/run binding (live adapters' _active_run_agents + _run_owners guarded
+# agent/run binding (the session authority's admission + generation-fenced
+# steer on vnew, else live adapters' _active_run_agents + _run_owners guarded
 # identity), the tool-boundary injection wrapper, the persist-confirmation
 # wrapper around _db_flush_write, and the terminal/stop seal on the single
 # _set_run_status entrance. Anything failing raises: the transaction rolls
@@ -4109,12 +4110,34 @@ STEER_V022_FINGERPRINTS = {
     "_finalize_tool_batch": "af2471bf1a1bc60c91f39dff52aed4e83cdaf01d2d97be6a630e96ec79d0d16c",
     "_db_flush_write": "0af0426546434680de5d50e4e8f3b34e82476ccf0bfd2e47a15aec10a5c2db1f",
 }
+# Reviewed 2026-11-01, main bf0203a794 (TASK-STEERAUTH): the three legacy
+# seams (hooks 3+4) are byte-identical to v022 and still serve runs the legacy
+# executor owns (/v1/runs without an admission). Every app turn runs through
+# session_authority, so admission binds there instead (steer_inbox
+# authority_binding / steer_through_authority) and these core seams are pinned:
+#   run_admission: run id -> (authority, admission row), by request id or the
+#     alias run_api_turn binds for a streaming request's run id.
+#   check_approval_generation: raises stale_generation unless that exact
+#     generation is the session's running one.
+#   steer_agent: under event_stream.lock, the adopted agent of that generation
+#     (or a really-running route agent), else latches the text for it.
+#   adopt_agent: takes the same lock and hands that generation's latched steers
+#     to the adopted agent (never a later generation's).
+STEER_VNEW_FINGERPRINTS = {
+    **STEER_V022_FINGERPRINTS,
+    "run_admission": "75f839012717fbf5a0c94bc5389f9ea94bee92e8d70517a8247fc0c0ebd66145",
+    "check_approval_generation":
+        "ab772bd485431ce1be0313a1945a1c381c3e0169f8383e5d08a15a2daf87a85a",
+    "steer_agent": "d61d09952a8e2654d9d242784ecd6d675cdc971ce97a42e64438427a456b2ab0",
+    "adopt_agent": "35dc875975c68b6f8d78cb72effac8d19edea2c63e5a6e0acc3c2e032aaf34db",
+}
 STEER_BODY_CAP = 64 * 1024
 STEER_INPUT_CAP = 8 * 1024
 
 
 def _steer_fingerprint(module, name):
-    tables = {"target": STEER_TARGET_FINGERPRINTS, "v022": STEER_V022_FINGERPRINTS}
+    tables = {"target": STEER_TARGET_FINGERPRINTS, "v022": STEER_V022_FINGERPRINTS,
+              "vnew": STEER_VNEW_FINGERPRINTS}
     table = tables.get(_BACKEND)
     if table is None:
         raise RuntimeError("steer_inbox backend not reviewed for this source")
@@ -4150,12 +4173,21 @@ def _install_steer_inbox(tx):
     if _BACKEND not in TARGET_LIKE:
         raise RuntimeError("steer_inbox backend not implemented for this source")
     if _BACKEND == "vnew":
-        # Fail-closed by decision (TASK-COMPATDRIFT 2026-11-01): on vnew every
-        # app turn runs through session_authority's durable FIFO, which never
-        # registers _active_run_agents for the session stream, so hook 2
-        # (agent/run binding) cannot bind and every admit would close as
-        # run_not_bound. Rebinding onto authority.steer_agent is its own task.
-        raise RuntimeError("steer_inbox not bound to session_authority on this source")
+        # Hook 2 on vnew (TASK-STEERAUTH): every app turn runs through
+        # session_authority's durable FIFO, which never registers
+        # _active_run_agents for the session stream, so admission binds
+        # through the authority's admission + generation-fenced steer seams.
+        from gateway.session_authority import SessionAuthority
+        from gateway.platforms import api_server_authority_runs as authority_runs
+        _signature(authority_runs, "run_admission", "adapter", "run_id")
+        _signature(SessionAuthority, "check_approval_generation", "self", "session_id",
+                   "generation")
+        _signature(SessionAuthority, "steer_agent", "self", "ref", "generation", "text")
+        _signature(SessionAuthority, "adopt_agent", "self", "session_id", "generation",
+                   "agent")
+        _steer_fingerprint(authority_runs, "run_admission")
+        for name in ("check_approval_generation", "steer_agent", "adopt_agent"):
+            _steer_fingerprint(SessionAuthority, name)
     state = getattr(api, _STATE, None)
     if state is None:
         raise RuntimeError("compat state missing")
@@ -4293,7 +4325,9 @@ def _install_steer_inbox(tx):
         else:
             # Legacy body: the server mints the id (retry idempotency is then
             # explicitly NOT promised to old clients). Still the SAME inbox —
-            # never the native _pending_steer bypass while enabled.
+            # never the native _pending_steer bypass while enabled (an
+            # authority-owned run reaches it only through the core's own
+            # generation-fenced steer_agent, see steer_inbox).
             client_request_id = api.uuid.uuid4().hex
         session_id = body.get("session_id")
         server_epoch = body.get("server_epoch")

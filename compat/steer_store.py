@@ -8,7 +8,9 @@ stores agent objects, secrets, or topics — inputs are chat-grade private text
 under the same file permissions as the rest of the home.
 
 States: accepted -> staged -> delivered; accepted may end as not_delivered;
-a staged batch without committed history evidence is outcome_unknown.
+a staged batch without committed history evidence is outcome_unknown. A steer
+handed to the core's session authority (TASK-STEERAUTH) is recorded directly
+as outcome_unknown with error=core_handoff: the core owns its delivery.
 delivered means the row containing the batch committed to session history —
 never that the model acted on the text.
 """
@@ -24,6 +26,7 @@ SCHEMA_VERSION = 1
 OUTSTANDING_LIMIT = 32          # R2: accepted+staged per run, else 429
 RECEIPT_TTL_SECONDS = 30 * 86400  # terminal receipts retained 30 days, then 410
 PAGE_LIMIT = 100
+HANDOFF_ERROR = "core_handoff"  # receipt error tag: the session authority took it
 
 _LOCK = threading.RLock()
 _STORES: dict[str, sqlite3.Connection] = {}
@@ -224,6 +227,56 @@ def admit(home, owner_scope: str, run_id: str, *, key: str, input_text: str,
             (steer_id, owner_scope, run_id, key, digest, input_text, seq, "accepted", now, now))
         row = conn.execute("SELECT * FROM steers WHERE steer_id=?", (steer_id,)).fetchone()
     return "admitted", dict(row)
+
+
+def handoff_gate(home, owner_scope: str, run_id: str, key: str) -> str | None:
+    """Pre-check for a steer handed to the core's session authority: None when
+    it may proceed, else 'expired' (purged key) or 'closed' (sealed run). The
+    caller holds the run guard, so a seal cannot slip in before the record."""
+    conn = _conn_for(home)
+    with _LOCK:
+        if conn.execute("SELECT 1 FROM purged_keys WHERE owner_scope=? AND run_id=? AND key=?",
+                        (owner_scope, run_id, key)).fetchone():
+            return "expired"
+        run = conn.execute("SELECT closed_reason FROM runs WHERE owner_scope=? AND run_id=?",
+                           (owner_scope, run_id)).fetchone()
+    if run is not None and run["closed_reason"] is not None:
+        return "closed"
+    return None
+
+
+def record_handoff(home, owner_scope: str, run_id: str, *, key: str, input_text: str,
+                   original_sid=None, resolved_sid=None, owner_epoch=None) -> dict:
+    """Receipt for a steer the core's session authority already took (agent.steer
+    or its pre-adoption latch). Never 'accepted': nothing here claims or seals
+    it, so no compat queue exists for it. outcome_unknown is the honest state —
+    whether the core folds it into a tool result or returns it as pending_steer
+    is not observable from here."""
+    conn = _conn_for(home)
+    digest = digest_of(input_text)
+    steer_id = derive_steer_id(owner_scope, run_id, key)
+    now = _now()
+    with _LOCK, conn:
+        hit = conn.execute(
+            "SELECT * FROM steers WHERE owner_scope=? AND run_id=? AND key=?",
+            (owner_scope, run_id, key)).fetchone()
+        if hit is not None:
+            return dict(hit)
+        conn.execute(
+            "INSERT INTO runs(owner_scope, run_id, original_sid, resolved_sid, owner_epoch)"
+            " VALUES(?,?,?,?,?) ON CONFLICT(owner_scope, run_id) DO NOTHING",
+            (owner_scope, run_id, original_sid, resolved_sid, owner_epoch))
+        seq = int(conn.execute("SELECT next_seq FROM runs WHERE owner_scope=? AND run_id=?",
+                               (owner_scope, run_id)).fetchone()["next_seq"])
+        conn.execute("UPDATE runs SET next_seq=? WHERE owner_scope=? AND run_id=?",
+                     (seq + 1, owner_scope, run_id))
+        conn.execute(
+            "INSERT INTO steers(steer_id, owner_scope, run_id, key, digest, input, seq,"
+            " state, error, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+            (steer_id, owner_scope, run_id, key, digest, input_text, seq,
+             "outcome_unknown", HANDOFF_ERROR, now, now))
+        row = conn.execute("SELECT * FROM steers WHERE steer_id=?", (steer_id,)).fetchone()
+    return dict(row)
 
 
 def list_steers(home, owner_scope: str, run_id: str, *, after_seq: int = 0,

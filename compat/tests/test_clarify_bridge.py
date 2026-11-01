@@ -20,6 +20,12 @@ spec.loader.exec_module(p)
 @pytest.fixture
 def env(monkeypatch):
     monkeypatch.setattr(core, 'get_clarify_timeout', lambda: 2)
+    # clarify_tool fires observability hooks, and the real invoke_hook loads every
+    # plugin under the live HERMES_HOME into this test process: the deployed compat
+    # plugin then installs here and, on vnew, imports run_agent, whose
+    # hermes_bootstrap re-execs a non-store interpreter and kills the run.
+    from hermes_cli import lifecycle
+    monkeypatch.setattr(lifecycle, 'invoke_hook', lambda *a, **k: [])
     def error(message, status, **extra):
         return web.json_response({'error': dict(message=message, **extra)}, status=status)
     bridge = p.Bridge(SimpleNamespace(web=web, _error_response=error), {})

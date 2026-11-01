@@ -8,7 +8,9 @@ silent ``backend=unknown`` in agent.log.
 
 The regression half pins the behavior this task changed: a live-source match
 selects its backend, the vnew chat-stream copy flushes its event queue, the
-renamed skills seam still installs, and steer_inbox stays fail-closed on vnew.
+renamed skills seam still installs, and (TASK-STEERAUTH) steer_inbox binds
+through the session authority's reviewed seams on vnew instead of failing
+closed.
 """
 import ast
 import asyncio
@@ -52,7 +54,18 @@ class LiveBackendProbe(unittest.TestCase):
             "_deliver_result": sd, "_execute_write": SessionDB, "_read_all": SessionDB,
             "_session_turn_lease_key": SessionDB, "_merge_consecutive_users": arh,
         }
+        from gateway.session_authority import SessionAuthority
+        from gateway.platforms import api_server_authority_runs as authority_runs
+        from agent import session_persistence, tool_executor
+        owners.update({
+            "_finalize_tool_batch": tool_executor, "_db_flush_write": session_persistence,
+            "apply_pending_steer_to_tool_results": arh, "run_admission": authority_runs,
+            "check_approval_generation": SessionAuthority, "steer_agent": SessionAuthority,
+            "adopt_agent": SessionAuthority,
+        })
         tables = {
+            "STEER": {"target": c.STEER_TARGET_FINGERPRINTS, "v022": c.STEER_V022_FINGERPRINTS,
+                      "vnew": c.STEER_VNEW_FINGERPRINTS},
             "CRON": {"target": c.CRON_TARGET_FINGERPRINTS, "v022": c.CRON_V022_FINGERPRINTS,
                      "vnew": c.CRON_VNEW_FINGERPRINTS},
             "WAKE": {"target": c.WAKE_TARGET_FINGERPRINTS, "v022": c.WAKE_V022_FINGERPRINTS,
@@ -161,13 +174,64 @@ class SkillsRename(unittest.TestCase):
         self.assertEqual(seen, [False])
 
 
-class SteerInboxFailClosed(unittest.TestCase):
-    def test_vnew_refuses_before_any_binding(self):
+class SteerInboxAuthorityGate(unittest.TestCase):
+    def test_vnew_passes_the_authority_seam_gate(self):
+        # Red before TASK-STEERAUTH: vnew raised "steer_inbox not bound to
+        # session_authority" before any gate. Now the reviewed authority seams
+        # pass and the installer stops at the next precondition (no compat
+        # state outside the gateway), still before any binding.
         from gateway.platforms import api_server
         tx = Tx()
         with mock.patch.object(c, "_BACKEND", "vnew"), \
-                mock.patch.object(c, "api", api_server, create=True):
-            with self.assertRaisesRegex(RuntimeError, "session_authority"):
+                mock.patch.object(c, "api", api_server, create=True), \
+                mock.patch.object(api_server, c._STATE, None, create=True):
+            with self.assertRaisesRegex(RuntimeError, "compat state missing"):
+                c._install_steer_inbox(tx)
+        self.assertEqual(tx.sets, [])
+
+    def test_live_core_installs_the_whole_unit(self):
+        # Probe: on the executing core every precondition after the authority
+        # gate holds too, so the gateway manifest can say applied. Bindings go
+        # through a real Transaction and are restored; recovery is stubbed so
+        # the real HERMES_HOME ledger is never touched. run_agent is the one
+        # stub: importing it outside the gateway runs hermes_bootstrap, whose
+        # launch preparation re-execs the interpreter into PM's store Python
+        # (hermes_cli/venv_sync.py prepare_launch) and kills the test run.
+        from gateway.platforms import api_server
+        from compat import steer_inbox
+
+        class AIAgent:
+            def _apply_pending_steer_to_tool_results(self, messages, num_tool_msgs):
+                return None
+        run_agent = types.ModuleType("run_agent")
+        run_agent.AIAgent = AIAgent
+        backend = c._detect_backend(api_server.APIServerAdapter)
+        state = {"groups": {"activity": {}}, "manifest": {"activity": {"status": "applied"}},
+                 "activity_epoch": "probe-epoch"}
+        tx = c.Transaction()
+        try:
+            with mock.patch.dict("sys.modules", {"run_agent": run_agent}), \
+                    mock.patch.object(c, "_BACKEND", backend), \
+                    mock.patch.object(c, "api", api_server, create=True), \
+                    mock.patch.object(api_server, c._STATE, state, create=True), \
+                    mock.patch.object(steer_inbox, "recover", lambda inbox: None), \
+                    mock.patch.object(c, "_steer_config_enabled", lambda: False):
+                c._install_steer_inbox(tx)
+            bound = {name for _target, name, *_ in tx.changes}
+            self.assertTrue({"_handle_steer_run", "_set_run_status",
+                             "_apply_pending_steer_to_tool_results"} <= bound, bound)
+        finally:
+            tx.restore()
+            steer_inbox.set_capability(False)
+
+    def test_vnew_drifted_authority_seam_fails_closed(self):
+        from gateway.platforms import api_server
+        drifted = {**c.STEER_VNEW_FINGERPRINTS, "steer_agent": "0" * 64}
+        tx = Tx()
+        with mock.patch.object(c, "_BACKEND", "vnew"), \
+                mock.patch.object(c, "api", api_server, create=True), \
+                mock.patch.object(c, "STEER_VNEW_FINGERPRINTS", drifted):
+            with self.assertRaisesRegex(RuntimeError, "steer source changed: steer_agent"):
                 c._install_steer_inbox(tx)
         self.assertEqual(tx.sets, [])
 

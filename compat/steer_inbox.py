@@ -17,8 +17,21 @@ consult:
 * persist confirm — the wrapped _db_flush_write promotes a staged batch only
   from the committed row's exact metadata.
 
-agent.steer() / native _pending_steer is never touched here; the legacy
-buffer stays the core's own business (R10 red line: no bypass back into it).
+agent.steer() / native _pending_steer is never touched for a run the legacy
+executor owns; that buffer stays the core's own business (R10 red line: no
+bypass back into it).
+
+TASK-STEERAUTH: on a core with a session authority every app turn runs in its
+durable FIFO, so _active_run_agents never holds the chat-stream run's agent.
+Admission then binds through the authority first (authority_binding): the run
+id resolves to its admission (core's own run_admission, including the alias a
+streaming request holds), only a started admission of the current generation
+is admitted, and delivery is the core's native generation-fenced steer
+(check_approval_generation + steer_agent under the session's event_stream
+lock; before adoption the core latches it for that generation's agent). The
+ledger only records the receipt (idempotency, read surfaces); it never queues,
+claims or seals such a steer. _active_run_agents stays the fallback for runs
+the legacy executor owns (/v1/runs without an admission).
 """
 from __future__ import annotations
 
@@ -168,15 +181,138 @@ def _verdict(status: str, *, agent, epoch_ok: bool):
     return "closed", "run_state_unknown"
 
 
+def authority_binding(adapter, run_id):
+    """(authority, admission row) when the core's session authority owns
+    *run_id*: a /v1/runs admission by request id, or a streaming run through
+    the alias its request holds while it observes the turn
+    (session_api_turn.run_api_turn). None without an authority or for a run
+    the legacy executor owns. RuntimeStoreError (duplicate admissions for one
+    run) propagates: that ownership question has no answer."""
+    runner = getattr(adapter, "gateway_runner", None)
+    if getattr(runner, "session_authority", None) is None:
+        return None
+    from gateway.platforms.api_server_authority_runs import run_admission
+    return run_admission(adapter, run_id)
+
+
+def _authority_verdict(adapter, run_id, row, status, *, epoch_ok):
+    """Decision table for an authority-owned run: only a started admission
+    (the session's running generation) admits; the generation itself is
+    re-fenced at delivery under the session's stream lock."""
+    if not epoch_ok:
+        return "stale", "server_epoch"
+    live = str((status or {}).get("status") or "")
+    if live in TERMINAL:
+        return "closed", "run_terminal"
+    if live == "stopping" or run_id in (getattr(adapter, "_stopping_run_ids", None) or ()):
+        return "closed", "run_stopping"
+    state = row.get("status")
+    if state == "started":
+        return "admit", "running"
+    if state == "queued":
+        return "not_ready", "run_queued"
+    if state == "terminal":
+        return "closed", "run_terminal"
+    return "closed", "run_state_unknown"
+
+
+def steer_through_authority(authority, row, text) -> bool:
+    """The core's native steer for this exact claim (the same sequence as
+    api_server_runs._handle_steer_run): fence the generation and ask
+    steer_agent under the session's event_stream lock, which adopt_agent also
+    takes, so a steer racing adoption is either latched for the adopting agent
+    or reaches the adopted one. Nothing here looks an agent up itself."""
+    from gateway.session_contract import SessionRef
+    from hermes_state_runtime import RuntimeStoreError
+    sid, generation = row["target_session_id"], row["generation"]
+    try:
+        with authority.sessions[sid].event_stream.lock:
+            authority.check_approval_generation(sid, generation)
+            agent, latched = authority.steer_agent(
+                SessionRef(authority.profile_id, sid), generation, text)
+    except (KeyError, RuntimeStoreError):
+        return False
+    if latched:
+        return True
+    steer = getattr(agent, "steer", None)
+    if not callable(steer):
+        return False
+    return bool(steer(text))
+
+
+def _duplicate(store, inbox, owner_scope, run_id, client_request_id, input_text):
+    # R2: the success-repeat lookup and authorization precede every
+    # admission-state check, including retries after a terminal state.
+    hit = _find_key(store, owner_scope, run_id, client_request_id)
+    if hit is None:
+        return None
+    if hit["digest"] != steer_store.digest_of(input_text):
+        return "conflict", {"code": "steer_identity_conflict"}
+    return "duplicate", steer_store.receipt_of(hit, epoch=inbox["epoch"])
+
+
+def _accepted_receipt(inbox, row, session_id):
+    receipt = steer_store.receipt_of(row, epoch=inbox["epoch"])
+    receipt["accepted"] = True
+    receipt["state"] = "accepted"
+    receipt["object"] = "hermes.run.steer"
+    receipt["session_id"] = session_id
+    return receipt
+
+
+def _admit_via_authority(inbox, adapter, bound, *, run_id, owner_scope, status,
+                         session_id, input_text, client_request_id, server_epoch):
+    authority, row = bound
+    status_map = getattr(adapter, "_run_statuses", None)
+    live_status = status if status_map is None else status_map.get(run_id, status)
+    kind, code = _authority_verdict(adapter, run_id, row, live_status,
+                                    epoch_ok=(server_epoch in (None, inbox["epoch"])))
+    store = steer_store.open_store(home_of(inbox))
+    if owner_scope:
+        dup = _duplicate(store, inbox, owner_scope, run_id, client_request_id, input_text)
+        if dup is not None:
+            return dup
+    if kind != "admit":
+        return kind, {"code": code}
+    if owner_scope is None:
+        return "closed", {"code": "run_not_bound"}
+    gate = steer_store.handoff_gate(store, owner_scope, run_id, client_request_id)
+    if gate == "expired":
+        return "expired", {"steer_id": steer_store.derive_steer_id(
+            owner_scope, run_id, client_request_id)}
+    if gate == "closed":
+        return "closed", {"code": "run_sealed"}
+    sid = session_id or row.get("target_session_id")
+    if not steer_through_authority(authority, row, input_text):
+        return "closed", {"code": "run_not_accepting_steer"}
+    receipt_row = steer_store.record_handoff(
+        store, owner_scope, run_id, key=client_request_id, input_text=input_text,
+        original_sid=sid, resolved_sid=row.get("target_session_id") or sid,
+        owner_epoch=inbox["epoch"])
+    return "accepted", _accepted_receipt(inbox, receipt_row, sid)
+
+
 def admit_request(inbox, adapter, *, run_id, owner_scope, status, agent,
                   session_id, input_text, client_request_id, server_epoch):
     """Serialize admission with the run's seal under the exact run guard.
 
     01412 M9: the LIVE identity is re-read INSIDE the guard — a status/agent
     that vanished during the body await (unregister, terminal, stop) is
-    caught here, and a stale pre-await snapshot can never vouch for it."""
+    caught here, and a stale pre-await snapshot can never vouch for it.
+
+    TASK-STEERAUTH: an authority-owned run binds through the authority first;
+    the _active_run_agents path below is the fallback for legacy runs."""
     guard = run_guard(inbox, adapter, run_id)
     with guard:
+        try:
+            bound = authority_binding(adapter, run_id)
+        except Exception:
+            return "closed", {"code": "run_state_unknown"}
+        if bound is not None:
+            return _admit_via_authority(
+                inbox, adapter, bound, run_id=run_id, owner_scope=owner_scope,
+                status=status, session_id=session_id, input_text=input_text,
+                client_request_id=client_request_id, server_epoch=server_epoch)
         live_map = getattr(adapter, "_active_run_agents", None)
         live_agent = agent if live_map is None else live_map.get(run_id)
         status_map = getattr(adapter, "_run_statuses", None)
@@ -188,14 +324,10 @@ def admit_request(inbox, adapter, *, run_id, owner_scope, status, agent,
                               epoch_ok=(server_epoch in (None, inbox["epoch"])))
         store = steer_store.open_store(home_of(inbox))
         if owner_scope:
-            # Duplicate lookup FIRST (R2: the success-repeat lookup and
-            # authorization precede every admission-state check, including
-            # retries after a terminal state).
-            hit = _find_key(store, owner_scope, run_id, client_request_id)
-            if hit is not None:
-                if hit["digest"] != steer_store.digest_of(input_text):
-                    return "conflict", {"code": "steer_identity_conflict"}
-                return "duplicate", steer_store.receipt_of(hit, epoch=inbox["epoch"])
+            # Duplicate lookup FIRST (see _duplicate).
+            dup = _duplicate(store, inbox, owner_scope, run_id, client_request_id, input_text)
+            if dup is not None:
+                return dup
         if kind != "admit":
             return kind, {"code": code}
         if owner_scope is None:
@@ -215,12 +347,7 @@ def admit_request(inbox, adapter, *, run_id, owner_scope, status, agent,
             return "queue_full", {"code": "steer_queue_full"}
         if verdict == "closed":
             return "closed", {"code": "run_sealed"}
-        receipt = steer_store.receipt_of(row, epoch=inbox["epoch"])
-        receipt["accepted"] = True
-        receipt["state"] = "accepted"
-        receipt["object"] = "hermes.run.steer"
-        receipt["session_id"] = session_id
-        return "accepted", receipt
+        return "accepted", _accepted_receipt(inbox, row, session_id)
 
 
 def _find_key(store, owner_scope, run_id, key):
