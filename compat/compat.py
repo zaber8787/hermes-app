@@ -3123,9 +3123,56 @@ class _Bridge:
                 self.forget()
 
 
+def _foreign_stream_guard(tx):
+    """Answer core's foreign-surface chat-door refusal BEFORE a run exists.
+
+    core registers the run first and raises permission_denied only then
+    (session_api_turn.py:215-216), so every app POST against a messaging-
+    sourced session logged a run-failed event and an operator notification
+    before the client saw the error — while the conversation itself was
+    served fine by the platform adapter. Same refusal, moved up front: 502
+    ``foreign_surface``, no run, no failed notification. wake_batch dispatch
+    (core's own lane) passes untouched. The permanent fix is the WS bridge
+    (resume+submit need no chat door at all); this guard stays honest until
+    the app stops posting foreign sessions here."""
+    import sys
+    api = sys.modules["gateway.platforms.api_server"]
+    cls = api.APIServerAdapter
+    old = cls._handle_session_chat_stream
+
+    @wraps(old)
+    async def guarded(self, request, *args, **kwargs):
+        try:
+            body = await request.json()
+        except Exception:
+            # Unparsable body: native answers 400 before any run exists, so
+            # there is nothing to shield; pass straight through.
+            return await old(self, request, *args, **kwargs)
+        wake = isinstance(body, dict) and isinstance(body.get("wake_batch"), str)
+        sid = (request.match_info or {}).get("session_id") if not wake else None
+        if sid:
+            db = await self._ensure_session_db_async()
+            if db is not None:
+                try:
+                    resolved = await asyncio.to_thread(db.resolve_resume_session_id, sid)
+                    row = await asyncio.to_thread(db.get_session, resolved)
+                except Exception:
+                    row = None
+                source = row.get("source") if isinstance(row, dict) else None
+                if source is not None and source not in ("api_server", "bot_room"):
+                    log.info("chat/stream refused before run: session %s is %s-source "
+                             "(foreign_surface; route via the WS bridge)", sid, source)
+                    return api._error_response("foreign_surface", 502, code="foreign_surface")
+        return await old(self, request, *args, **kwargs)
+
+    tx.set(cls, "_handle_session_chat_stream", guarded)
+
+
 def _install_approval(tx):
     if _BACKEND in TARGET_LIKE:
-        return _install_approval_target(tx)
+        _install_approval_target(tx)
+        _foreign_stream_guard(tx)
+        return
     if _BACKEND != "base":
         raise RuntimeError("approval backend not implemented for this source")
     from tools import approval, approval_context
