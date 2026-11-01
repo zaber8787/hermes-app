@@ -39,4 +39,4 @@ Only in /Users/zaber/.hermes/plugins/hermes-app-compat: verify_v022_seams.py
 
 ## 之後的同步
 
-一律用 `compat/tools/sync-deploy.sh`。`--check` 只比對，`--dry-run` 列出會動什麼，不帶參數會先在上述備份目錄打 tarball、rsync repo→部署、清 `__pycache__`，再自動跑一次 `--check`。部署端若出現 repo 沒有的檔，同步會在寫入任何東西之前以 exit 3 停下，必須先把檔收進 repo 或明確用 `--prune` 刪除。`compat/docs/` 與 `compat/tools/` 是 repo 專用，不部署。
+一律用 `compat/scripts/sync-deploy.sh`。`--check` 只比對，`--dry-run` 列出會動什麼，不帶參數會先在上述備份目錄打 tarball、rsync repo→部署、清 `__pycache__`，再自動跑一次 `--check`。部署端若出現 repo 沒有的檔，同步會在寫入任何東西之前以 exit 3 停下，必須先把檔收進 repo 或明確用 `--prune` 刪除。`compat/docs/` 與 `compat/scripts/` 是 repo 專用，不部署。
