@@ -142,4 +142,21 @@ void main() {
       expect(find.text('圖片資料無效'), findsOneWidget);
     },
   );
+
+  test('MEDIA syntax quoted in code is prose, not a download tile', () {
+    final doc = splitMessageContent(
+        'write `MEDIA:/tmp/x.png` inline or\n```\nMEDIA:/tmp/y.png\n```\nthanks');
+    expect(doc.where((p) => p.media), isEmpty);
+    expect(doc.map((p) => p.value).join(),
+        contains('MEDIA:/tmp/x.png'));
+    expect(doc.map((p) => p.value).join(), contains('MEDIA:/tmp/y.png'));
+  });
+
+  test('real MEDIA refs still split outside code regions', () {
+    final mixed = splitMessageContent(
+        'try `MEDIA:/docs/note.md` first, and MEDIA:/share-out/flow.png now');
+    final media = mixed.where((p) => p.media).toList();
+    expect(media.map((p) => p.value), ['/share-out/flow.png']);
+  });
 }
+

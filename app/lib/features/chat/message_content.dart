@@ -490,7 +490,17 @@ List<ContentPart> splitMessageContent(String text) {
   );
   final parts = <ContentPart>[];
   var offset = 0;
+  // MEDIA syntax quoted inside inline code or a fenced block is prose, not a
+  // delivery request — the server's own path extractor ignores code regions,
+  // so rendering must too, or a doc snippet spawns a zombie download tile.
+  final code = RegExp(r'```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`')
+      .allMatches(text)
+      .map((m) => (m.start, m.end))
+      .toList();
   for (final match in pattern.allMatches(text)) {
+    if (code.any((span) => match.start >= span.$1 && match.start < span.$2)) {
+      continue;
+    }
     if (match.start > offset) {
       parts.add(ContentPart(text.substring(offset, match.start)));
     }
