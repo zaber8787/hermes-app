@@ -558,14 +558,42 @@ class Drain(CrossSourceBase):
         box.record(ids["failed"], attempts=3, status="failed", error="inject_refused")
         box.record(ids["delivered"], attempts=1, status="delivered")
         with sqlite3.connect(self.spool_path) as conn:
-            conn.execute("UPDATE outbox SET status='failed', updated_at=? WHERE id=?",
-                         (now - crosssource.DRAIN_MAX_AGE_SECONDS - 5, ids["stale"]))
+            conn.execute("UPDATE outbox SET status='failed', created_at=?, updated_at=? WHERE id=?",
+                         (now - crosssource.DRAIN_MAX_AGE_SECONDS - 5, now - crosssource.DRAIN_MAX_AGE_SECONDS - 5,
+                          ids["stale"]))
         self.install()
         result = self.drive(lambda: self.bridge.drain(self.adapter))
         self.assertEqual({ids["pending"]: None, ids["failed"]: None}, result)
         self.assertEqual(["pending", "failed"], [c["content"] for c in self.ctx.calls])
         statuses = {r["id"]: r["status"] for r in self.spool_rows()}
-        self.assertEqual("failed", statuses[ids["stale"]])
+        self.assertEqual("stale-dropped", statuses[ids["stale"]])
+
+    def test_drain_drops_rows_older_than_max_age_even_when_recently_retried(self):
+        """10-30 text still failing at every reload: each retry refreshed updated_at, so an
+        updated_at window never aged it out. Age is the message's (created_at)."""
+        now = time.time()
+        old = now - 3 * 86400
+        box = crosssource.Outbox(self.spool_path)
+        ids = {}
+        for name in ("retried", "untouched", "fresh"):
+            ids[name], _ = box.enqueue(session_id=DISCORD_SID, session_key=DISCORD_KEY, platform="discord",
+                                       text=name, now=now if name == "fresh" else old)
+        with sqlite3.connect(self.spool_path) as conn:
+            conn.execute("UPDATE outbox SET status='failed', attempts=3, updated_at=? WHERE id=?",
+                         (now - 3600, ids["retried"]))
+        self.install()
+        result = self.drive(lambda: self.bridge.drain(self.adapter))
+        self.assertEqual({ids["fresh"]: None}, result)
+        self.assertEqual(["fresh"], [c["content"] for c in self.ctx.calls])
+        rows = {r["id"]: r for r in self.spool_rows()}
+        for name in ("retried", "untouched"):
+            self.assertEqual("stale-dropped", rows[ids[name]]["status"], name)
+            self.assertTrue(rows[ids[name]]["last_error"].startswith("age:"), name)
+        self.assertEqual(3, rows[ids["retried"]]["attempts"])  # marked, not attempted
+        # A second load finds nothing left to drain.
+        self.ctx.calls.clear()
+        self.assertEqual({}, self.drive(lambda: self.bridge.drain(self.adapter)))
+        self.assertEqual([], self.ctx.calls)
 
     def test_drain_failure_keeps_rows_failed(self):
         self.legacy_spool([time.time() - 5])

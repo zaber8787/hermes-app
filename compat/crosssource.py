@@ -34,7 +34,9 @@ attempt, and a resend of the same text to the same session folds into the
 existing row instead of adding one. At most ``MAX_ATTEMPTS`` attempts per
 delivery; a final failure answers HTTP 502 ``kind=bridge_unavailable`` with the
 spool id and the row keeps the text with ``status='failed'``. ``drain`` retries
-every recent ``pending`` and ``failed`` row; it runs once after each load.
+every ``pending`` and ``failed`` row; it runs once after each load. A row whose
+message is older than ``DRAIN_MAX_AGE_SECONDS`` is marked ``stale-dropped`` and
+never injected: a days-old question must not come back as a new turn.
 
 No core file is written, no admission or whitelist is bypassed.
 """
@@ -67,8 +69,10 @@ KIND = "bridge_unavailable"
 _LEGACY_MARK = "\n\n[經 Hermes App 代發]"
 # A delivered row absorbs an identical resend this long after it was created.
 DEDUP_WINDOW_SECONDS = 60
-# Undelivered rows older than this (last touch) are left alone by drain and dedup.
+# Dedup folds a resend only into an undelivered row touched within this window; drain
+# marks an undelivered row whose message (created_at) is older than this stale-dropped.
 DRAIN_MAX_AGE_SECONDS = 24 * 3600
+STALE = "stale-dropped"
 # Load-time drain waits this long so the platform adapters can connect first.
 DRAIN_DELAY_SECONDS = 10
 _THREAD_KEY = re.compile(r"^agent:[^:]+:discord:thread:(\d+):(\d+)$")
@@ -113,7 +117,8 @@ class Outbox:
     """Durable per-message record.
 
     ``pending`` -> ``delivered`` | ``failed``; ``failed`` -> ``pending`` again on a
-    resend or a drain. ``merged`` marks a duplicate drain folded into an older row.
+    resend or a drain. ``merged`` marks a duplicate drain folded into an older row,
+    ``stale-dropped`` an undelivered row drain found past ``DRAIN_MAX_AGE_SECONDS``.
     """
 
     def __init__(self, path):
@@ -171,13 +176,11 @@ class Outbox:
             row = conn.execute("SELECT * FROM outbox WHERE id=?", (row_id,)).fetchone()
         return dict(row) if row is not None else None
 
-    def undelivered(self, now=None):
-        """``pending`` and ``failed`` rows touched within ``DRAIN_MAX_AGE_SECONDS``, oldest first."""
-        now = time.time() if now is None else now
+    def undelivered(self):
+        """Every ``pending`` and ``failed`` row, oldest first."""
         with closing(self._connect()) as conn:
             return [dict(r) for r in conn.execute(
-                "SELECT * FROM outbox WHERE status IN ('pending','failed') AND updated_at>=? "
-                "ORDER BY created_at", (now - DRAIN_MAX_AGE_SECONDS,))]
+                "SELECT * FROM outbox WHERE status IN ('pending','failed') ORDER BY created_at")]
 
     def rows(self):
         with closing(self._connect()) as conn:
@@ -253,18 +256,29 @@ class Bridge:
             log.info("crosssource resend for session %s folded into %s", session["id"], row_id)
         return await self._run(api_adapter, row_id)
 
-    async def drain(self, api_adapter):
-        """Retry every recent ``pending``/``failed`` row. Duplicates (same session and
-        text) collapse into the oldest one first. Returns ``{row_id: error}``."""
+    async def drain(self, api_adapter, now=None):
+        """Retry every ``pending``/``failed`` row. A row older than ``DRAIN_MAX_AGE_SECONDS``
+        is marked ``stale-dropped`` instead; duplicates (same session and text) collapse into
+        the oldest one first. Returns ``{row_id: error}`` for the rows it retried."""
+        now = time.time() if now is None else now
         rows = await asyncio.to_thread(self.outbox.undelivered)
-        heads, result = {}, {}
+        heads, result, stale = {}, {}, 0
         for row in rows:
+            age = now - row["created_at"]
+            if age > DRAIN_MAX_AGE_SECONDS:
+                stale += 1
+                await asyncio.to_thread(self.outbox.record, row["id"], attempts=row["attempts"],
+                                        status=STALE, error=f"age:{int(age)}s")
+                continue
             head = heads.setdefault((row["session_id"], row["text"]), row["id"])
             if head != row["id"]:
                 await asyncio.to_thread(self.outbox.record, row["id"], attempts=row["attempts"],
                                         status="merged", error=f"merged_into:{head}")
         for row_id in heads.values():
             result[row_id] = (await self._run(api_adapter, row_id))[1]
+        if stale:
+            log.warning("crosssource drain: %d row(s) older than %ds marked %s, not injected",
+                        stale, DRAIN_MAX_AGE_SECONDS, STALE)
         if result:
             log.info("crosssource drain: %d delivered, %d still failed",
                      sum(e is None for e in result.values()), sum(e is not None for e in result.values()))
