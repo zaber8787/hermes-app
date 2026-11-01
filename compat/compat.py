@@ -870,10 +870,17 @@ def _install_crosssource(tx):
     if unresolved:
         log.error("CROSSSOURCE SYNTHETIC RUNS DISABLED: core seam drifted (%s); a Discord-session "
                   "stream's run id stays unknown to /v1/runs until compat is reviewed", unresolved)
+    # COLDTURN: a route without a committed human envelope is refused by core after
+    # inject_message said True; the bridge checks first. A drifted seam injects unchecked, loudly.
+    drifted = crosssource.check_envelope_seams()
+    state["crosssource_envelope"] = {"status": "disabled", "reason": drifted} if drifted else {"status": "applied"}
+    if drifted:
+        log.error("CROSSSOURCE ENVELOPE CHECK DISABLED: core seam drifted (%s); an injection core "
+                  "refuses later is spooled delivered until compat is reviewed", drifted)
     bridge = state["crosssource"] = crosssource.install(
         api, cls, tx, ctx_getter=lambda: state.get("plugin_ctx"),
         spool_path=Path(get_hermes_home()) / "crosssource_spool.db", progress=broken is None,
-        runs=runs, synthetic=unresolved is None)
+        runs=runs, synthetic=unresolved is None, envelope=drifted is None)
     if unresolved is None:
         from . import steer_inbox
         resolver = bridge.runs.resolve

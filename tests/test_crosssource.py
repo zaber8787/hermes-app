@@ -852,6 +852,8 @@ class RealSeamWiring(unittest.TestCase):
             self.assertTrue(pathlib.Path(home, "crosssource_spool.db").exists())
             state = getattr(api_server, c._STATE)
             self.assertEqual(state["crosssource_synthetic"], {"status": "applied"})
+            self.assertEqual(state["crosssource_envelope"], {"status": "applied"})
+            self.assertIsNotNone(state["crosssource"].authority_getter)
             self.assertIsNot(native_get_run, api_server_runs._handle_get_run)
             self.assertEqual(steer_inbox._synthetic_resolver, state["crosssource"].runs.resolve)
         finally:
@@ -878,6 +880,169 @@ class RealSeamWiring(unittest.TestCase):
         import inspect
         src = inspect.getsource(session_api_turn.admit_api_steps)
         self.assertIn("existing['source'] not in ('api_server', 'bot_room')", src)
+
+
+class RouteStore:
+    """``SessionStore.lookup_by_session_key`` over a fixed map of live route entries."""
+
+    def __init__(self, entries):
+        self.entries = entries
+
+    def lookup_by_session_key(self, session_key):
+        return self.entries.get(session_key)
+
+
+def route_entry(session_id=DISCORD_SID, *, origin=True, suspended=False):
+    import types
+    return types.SimpleNamespace(session_id=session_id, origin=object() if origin else None, suspended=suspended)
+
+
+class ColdRouteHonesty(CrossSourceBase):
+    """TASK-COLDTURN: core's inject_message answers True once the turn is scheduled
+    (run_plugin_injection.py:110) and the authority refuses the admission later, only in the
+    log, while the route has no committed native envelope with provenance
+    (session_automation.py:357-361). The earlier FakeCtx only refused synchronously, so a cold
+    route spooled ``delivered``. Here the stand-in plays core: True now, the refusal after."""
+
+    def setUp(self):
+        super().setUp()
+        import types
+        self.authority = StoreAuthority(self.db)
+        self.authority.runner = types.SimpleNamespace(session_store=RouteStore({DISCORD_KEY: route_entry()}))
+        self.core_verdicts = []
+
+        def core_admits_later(content, session_key):
+            # The authority's verdict once the scheduled dispatch runs (_admit_plugin_injection).
+            from gateway.session_automation import committed_route_envelope
+            entry = self.authority.runner.session_store.lookup_by_session_key(session_key)
+            envelope = committed_route_envelope(self.authority, entry)
+            self.core_verdicts.append("not_found" if envelope is None else "admitted")
+        self.ctx = FakeCtx([True, True, True], on_inject=core_admits_later)
+
+    def add_human_turn(self, provenance=True):
+        envelope = {"source": {"platform": "discord", "chat_id": THREAD}, "route": DISCORD_KEY}
+        if provenance:
+            envelope["provenance"] = {"connector": "discord"}
+        with sqlite3.connect(self.tmp / "state.db") as conn:
+            conn.execute(
+                "INSERT INTO session_admissions(admission_id, request_id, principal_id, target_session_id,"
+                " lineage_json, payload_json, payload_digest, intent, status, outcome)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (f"adm_{uuid.uuid4().hex[:8]}", uuid.uuid4().hex, "discord", DISCORD_SID, "[]",
+                 json.dumps({"text": "人類訊息", "native_text_v1": envelope}), "d", "queue", "terminal",
+                 "completed"))
+
+    def install_checked(self, **kw):
+        return self.install(authority_getter=lambda adapter: self.authority, **kw)
+
+    def assert_kept_failed(self, response, reason):
+        self.assertEqual(502, response.status)
+        body = json.loads(response.body)
+        self.assertEqual(("bridge_unavailable", "bridge_unavailable", reason),
+                         (body["kind"], body["error"]["code"], body["reason"]))
+        row, = self.spool_rows()
+        self.assertEqual(body["delivery_id"], row["id"])
+        self.assertEqual(("failed", 1, reason, None), (row["status"], row["attempts"], row["last_error"],
+                                                       row["trigger"]))
+        self.assertEqual("冷的", row["text"])
+        # Final at once: no injection core would refuse, no retry sleeps.
+        self.assertEqual([], self.ctx.calls)
+        self.assertEqual([], self.sleeps)
+
+    def test_red_unchecked_bridge_records_delivered_while_core_refuses(self):
+        # The gap: inject True + core's later not_found still spools delivered.
+        self.install_checked(envelope=False)
+        response = self.drive(self.chat("冷的"))
+        self.assertEqual(202, response.status)
+        self.assertEqual(["not_found"], self.core_verdicts)
+        self.assertEqual("delivered", self.spool_rows()[0]["status"])
+
+    def test_cold_route_stream_answers_502_and_keeps_the_row_failed(self):
+        self.install_checked()
+        response = self.drive(self.stream("冷的"))
+        self.assert_kept_failed(response, crosssource.NO_ENVELOPE)
+        self.assertEqual([], self.adapter.sinks)  # no SSE head: a plain 502 the client reads
+        self.assertEqual([], self.core_verdicts)
+
+    def test_cold_route_chat_answers_502_and_keeps_the_row_failed(self):
+        self.install_checked()
+        self.assert_kept_failed(self.drive(self.chat("冷的")), crosssource.NO_ENVELOPE)
+
+    def test_envelope_without_provenance_is_still_cold(self):
+        self.add_human_turn(provenance=False)
+        self.install_checked()
+        self.assert_kept_failed(self.drive(self.chat("冷的")), crosssource.NO_ENVELOPE)
+
+    def test_missing_or_suspended_route_entry_answers_502(self):
+        self.install_checked()
+        for entry in (None, route_entry(origin=False), route_entry(suspended=True)):
+            with self.subTest(entry=entry):
+                self.authority.runner.session_store.entries[DISCORD_KEY] = entry
+                with closing_spool(self.spool_path):
+                    self.assert_kept_failed(self.drive(self.chat("冷的")), crosssource.NO_ROUTE)
+
+    def test_hot_route_injects_as_before(self):
+        self.add_human_turn()
+        self.install_checked()
+        response = self.drive(self.chat("熱的"))
+        self.assertEqual(202, response.status)
+        self.assertEqual(1, len(self.ctx.calls))
+        self.assertEqual(["admitted"], self.core_verdicts)
+        row, = self.spool_rows()
+        self.assertEqual(("delivered", 1, "injected"), (row["status"], row["attempts"], row["trigger"]))
+
+    def test_envelope_is_read_under_the_logical_owner(self):
+        # Admissions belong to the logical root; the route entry names the transcript tip.
+        self.add_human_turn()
+        self.authority.runner.session_store.entries[DISCORD_KEY] = route_entry("tip_after_compression")
+        self.authority.logical_owner = lambda sid: DISCORD_SID if sid == "tip_after_compression" else sid
+        self.install_checked()
+        self.assertEqual(202, self.drive(self.chat("熱的")).status)
+
+    def test_drain_keeps_a_cold_row_failed_and_replays_it_once_the_route_is_warm(self):
+        self.install_checked()
+        self.drive(self.chat("冷的"))
+        row_id = self.spool_rows()[0]["id"]
+        self.assertEqual({row_id: crosssource.NO_ENVELOPE}, self.drive(lambda: self.bridge.drain(self.adapter)))
+        self.assertEqual(("failed", 2), (self.spool_rows()[0]["status"], self.spool_rows()[0]["attempts"]))
+        self.assertEqual([], self.ctx.calls)
+        self.add_human_turn()
+        self.assertEqual({row_id: None}, self.drive(lambda: self.bridge.drain(self.adapter)))
+        row, = self.spool_rows()
+        self.assertEqual(("delivered", 3, "injected"), (row["status"], row["attempts"], row["trigger"]))
+        self.assertEqual(["admitted"], self.core_verdicts)
+
+    def test_check_never_blocks_what_it_cannot_judge(self):
+        import types
+        cases = {"no authority": lambda adapter: None,
+                 "no store": lambda adapter: FakeAuthority(),
+                 "raising": lambda adapter: types.SimpleNamespace(
+                     runner=types.SimpleNamespace(session_store=RouteStore({DISCORD_KEY: route_entry()})))}
+        for name, getter in cases.items():
+            with self.subTest(name), closing_spool(self.spool_path):
+                self.ctx = FakeCtx([True])
+                self.install(authority_getter=getter)
+                self.assertEqual(202, self.drive(self.chat(name)).status)
+                self.assertEqual(1, len(self.ctx.calls))
+
+    def test_envelope_seams_hold_on_this_core(self):
+        self.assertIsNone(crosssource.check_envelope_seams())
+
+
+class closing_spool:
+    """Each subTest starts from an empty spool."""
+
+    def __init__(self, path):
+        self.path = path
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        if self.path.exists():
+            with sqlite3.connect(self.path) as conn:
+                conn.execute("DELETE FROM outbox")
+        return False
 
 
 if __name__ == "__main__":

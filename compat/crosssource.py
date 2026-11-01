@@ -51,6 +51,17 @@ session's running (else newest pending) admission, projected in the shape core's
 ``run_projection`` gives an API run; nothing found reads as terminal. Ids it never
 issued resolve to ``None`` and keep the native routes.
 
+Honest injection (TASK-COLDTURN): core's ``inject_message`` answers True once the turn is
+scheduled (gateway/run_plugin_injection.py:110); the authority's verdict on the admission only
+reaches the gateway log. Under an authority a plugin turn borrows the route's last committed
+native envelope with provenance (``session_automation.committed_route_envelope``) and is
+refused ``not_found`` while the route has none (``snapshot_automation``), i.e. while no human
+message was admitted there. So before each attempt the bridge asks core's own function the
+same question (``route_refusal``): no envelope (or no live route entry) is a final failure
+without an injection, a plain 502 ``bridge_unavailable`` with the row kept ``failed`` for a
+later drain, never ``delivered``. Without an authority (core's standalone path needs no
+envelope), or when the check itself cannot run, the attempt proceeds as before.
+
 No core file is written, no admission or whitelist is bypassed.
 """
 from __future__ import annotations
@@ -127,6 +138,9 @@ CREATE TABLE IF NOT EXISTS outbox (
 # Columns added after the first schema shipped; old spool files gain them on open.
 _ADDED_COLUMNS = (("message_id", "TEXT"), ("trigger", "TEXT"))
 _UNDELIVERED = ("pending", "failed")
+# Pre-injection refusals core would give asynchronously; final at once, never retried in-request.
+NO_ENVELOPE = "no_route_envelope"
+NO_ROUTE = "route_not_found"
 
 
 def thread_id_from_key(session_key):
@@ -209,11 +223,58 @@ class Outbox:
             return [dict(r) for r in conn.execute("SELECT * FROM outbox ORDER BY created_at")]
 
 
+def route_refusal(authority, session_key):
+    """The refusal core's authority would give a plugin turn on ``session_key``, decided before
+    the injection: ``NO_ROUTE`` where the dispatch finds no live route entry
+    (``_dispatch_plugin_message_injection`` / ``session_automation._owner``), ``NO_ENVELOPE``
+    where ``committed_route_envelope`` finds no native human envelope, else ``None``."""
+    from gateway.session_automation import committed_route_envelope
+    entry = authority.runner.session_store.lookup_by_session_key(session_key)
+    if entry is None or entry.origin is None or entry.suspended:
+        return NO_ROUTE
+    return NO_ENVELOPE if committed_route_envelope(authority, entry) is None else None
+
+
+def check_envelope_seams():
+    """Load-time drift check of the core refusal ``route_refusal`` mirrors. ``None`` when it
+    holds, else the first broken piece; the caller logs it and injects unchecked."""
+    try:
+        from gateway import run_plugin_injection, session_automation
+    except Exception as exc:
+        return f"import:{type(exc).__name__}"
+    mixin = getattr(run_plugin_injection, "GatewayPluginInjectionMixin", None)
+    sources = (
+        (getattr(session_automation, "committed_route_envelope", None),
+         ("authority.logical_owner(entry.session_id)", "'native_text_v1' in r['payload']",
+          "'provenance' in envelope else None")),
+        (getattr(session_automation, "snapshot_automation", None),
+         ("envelope = committed_route_envelope(authority, entry)",
+          "if envelope is None:\n        raise RuntimeStoreError('not_found')")),
+        (getattr(session_automation, "_owner", None), ("if entry is None or entry.suspended:",)),
+        (getattr(mixin, "_dispatch_plugin_message_injection", None),
+         ("lookup_by_session_key(session_key)", "if entry is None or entry.origin is None",
+          "session_id=entry.session_id")),
+    )
+    for func, needles in sources:
+        if func is None:
+            return "missing:" + needles[0]
+        try:
+            text = inspect.getsource(func)
+        except (OSError, TypeError):
+            return f"source:{getattr(func, '__qualname__', func)}"
+        for needle in needles:
+            if needle not in text:
+                return f"{func.__qualname__}:{needle}"
+    return None
+
+
 class Bridge:
-    def __init__(self, outbox, ctx_getter, sleep=asyncio.sleep):
+    def __init__(self, outbox, ctx_getter, sleep=asyncio.sleep, authority_getter=None):
         self.outbox = outbox
         self.ctx_getter = ctx_getter
         self.sleep = sleep
+        # ``None``: inject unchecked (no envelope check, the pre-COLDTURN behaviour).
+        self.authority_getter = authority_getter
         # One delivery per row at a time: a resend or a drain waits for the one in flight.
         self._locks = weakref.WeakValueDictionary()
         self._drain_armed = False
@@ -225,6 +286,20 @@ class Bridge:
         if outcome == "injected":
             return None, None
         return outcome, None
+
+    def _refusal(self, api_adapter, session_key):
+        """``route_refusal`` under the adapter's authority; ``None`` (inject) without an authority,
+        a store, or when the check raises: the check never blocks what it cannot judge."""
+        if self.authority_getter is None:
+            return None
+        try:
+            authority = self.authority_getter(api_adapter)
+            if authority is None or getattr(getattr(authority, "runner", None), "session_store", None) is None:
+                return None
+            return route_refusal(authority, session_key)
+        except Exception as exc:
+            log.warning("crosssource envelope check unavailable for %s: %s", session_key, type(exc).__name__)
+            return None
 
     def _trigger(self, session_key, text):
         """Ask core to run a turn for the delivered text; the outcome is only recorded."""
@@ -252,6 +327,15 @@ class Bridge:
             platform, session_key, text = row["platform"], row["session_key"], row["text"]
             text = text.removesuffix(_LEGACY_MARK)
             attempts, error = row["attempts"], None
+            refusal = await asyncio.to_thread(self._refusal, api_adapter, session_key)
+            if refusal is not None:
+                # Core would refuse this admission after inject_message already said True: fail
+                # here, keep the text for a drain once the route has a human envelope.
+                await asyncio.to_thread(self.outbox.record, row_id, attempts=attempts + 1, status="failed",
+                                        error=refusal)
+                log.warning("crosssource %s not injected into %s session %s: %s",
+                            row_id, platform, row["session_id"], refusal)
+                return row_id, refusal, False
             for attempt in range(1, MAX_ATTEMPTS + 1):
                 attempts += 1
                 error = (await self._attempt(api_adapter, platform, session_key, text))[0]
@@ -732,12 +816,13 @@ class SyntheticRuns:
 
 def install(api, cls, tx, *, ctx_getter, spool_path, sleep=asyncio.sleep, authority_getter=_core_authority,
             progress=True, admission_wait=ADMISSION_WAIT_SECONDS, keepalive=None, runs=None,
-            synthetic=True):
+            synthetic=True, envelope=True):
     """Wrap ``cls._handle_session_chat`` and ``cls._handle_session_chat_stream``. ``progress``
     False (a failed seam check) keeps the queued handoff on the stream route. With ``runs``
     (``gateway.platforms.api_server_runs``) and ``synthetic``, ``GET /v1/runs/{id}`` answers
-    the stream route's synthetic ids (``bridge.runs``); every other id stays native."""
-    bridge = Bridge(Outbox(spool_path), ctx_getter, sleep)
+    the stream route's synthetic ids (``bridge.runs``); every other id stays native. ``envelope``
+    False (a failed ``check_envelope_seams``) injects without the route envelope check."""
+    bridge = Bridge(Outbox(spool_path), ctx_getter, sleep, authority_getter if envelope else None)
     bridge.runs = SyntheticRuns(authority_getter)
     if keepalive is None:
         keepalive = float(getattr(api, "CHAT_COMPLETIONS_SSE_KEEPALIVE_SECONDS", _KEEPALIVE_DEFAULT))
