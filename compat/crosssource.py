@@ -38,11 +38,25 @@ every ``pending`` and ``failed`` row; it runs once after each load. A row whose
 message is older than ``DRAIN_MAX_AGE_SECONDS`` is marked ``stale-dropped`` and
 never injected: a days-old question must not come back as a new turn.
 
+Synthetic run ids (TASK-SYNTHRUN): the stream route names its turn with a
+``run_<hex>`` id core never issued (the injection is an automation admission, not
+an API run), so ``GET /v1/runs/{id}`` and the steer routes answered 404 for it and
+the app dropped its steer button. ``SyntheticRuns`` remembers each id it hands out
+as ``id -> (session id, session key[, admission id])``: bounded (``SYNTHETIC_RUNS_CAP``),
+held while its stream is open, then kept ``SYNTHETIC_GRACE_SECONDS`` past the
+stream's end so the app's closing polls read a terminal state instead of a 404,
+and never longer than ``SYNTHETIC_MAX_AGE_SECONDS``. ``resolve`` answers the
+session's real state in its authority: the admission the follow saw, else the
+session's running (else newest pending) admission, projected in the shape core's
+``run_projection`` gives an API run; nothing found reads as terminal. Ids it never
+issued resolve to ``None`` and keep the native routes.
+
 No core file is written, no admission or whitelist is bypassed.
 """
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from contextlib import closing
 from functools import wraps
 import inspect
@@ -52,6 +66,7 @@ import os
 from pathlib import Path
 import re
 import sqlite3
+import threading
 import time
 import uuid
 import weakref
@@ -87,6 +102,13 @@ ATTACH_POLL_SECONDS = 0.05
 _TURN_TIMEOUT_ENV, _TURN_TIMEOUT_DEFAULT = "HERMES_AGENT_TIMEOUT", 1800.0
 _KEEPALIVE_DEFAULT = 10.0
 _KEEPALIVE_FRAME = b": keepalive\n\n"
+# Synthetic run ids: at most this many remembered; a closed stream's id answers this long
+# after the stream ended; no id outlives this age, open stream or not.
+SYNTHETIC_RUNS_CAP = 256
+SYNTHETIC_GRACE_SECONDS = 300.0
+SYNTHETIC_MAX_AGE_SECONDS = 24 * 3600.0
+_TERMINAL_STATUS = {"run.completed": "completed", "run.failed": "failed", "run.cancelled": "cancelled",
+                    "run.interrupted": "interrupted"}
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS outbox (
@@ -407,6 +429,7 @@ class Follow:
         self.mark = None
         self.events = None
         self.ended = None
+        self.target = None  # the admission id this send became, once session.info names it
         self._queue = asyncio.Queue()
         self._loop = asyncio.get_running_loop()
 
@@ -487,7 +510,7 @@ class Follow:
                         candidates[pending.get("admission_id")] = pending.get("sequence") or 0
                 if candidates:
                     # The newest matching row is this send; an older identical one queued earlier is not.
-                    target = max(candidates, key=candidates.get)
+                    target = self.target = max(candidates, key=candidates.get)
                 continue
             admission = params.get("admission_id") or payload.get("admission_id")
             if target is None or admission != target:
@@ -545,11 +568,177 @@ def _owner(authority, session):
     return authority.logical_owner(sid)
 
 
+def check_synthetic_seams():
+    """Load-time drift check of the core pieces ``SyntheticRuns.resolve`` reads and the run
+    projection it mirrors. ``None`` when they hold, else the first broken one; the caller logs
+    it and leaves synthetic ids unresolved (the native 404)."""
+    try:
+        import hermes_state_runtime
+        from gateway.platforms import api_server_authority_runs
+        from gateway.platforms.api_server_runs import terminal_run_status  # noqa: F401
+        from gateway.session_results import admission_result  # noqa: F401
+    except Exception as exc:
+        return f"import:{type(exc).__name__}"
+    for name in ("_row", "list_session_admissions"):
+        if not callable(getattr(hermes_state_runtime, name, None)):
+            return f"hermes_state_runtime.{name}"
+    try:
+        text = inspect.getsource(api_server_authority_runs.run_projection)
+    except (AttributeError, OSError, TypeError):
+        return "source:run_projection"
+    for needle in ("{'queued': 'queued', 'started': 'running', 'unknown': 'unknown', 'terminal': row['outcome']}",
+                   "live.controls.snapshot(row['target_session_id'], row['generation'])",
+                   "status = terminal_run_status(result)[0]",
+                   "'admission_id': row['admission_id'], 'execution_generation': row['generation'],"):
+        if needle not in text:
+            return f"run_projection:{needle}"
+    return None
+
+
+def _projection(authority, row, run_id, session_id):
+    """Core's ``run_projection`` for an admission it would not look up by run id (a plugin
+    injection is not an ``api`` principal row): same status mapping, same fields. ``session_id``
+    is the session the app addressed, as on this run's SSE frames."""
+    from gateway.session_results import admission_result
+    status = {"queued": "queued", "started": "running", "unknown": "unknown",
+              "terminal": row["outcome"]}.get(row["status"])
+    saved = admission_result(authority.db, row["admission_id"]) if row["status"] == "terminal" else None
+    result = saved.get("result", {}) if saved else {}
+    if row["status"] == "terminal":
+        if result.get("interrupted") or row["outcome"] == "interrupted":
+            status = "cancelled"
+        elif result.get("failed") or result.get("error"):
+            status = "failed"
+        elif row["outcome"] == "completed" and saved:
+            from gateway.platforms.api_server_runs import terminal_run_status
+            status = terminal_run_status(result)[0]
+    pending = []
+    live = authority.sessions.get(row["target_session_id"])
+    controls = getattr(live, "controls", None)
+    if controls is not None and row["status"] == "started":
+        pending = list(controls.snapshot(row["target_session_id"], row["generation"]))
+        if any(prompt.get("kind") == "approval" for prompt in pending):
+            status = "waiting_for_approval"
+    return {"object": "hermes.run", "pending_controls": pending, "run_id": run_id, "status": status,
+            "session_id": session_id, "admission_id": row["admission_id"],
+            "execution_generation": row["generation"], "output": result.get("final_response", ""),
+            "usage": saved.get("usage", {}) if saved else {}}
+
+
+class SyntheticRun:
+    """One resolved synthetic id: ``status`` is the GET /v1/runs/{id} body, ``binding`` the
+    ``(authority, admission row)`` the steer admission binds through (``None``: nothing to bind)."""
+
+    def __init__(self, status, binding=None):
+        self.status, self.binding = status, binding
+
+    @property
+    def steerable(self):
+        # core _handle_steer_run: only a running run takes a steer.
+        return self.binding is not None and self.status.get("status") == "running"
+
+
+class SyntheticRuns:
+    """The run ids the stream route minted, ``id -> session``; see the module docstring for
+    the expiry policy. Thread-safe: steer admission resolves off the loop."""
+
+    def __init__(self, authority_getter, *, cap=SYNTHETIC_RUNS_CAP, grace=SYNTHETIC_GRACE_SECONDS,
+                 max_age=SYNTHETIC_MAX_AGE_SECONDS, clock=time.time):
+        self.authority_getter = authority_getter
+        self.cap, self.grace, self.max_age, self.clock = cap, grace, max_age, clock
+        self._entries = OrderedDict()
+        self._lock = threading.Lock()
+
+    def __len__(self):
+        with self._lock:
+            self._prune(self.clock())
+            return len(self._entries)
+
+    def _prune(self, now):
+        for run_id, entry in list(self._entries.items()):
+            if now - entry["issued_at"] >= self.max_age or (
+                    entry["expires_at"] is not None and now >= entry["expires_at"]):
+                del self._entries[run_id]
+
+    def issue(self, session):
+        """A new id for one stream of ``session``, held until ``release``."""
+        run_id = f"run_{uuid.uuid4().hex}"
+        with self._lock:
+            now = self.clock()
+            self._prune(now)
+            while len(self._entries) >= self.cap:
+                # Released ids go first; only then the oldest open stream's.
+                released = next((k for k, e in self._entries.items() if e["expires_at"] is not None), None)
+                self._entries.pop(released if released is not None else next(iter(self._entries)))
+            self._entries[run_id] = {"session_id": session["id"], "session_key": session["session_key"],
+                                     "admission_id": None, "terminal": None, "issued_at": now,
+                                     "expires_at": None}
+        return run_id
+
+    def bind(self, run_id, admission_id):
+        with self._lock:
+            entry = self._entries.get(run_id)
+            if entry is not None and admission_id:
+                entry["admission_id"] = admission_id
+
+    def release(self, run_id, ended=None):
+        """The stream ended (``ended``: the follow's end, ``run.<status>`` when it saw one)."""
+        with self._lock:
+            entry = self._entries.get(run_id)
+            if entry is not None:
+                entry["terminal"] = _TERMINAL_STATUS.get(ended)
+                entry["expires_at"] = self.clock() + self.grace
+
+    def entry(self, run_id):
+        if not isinstance(run_id, str):
+            return None
+        with self._lock:
+            self._prune(self.clock())
+            entry = self._entries.get(run_id)
+            return dict(entry) if entry is not None else None
+
+    def _admission(self, authority, entry):
+        from hermes_state_runtime import _row, list_session_admissions
+        if entry["admission_id"]:
+            with authority.db._read_ctx() as conn:
+                found = conn.execute("SELECT * FROM session_admissions WHERE admission_id=?",
+                                     (entry["admission_id"],)).fetchone()
+            return _row(found)
+        # Before the follow names its admission (or with no follow): the session's turn.
+        owner = _owner(authority, {"id": entry["session_id"], "session_key": entry["session_key"]})
+        pending = list_session_admissions(authority.db, session_id=owner)
+        started = [row for row in pending if row["status"] == "started"]
+        return started[0] if started else (pending[-1] if pending else None)
+
+    def resolve(self, adapter, run_id):
+        """``None`` for an id this registry never issued (or forgot), else a ``SyntheticRun``."""
+        entry = self.entry(run_id)
+        if entry is None:
+            return None
+        try:
+            authority = self.authority_getter(adapter)
+            row = self._admission(authority, entry) if authority is not None else None
+            if row is not None:
+                return SyntheticRun(_projection(authority, row, run_id, entry["session_id"]), (authority, row))
+        except Exception as exc:
+            log.warning("crosssource synthetic run %s unresolved: %s", run_id, type(exc).__name__)
+        # No admission to report: the turn is over (or never became one) as far as the
+        # authority knows, so the run reads terminal, never as a live run nothing backs.
+        return SyntheticRun({"object": "hermes.run", "pending_controls": [], "run_id": run_id,
+                             "status": entry["terminal"] or "completed",
+                             "session_id": entry["session_id"], "admission_id": entry["admission_id"],
+                             "execution_generation": None, "output": "", "usage": {}})
+
+
 def install(api, cls, tx, *, ctx_getter, spool_path, sleep=asyncio.sleep, authority_getter=_core_authority,
-            progress=True, admission_wait=ADMISSION_WAIT_SECONDS, keepalive=None):
+            progress=True, admission_wait=ADMISSION_WAIT_SECONDS, keepalive=None, runs=None,
+            synthetic=True):
     """Wrap ``cls._handle_session_chat`` and ``cls._handle_session_chat_stream``. ``progress``
-    False (a failed seam check) keeps the queued handoff on the stream route."""
+    False (a failed seam check) keeps the queued handoff on the stream route. With ``runs``
+    (``gateway.platforms.api_server_runs``) and ``synthetic``, ``GET /v1/runs/{id}`` answers
+    the stream route's synthetic ids (``bridge.runs``); every other id stays native."""
     bridge = Bridge(Outbox(spool_path), ctx_getter, sleep)
+    bridge.runs = SyntheticRuns(authority_getter)
     if keepalive is None:
         keepalive = float(getattr(api, "CHAT_COMPLETIONS_SSE_KEEPALIVE_SECONDS", _KEEPALIVE_DEFAULT))
     old_chat = cls._handle_session_chat
@@ -628,12 +817,18 @@ def install(api, cls, tx, *, ctx_getter, spool_path, sleep=asyncio.sleep, author
             return unavailable(session, row_id, error)
         if not injected:
             follow = None  # a resend folded into a delivered row started no turn to follow
-        sid, run_id, seq = session["id"], f"run_{uuid.uuid4().hex}", 0
-        response = await self._prepare_sse_response(request, sid, None)
+        sid, run_id, seq = session["id"], bridge.runs.issue(session), 0
+        try:
+            response = await self._prepare_sse_response(request, sid, None)
+        except BaseException:
+            bridge.runs.release(run_id)
+            raise
 
         async def write(name, payload):
             nonlocal seq
             seq += 1
+            if follow is not None and follow.target is not None:
+                bridge.runs.bind(run_id, follow.target)
             payload = {"session_id": sid, "run_id": run_id, "seq": seq, "ts": time.time(), **payload}
             await response.write(api._sse_frame(payload, event=name, ensure_ascii=False))
 
@@ -660,8 +855,24 @@ def install(api, cls, tx, *, ctx_getter, spool_path, sleep=asyncio.sleep, author
             # turn belongs to the Discord session and keeps running there.
             if follow is not None:
                 follow.close()
+                bridge.runs.bind(run_id, follow.target)
+            bridge.runs.release(run_id, follow.ended if follow is not None else None)
         return response
 
     tx.set(cls, "_handle_session_chat", chat)
     tx.set(cls, "_handle_session_chat_stream", stream)
+    if runs is not None and synthetic:
+        old_get_run = runs._handle_get_run
+
+        @wraps(old_get_run)
+        async def get_run(self, request, *args, **kwargs):
+            found = bridge.runs.resolve(self, request.match_info.get("run_id"))
+            if found is None:
+                return await old_get_run(self, request, *args, **kwargs)
+            auth_err = self._check_auth(request)
+            if auth_err is not None:
+                return auth_err
+            return api.web.json_response(found.status)
+
+        tx.set(runs, "_handle_get_run", get_run)
     return bridge

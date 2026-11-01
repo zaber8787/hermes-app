@@ -181,13 +181,37 @@ def _verdict(status: str, *, agent, epoch_ok: bool):
     return "closed", "run_state_unknown"
 
 
+_synthetic_resolver = None  # crosssource SyntheticRuns.resolve, set by its installer
+
+
+def set_synthetic_resolver(resolver) -> None:
+    global _synthetic_resolver
+    _synthetic_resolver = resolver
+
+
+def synthetic_run(adapter, run_id):
+    """TASK-SYNTHRUN: the crosssource stream route's own run id (core never
+    issued it) resolved to its Discord session's authority state, else None
+    (every other id, or no resolver installed)."""
+    resolver = _synthetic_resolver
+    if resolver is None or not isinstance(run_id, str):
+        return None
+    return resolver(adapter, run_id)
+
+
 def authority_binding(adapter, run_id):
     """(authority, admission row) when the core's session authority owns
     *run_id*: a /v1/runs admission by request id, or a streaming run through
     the alias its request holds while it observes the turn
     (session_api_turn.run_api_turn). None without an authority or for a run
     the legacy executor owns. RuntimeStoreError (duplicate admissions for one
-    run) propagates: that ownership question has no answer."""
+    run) propagates: that ownership question has no answer.
+
+    TASK-SYNTHRUN: a crosssource synthetic id binds to its session's
+    admission, re-resolved here under the run guard."""
+    synthetic = synthetic_run(adapter, run_id)
+    if synthetic is not None:
+        return synthetic.binding
     runner = getattr(adapter, "gateway_runner", None)
     if getattr(runner, "session_authority", None) is None:
         return None

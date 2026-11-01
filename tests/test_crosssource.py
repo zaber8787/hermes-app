@@ -232,6 +232,7 @@ def make_adapter_class(db):
 class Tx:
     def __init__(self):
         self.changes = []
+        self.cleanups = []
 
     def set(self, target, name, value):
         self.changes.append((target, name, getattr(target, name)))
@@ -630,6 +631,200 @@ class Drain(CrossSourceBase):
         bridge.schedule_drain.assert_called_once_with("adapter", loop)
 
 
+class Clock:
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+SESSION = {"id": DISCORD_SID, "session_key": DISCORD_KEY}
+
+
+class SyntheticRunLifecycle(unittest.TestCase):
+    """TASK-SYNTHRUN: the ids the stream route mints are remembered, bounded and expire."""
+
+    def runs(self, **kw):
+        self.clock = Clock()
+        return crosssource.SyntheticRuns(lambda adapter: None, clock=self.clock, **kw)
+
+    def test_issued_id_is_held_until_release_then_kept_for_the_grace(self):
+        runs = self.runs(grace=60, max_age=3600)
+        run_id = runs.issue(SESSION)
+        self.assertRegex(run_id, r"^run_[0-9a-f]{32}$")
+        self.clock.now += 3000  # an open stream outlives any grace
+        self.assertEqual(runs.entry(run_id)["session_key"], DISCORD_KEY)
+        self.assertIsNone(runs.entry(run_id)["expires_at"])
+        runs.release(run_id, "run.failed")
+        self.assertEqual(runs.entry(run_id)["terminal"], "failed")
+        self.clock.now += 59
+        self.assertIsNotNone(runs.entry(run_id))
+        self.clock.now += 1
+        self.assertIsNone(runs.entry(run_id))
+        self.assertEqual(len(runs), 0)
+
+    def test_a_held_id_never_outlives_max_age(self):
+        runs = self.runs(grace=60, max_age=3600)
+        run_id = runs.issue(SESSION)
+        self.clock.now += 3600
+        self.assertIsNone(runs.entry(run_id))
+
+    def test_cap_evicts_released_ids_before_open_streams(self):
+        runs = self.runs(cap=3)
+        held, released, newer = runs.issue(SESSION), runs.issue(SESSION), runs.issue(SESSION)
+        runs.release(released)
+        latest = runs.issue(SESSION)
+        self.assertEqual(len(runs), 3)
+        self.assertIsNone(runs.entry(released))
+        self.assertIsNotNone(runs.entry(held))
+        runs.issue(SESSION)  # nothing released left: the oldest open id goes
+        self.assertIsNone(runs.entry(held))
+        self.assertIsNotNone(runs.entry(newer))
+        self.assertIsNotNone(runs.entry(latest))
+
+    def test_bind_and_unknown_ids(self):
+        runs = self.runs()
+        run_id = runs.issue(SESSION)
+        runs.bind(run_id, "adm_1")
+        runs.bind(run_id, None)  # a follow that never saw its admission binds nothing
+        self.assertEqual(runs.entry(run_id)["admission_id"], "adm_1")
+        self.assertIsNone(runs.entry("run_" + "0" * 32))
+        self.assertIsNone(runs.entry(None))
+        self.assertIsNone(runs.resolve("adapter", "run_" + "0" * 32))
+
+
+class StoreAuthority(FakeAuthority):
+    """FakeAuthority over the test's real SessionDB, which carries core's session_admissions."""
+
+    def __init__(self, db):
+        super().__init__()
+        self.db = db
+
+
+class SyntheticRunEndpoints(CrossSourceBase):
+    """GET /v1/runs/{id} for the stream route's own id answers the Discord session's authority
+    state; every other id keeps the native handler."""
+
+    def setUp(self):
+        super().setUp()
+        self.native_get = []
+
+        async def native_get_run(adapter, request, *, _api_server=None):
+            self.native_get.append(request.match_info["run_id"])
+            return web.json_response({"error": {"code": "run_not_found"}}, status=404)
+        import types
+        self.runs_module = types.SimpleNamespace(_handle_get_run=native_get_run)
+        self.authority = StoreAuthority(self.db)
+
+    def add_admission(self, admission_id, status, *, generation=None, outcome=None, principal="plugin"):
+        with sqlite3.connect(self.tmp / "state.db") as conn:
+            conn.execute(
+                "INSERT INTO session_admissions(admission_id, request_id, principal_id, target_session_id,"
+                " lineage_json, payload_json, payload_digest, intent, status, outcome, owner_epoch, generation)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                (admission_id, plugin_identity(DISCORD_KEY), principal, DISCORD_SID, "[]", "{}", "d", "queue",
+                 status, outcome, 1 if generation is not None else None, generation))
+
+    def settle(self, admission_id, outcome="completed"):
+        with sqlite3.connect(self.tmp / "state.db") as conn:
+            conn.execute("UPDATE session_admissions SET status='terminal', outcome=? WHERE admission_id=?",
+                         (outcome, admission_id))
+
+    def install_routes(self, **kw):
+        self.install(authority_getter=lambda adapter: self.authority, runs=self.runs_module, **kw)
+        self.bridge.runs.clock = self.clock = Clock(time.time())
+
+    def get(self, run_id, auth="Bearer ok"):
+        req = make_mocked_request("GET", f"/v1/runs/{run_id}", headers={"authorization": auth},
+                                  match_info={"run_id": run_id})
+        response = self.drive(lambda: self.runs_module._handle_get_run(self.adapter, req, _api_server=FakeApi))
+        return response.status, json.loads(response.body)
+
+    def test_stream_id_reports_the_bound_admission_through_its_terminal_state(self):
+        # Red before TASK-SYNTHRUN: the id is unknown to /v1/runs (access log: two 404s).
+        self.authority = FakeAuthority()
+        self.turn = ScriptedTurn(self.authority, DISCORD_SID, [("delta", "hi")], response="hi")
+        self.authority = StoreAuthority(self.db)
+        self.turn.authority = self.authority
+        self.ctx = FakeCtx([], on_inject=self.turn)
+        self.install(authority_getter=lambda adapter: self.authority, admission_wait=2, keepalive=5,
+                     runs=self.runs_module)
+        self.add_admission(self.turn.admission_id, "started", generation=1)
+        self.drive(self.stream("hello"))
+        self.turn.thread.join(2)
+        events = self.adapter.sinks[0].events()
+        run_id = events[0][1]["run_id"]
+        self.assertEqual(events[0][0], "run.started")
+        entry = self.bridge.runs.entry(run_id)
+        self.assertEqual(entry["admission_id"], self.turn.admission_id)
+        self.assertEqual(entry["terminal"], "completed")
+        self.assertIsNotNone(entry["expires_at"])
+        status, body = self.get(run_id)
+        self.assertEqual(status, 200, body)
+        # The authority row still says started: the real state wins over the stream's view.
+        self.assertEqual(body["status"], "running")
+        self.assertEqual(body["admission_id"], self.turn.admission_id)
+        self.assertEqual(body["execution_generation"], 1)
+        self.assertEqual(body["session_id"], DISCORD_SID)
+        self.assertEqual(body["object"], "hermes.run")
+        self.settle(self.turn.admission_id)
+        status, body = self.get(run_id)
+        self.assertEqual((status, body["status"]), (200, "completed"))
+        self.assertEqual(self.native_get, [])
+        self.bridge.runs.clock = lambda: time.time() + crosssource.SYNTHETIC_GRACE_SECONDS + 1
+        status, body = self.get(run_id)
+        self.assertEqual(status, 404)
+        self.assertEqual(self.native_get, [run_id])
+
+    def test_unbound_id_reports_the_sessions_running_turn_else_terminal(self):
+        self.install_routes()
+        run_id = self.bridge.runs.issue(SESSION)
+        status, body = self.get(run_id)
+        self.assertEqual((status, body["status"], body["admission_id"]), (200, "completed", None))
+        self.add_admission("adm_queued", "queued")
+        self.assertEqual(self.get(run_id)[1]["status"], "queued")
+        self.add_admission("adm_run", "started", generation=4)
+        status, body = self.get(run_id)
+        self.assertEqual((body["status"], body["admission_id"], body["execution_generation"]),
+                         ("running", "adm_run", 4))
+        found = self.bridge.runs.resolve(self.adapter, run_id)
+        self.assertTrue(found.steerable)
+        self.assertEqual(found.binding[1]["generation"], 4)
+
+    def test_terminal_outcomes_follow_core_projection(self):
+        self.install_routes()
+        run_id = self.bridge.runs.issue(SESSION)
+        self.bridge.runs.bind(run_id, "adm_x")
+        self.add_admission("adm_x", "terminal", outcome="interrupted")
+        status, body = self.get(run_id)
+        self.assertEqual((status, body["status"]), (200, "cancelled"))
+        self.assertFalse(self.bridge.runs.resolve(self.adapter, run_id).steerable)
+
+    def test_non_synthetic_ids_and_auth(self):
+        self.install_routes()
+        status, _ = self.get("run_native")
+        self.assertEqual((status, self.native_get), (404, ["run_native"]))
+        run_id = self.bridge.runs.issue(SESSION)
+        status, _ = self.get(run_id, auth="Bearer nope")
+        self.assertEqual(status, 401)
+        self.assertEqual(self.native_get, ["run_native"])
+
+    def test_synthetic_false_leaves_get_native(self):
+        self.install_routes(synthetic=False)
+        run_id = self.bridge.runs.issue(SESSION)
+        self.assertEqual(self.get(run_id)[0], 404)
+        self.assertEqual(self.native_get, [run_id])
+
+    def test_unreadable_authority_reads_terminal_not_live(self):
+        self.install_routes()
+        self.authority = FakeAuthority()  # no db: the lookup raises
+        run_id = self.bridge.runs.issue(SESSION)
+        status, body = self.get(run_id)
+        self.assertEqual((status, body["status"]), (200, "completed"))
+        self.assertIsNone(self.bridge.runs.resolve(self.adapter, run_id).binding)
+
+
 class RealSeamWiring(unittest.TestCase):
     """The unit binds onto the real APIServerAdapter and Transaction restores it."""
 
@@ -646,14 +841,23 @@ class RealSeamWiring(unittest.TestCase):
         c.api = api_server
         if not state_existed:
             setattr(api_server, c._STATE, {"groups": {}, "manifest": {}})
+        from compat import steer_inbox
+        from gateway.platforms import api_server_runs
+        native_get_run = api_server_runs._handle_get_run
         tx = c.Transaction()
         try:
             c._install_crosssource(tx)
             self.assertIsNot(before[0], cls.__dict__["_handle_session_chat"])
             self.assertIsNot(before[1], cls.__dict__["_handle_session_chat_stream"])
             self.assertTrue(pathlib.Path(home, "crosssource_spool.db").exists())
+            state = getattr(api_server, c._STATE)
+            self.assertEqual(state["crosssource_synthetic"], {"status": "applied"})
+            self.assertIsNot(native_get_run, api_server_runs._handle_get_run)
+            self.assertEqual(steer_inbox._synthetic_resolver, state["crosssource"].runs.resolve)
         finally:
             tx.restore()
+            self.assertIs(native_get_run, api_server_runs._handle_get_run)
+            self.assertIsNone(steer_inbox._synthetic_resolver)
             if not state_existed:
                 delattr(api_server, c._STATE)
             c.api = saved[0]

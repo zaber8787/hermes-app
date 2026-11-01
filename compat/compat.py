@@ -860,9 +860,30 @@ def _install_crosssource(tx):
     if broken:
         log.error("CROSSSOURCE PROGRESS DISABLED: core seam drifted (%s); Discord-session streams "
                   "fall back to run.queued + done until compat is reviewed against this core", broken)
-    state["crosssource"] = crosssource.install(
+    # SYNTHRUN: the stream's synthetic run id answers GET /v1/runs/{id} and the steer
+    # routes from its Discord session's authority. A drifted seam leaves it the native 404.
+    from gateway.platforms import api_server_runs as runs
+    _signature(runs, "_handle_get_run", "self", "request", "_api_server")
+    unresolved = crosssource.check_synthetic_seams()
+    state["crosssource_synthetic"] = ({"status": "disabled", "reason": unresolved} if unresolved
+                                      else {"status": "applied"})
+    if unresolved:
+        log.error("CROSSSOURCE SYNTHETIC RUNS DISABLED: core seam drifted (%s); a Discord-session "
+                  "stream's run id stays unknown to /v1/runs until compat is reviewed", unresolved)
+    bridge = state["crosssource"] = crosssource.install(
         api, cls, tx, ctx_getter=lambda: state.get("plugin_ctx"),
-        spool_path=Path(get_hermes_home()) / "crosssource_spool.db", progress=broken is None)
+        spool_path=Path(get_hermes_home()) / "crosssource_spool.db", progress=broken is None,
+        runs=runs, synthetic=unresolved is None)
+    if unresolved is None:
+        from . import steer_inbox
+        resolver = bridge.runs.resolve
+        steer_inbox.set_synthetic_resolver(resolver)
+
+        def drop_resolver():
+            # A later load may already hold the slot; only this load's resolver leaves.
+            if steer_inbox._synthetic_resolver is resolver:
+                steer_inbox.set_synthetic_resolver(None)
+        tx.cleanups.append(drop_resolver)
 
 
 def _crosssource_drain_arm(adapter, why, loop=None):
@@ -4289,8 +4310,19 @@ def _install_steer_inbox(tx):
                 "Cross-device steer is disabled on this server; existing "
                 "receipts remain readable.", 503, code="steer_disabled")
         run_id = request.match_info["run_id"]
-        _r, status, agent, _task, err = runs._load_owned_run(
-            self, request, _api_server=_api, permission=None, active_fallback=False)
+        synthetic = steer_inbox.synthetic_run(self, run_id)
+        if synthetic is None:
+            _r, status, agent, _task, err = runs._load_owned_run(
+                self, request, _api_server=_api, permission=None, active_fallback=False)
+        else:
+            # TASK-SYNTHRUN: a crosssource stream's own run id is no core run;
+            # it binds to its Discord session's authority admission instead.
+            # Not running is core's own refusal, never a chat-send fallback.
+            status, err = synthetic.status, self._check_auth(request)
+            if err is None and not synthetic.steerable:
+                return api._error_response(
+                    f"Run is not currently accepting steer input: {run_id}", 409,
+                    code="run_not_accepting_steer")
         if err is not None:
             return err
         # Body limits BEFORE parsing; auth/owner already answered above.
@@ -4400,6 +4432,10 @@ def _install_steer_inbox(tx):
         # 01412 M7: NO active_fallback here — an expired pollable status is
         # answered from the durable sidecar as expired, never resurrected to
         # "running" on the read surfaces.
+        synthetic = steer_inbox.synthetic_run(self, request.match_info["run_id"])
+        if synthetic is not None:
+            # TASK-SYNTHRUN: its session's authority state is the run status.
+            return synthetic.status, self._check_auth(request)
         _api = sys.modules["gateway.platforms.api_server"]
         _r, status, _agent, _task, err = runs._load_owned_run(
             self, request, _api_server=_api, permission=None,

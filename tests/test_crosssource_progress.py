@@ -12,6 +12,7 @@ only drops the observer. Fakes come from test_crosssource.
 import asyncio
 import os
 import time
+import types
 from unittest import mock
 
 from test_crosssource import (DISCORD_KEY, DISCORD_SID, CrossSourceBase, FakeAuthority, FakeCtx, FakeLive,
@@ -232,9 +233,11 @@ class SeamDrift(CrossSourceBase):
         state = {"groups": {}, "manifest": {}}
         installed = {}
 
+        bridge = types.SimpleNamespace(runs=types.SimpleNamespace(resolve=lambda adapter, run_id: None))
+
         def fake_install(api, cls, tx, **kw):
             installed.update(kw)
-            return "bridge"
+            return bridge
         holder = type("api", (), {"APIServerAdapter": api_server.APIServerAdapter,
                                   "_error_response": staticmethod(lambda *a, **k: None),
                                   "_sse_frame": staticmethod(lambda *a, **k: b"")})()
@@ -243,10 +246,48 @@ class SeamDrift(CrossSourceBase):
                 mock.patch.object(crosssource, "check_progress_seams", return_value="SessionEvents.since"), \
                 mock.patch.object(crosssource, "install", fake_install), \
                 self.assertLogs("hermes-app-compat", level="ERROR") as logs:
-            c._install_crosssource(Tx())
+            tx = Tx()
+            c._install_crosssource(tx)
+        from compat import steer_inbox
+        self.assertIs(steer_inbox._synthetic_resolver, bridge.runs.resolve)
+        for cleanup in tx.cleanups:
+            cleanup()
+        self.assertIsNone(steer_inbox._synthetic_resolver)
         self.assertFalse(installed["progress"])
         self.assertEqual({"status": "disabled", "reason": "SessionEvents.since"}, state["crosssource_progress"])
         self.assertIn("CROSSSOURCE PROGRESS DISABLED", logs.output[0])
+        # SYNTHRUN is its own seam: progress drift leaves synthetic run ids applied.
+        self.assertTrue(installed["synthetic"])
+        self.assertEqual({"status": "applied"}, state["crosssource_synthetic"])
+
+    def test_synthetic_seam_drift_leaves_run_ids_native_and_logs_loudly(self):
+        from compat import compat as c, steer_inbox
+        from gateway.platforms import api_server
+        state = {"groups": {}, "manifest": {}}
+        installed = {}
+        bridge = types.SimpleNamespace(runs=types.SimpleNamespace(resolve=lambda adapter, run_id: None))
+
+        def fake_install(api, cls, tx, **kw):
+            installed.update(kw)
+            return bridge
+        holder = type("api", (), {"APIServerAdapter": api_server.APIServerAdapter,
+                                  "_error_response": staticmethod(lambda *a, **k: None),
+                                  "_sse_frame": staticmethod(lambda *a, **k: b"")})()
+        setattr(holder, c._STATE, state)
+        tx = Tx()
+        with mock.patch.object(c, "api", holder, create=True), \
+                mock.patch.object(crosssource, "check_synthetic_seams", return_value="run_projection:x"), \
+                mock.patch.object(crosssource, "install", fake_install), \
+                self.assertLogs("hermes-app-compat", level="ERROR") as logs:
+            c._install_crosssource(tx)
+        self.assertFalse(installed["synthetic"])
+        self.assertEqual({"status": "disabled", "reason": "run_projection:x"}, state["crosssource_synthetic"])
+        self.assertTrue(any("CROSSSOURCE SYNTHETIC RUNS DISABLED" in line for line in logs.output))
+        self.assertIsNone(steer_inbox._synthetic_resolver)
+        self.assertEqual(tx.cleanups, [])
+
+    def test_synthetic_seams_hold_on_this_core(self):
+        self.assertIsNone(crosssource.check_synthetic_seams())
 
     def test_progress_off_streams_the_queued_handoff_even_with_an_authority(self):
         self.authority = FakeAuthority()

@@ -55,6 +55,7 @@ class Store:
             " lineage_json TEXT NOT NULL, payload_json TEXT NOT NULL,"
             " payload_digest TEXT NOT NULL, intent TEXT NOT NULL, status TEXT NOT NULL,"
             " outcome TEXT, owner_epoch INTEGER, generation INTEGER)")
+        self.conn.execute("CREATE TABLE state_meta (key TEXT PRIMARY KEY, value TEXT)")
 
     def add(self, admission_id, request_id, status, generation=None):
         self.conn.execute(
@@ -67,6 +68,9 @@ class Store:
     @contextlib.contextmanager
     def _read_ctx(self):
         yield self.conn
+
+    def get_compression_lineage(self, session_id):
+        return []
 
 
 class Agent:
@@ -312,6 +316,77 @@ class AuthoritySteerTests(unittest.TestCase):
         adapter = types.SimpleNamespace(gateway_runner=types.SimpleNamespace())
         self.assertIsNone(steer_inbox.authority_binding(adapter, RUN))
         self.assertIsNone(steer_inbox.authority_binding(types.SimpleNamespace(), RUN))
+
+
+class SyntheticRunSteerTests(AuthoritySteerTests):
+    """TASK-SYNTHRUN: the crosssource stream's own run id (core never issued it)
+    steers its Discord session's authority admission through the same
+    admission and core seams; not running is core's 409 run_not_accepting_steer.
+    Inherits every AuthoritySteerTests case, which then runs with the synthetic
+    resolver installed: native run ids keep their exact behaviour."""
+
+    def setUp(self):
+        super().setUp()
+        from compat import crosssource
+        self.runs = crosssource.SyntheticRuns(lambda adapter: self.authority)
+        self.synth = self.runs.issue({"id": SID, "session_key": "agent:main:discord:thread:1:1"})
+        steer_inbox.set_synthetic_resolver(self.runs.resolve)
+        self.addCleanup(steer_inbox.set_synthetic_resolver, None)
+
+    def _steers(self, rid):
+        return asyncio.run(self.ns["steers_get"](self.adapter, Request(rid)))
+
+    def test_synthetic_run_steer_reaches_the_sessions_running_admission(self):
+        # Red before TASK-SYNTHRUN: 404 (the id is in no core run table).
+        self.db.add("adm-discord", "plugin-req", "started", GENERATION)
+        self.runs.bind(self.synth, "adm-discord")
+        listing = self._steers(self.synth)
+        self.assertEqual(listing.get("http"), 200, listing)
+        self.assertTrue(listing["accepting"])
+        result = self._post("look at the logs first", rid=self.synth)
+        self.assertEqual(result.get("http"), 200, result)
+        self.assertTrue(result["accepted"])
+        self.assertEqual(result["run_id"], self.synth)
+        self.assertEqual(self.authority.pending_steers[SID], (GENERATION, ["look at the logs first"]))
+        agent = Agent()
+        self.authority.adopt_agent(SID, GENERATION, agent)
+        self.assertEqual(agent.steered, ["look at the logs first"])
+        self.assertEqual(self._receipt(result["steer_id"], rid=self.synth)["state"], "outcome_unknown")
+
+    def test_unbound_synthetic_run_steers_the_sessions_started_turn(self):
+        self.db.add("adm-discord", "plugin-req", "started", GENERATION)
+        agent = Agent()
+        self.authority.adopt_agent(SID, GENERATION, agent)
+        result = self._post("now", rid=self.synth)
+        self.assertEqual(result.get("http"), 200, result)
+        self.assertEqual(agent.steered, ["now"])
+
+    def test_terminal_synthetic_run_refuses_with_core_409(self):
+        self.db.add("adm-discord", "plugin-req", "terminal")
+        self.runs.bind(self.synth, "adm-discord")
+        result = self._post("too late", rid=self.synth)
+        self.assertEqual(result, {"http": 409, "error": {"code": "run_not_accepting_steer"}})
+        self.assertEqual(self.authority.pending_steers, {})
+        store = steer_store.open_store(self.home)
+        self.assertEqual(steer_store.list_steers(store, "owner", self.synth)[0], [])
+        listing = self._steers(self.synth)
+        self.assertFalse(listing["accepting"])
+
+    def test_idle_session_refuses_and_queued_is_not_steerable(self):
+        self.assertEqual(self._post("idle", rid=self.synth)["error"]["code"], "run_not_accepting_steer")
+        self.db.add("adm-discord", "plugin-req", "queued")
+        self.assertEqual(self._post("queued", rid=self.synth)["error"]["code"], "run_not_accepting_steer")
+        self.assertEqual(self.authority.pending_steers, {})
+
+    def test_non_synthetic_ids_never_reach_the_resolver(self):
+        seen = []
+        steer_inbox.set_synthetic_resolver(lambda adapter, rid: seen.append(rid))
+        self.db.add(ADMISSION, "req-1", "started", GENERATION)
+        result = self._post("native", rid=RUN)
+        self.assertEqual(result.get("http"), 200, result)
+        self.assertEqual(self.authority.pending_steers[SID], (GENERATION, ["native"]))
+        self.assertEqual(self._post("x", rid="run_unknown").get("http"), 404)
+        self.assertEqual(set(seen), {RUN, "run_unknown"})  # asked, answered None, native path
 
 
 if __name__ == "__main__":
