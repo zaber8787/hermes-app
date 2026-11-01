@@ -33,7 +33,8 @@ EXTRA_MIMES = frozenset({
 })
 UNITS = ("limits", "upload", "media", "history", "approval", "skills", "activity", "push",
          "approval_inbox", "cron_bridge", "wake", "selfwake", "steer_inbox",
-         "notification_events", "messages_timing", "media_persist", "clarify", "crosssource")
+         "notification_events", "messages_timing", "media_persist", "clarify", "session_list",
+         "crosssource")
 log = logging.getLogger("hermes-app-compat")
 _STATE = "_hermes_app_compat_state_v1"
 _MISSING = object()
@@ -759,6 +760,14 @@ def _sync_live_adapters():
 def _install_clarify(tx):
     from . import patch_clarify
     patch_clarify.install(api, getattr(api, _STATE), tx)
+
+
+def _install_session_list(tx):
+    """PROGRESSBRIDGE: cron run records leave GET /api/sessions unless asked for by source
+    (see session_list.py). A drifted seam raises here and the unit is skipped loudly."""
+    from . import session_list
+    from hermes_state import SessionDB
+    session_list.install(api.APIServerAdapter, SessionDB, tx)
 
 
 def _install_crosssource(tx):
