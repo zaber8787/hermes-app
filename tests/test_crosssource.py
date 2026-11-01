@@ -1,21 +1,20 @@
-"""TASK-CROSSSOURCE(2): app chat aimed at a foreign-source (Discord) session.
+"""TASK-DIRECTINJECT: app chat aimed at a foreign-source (Discord) session.
 
 Core refuses an API turn into a foreign-surface session
 (gateway/session_api_turn.py:216, ``permission_denied``). The crosssource unit
-wraps both session chat routes: a Discord target is posted into its thread over
-Discord REST with the bot token the Discord plugin reads; delivered means 2xx
-with a message id. A turn is then requested through the core plugin injection
-seam, and a refused trigger only degrades to a log and a row field. Every
-message is spooled first, resends fold into their row, at most 3 attempts, a
-final failure is HTTP 502 kind=bridge_unavailable, and drain retries pending and
-failed rows.
+wraps both session chat routes: a Discord target is delivered through the core
+plugin injection seam alone (``PluginContext.inject_message`` with the
+session's own ``session_key``). There is no Discord REST post and no bot mark
+on the text: a bot never speaks for the user. Every message is spooled first,
+resends fold into their row, at most 3 attempts, a final failure is HTTP 502
+kind=bridge_unavailable, and drain retries pending and failed rows. Rows
+spooled by the retired bot-forwarding bridge drain with the mark stripped.
 
-Sessions live in a real SessionDB tmp file. Discord is a local aiohttp server
-the real client code posts to; the gateway is a fake.
+Sessions live in a real SessionDB tmp file; the gateway is a fake and the
+plugin context is a scripted ``inject_message`` stand-in.
 """
 import asyncio
 import json
-import logging
 import os
 import pathlib
 import shutil
@@ -26,16 +25,16 @@ import unittest
 from unittest import mock
 
 from aiohttp import web
-from aiohttp.test_utils import TestServer, make_mocked_request
+from aiohttp.test_utils import make_mocked_request
 
 from compat import crosssource
 
 DISCORD_SID = "20260910_151843_94d2209a"
 THREAD = "1547506583351853116"
 DISCORD_KEY = f"agent:main:discord:thread:{THREAD}:{THREAD}"
+CHANNEL_KEY = "agent:main:discord:channel:12320260910151843"
 API_SID = "api_native_session"
-FAKE_TOKEN = "fake-test-token-0000"
-LEGACY_TEXT = "test from app\n\n" + crosssource.VIA_APP_MARK
+LEGACY_TEXT = "test from app" + crosssource._LEGACY_MARK
 
 
 class FakeApi:
@@ -54,21 +53,9 @@ class FakeApi:
         return f"{prefix}data: {json.dumps(data, ensure_ascii=ensure_ascii)}\n\n".encode()
 
 
-class FakePlatformConfig:
-    def __init__(self, token):
-        self.token = token
-
-
-class FakePlatformAdapter:
-    def __init__(self, token=FAKE_TOKEN, connected=True):
-        self.config = FakePlatformConfig(token)
-        self.is_connected = connected
-
-
 class FakeRunner:
-    def __init__(self, adapters, config=None):
-        self.adapters = adapters
-        self.config = config
+    adapters = {}
+    config = None
 
 
 class FakeCtx:
@@ -85,31 +72,9 @@ class FakeCtx:
         return result
 
 
-class FakeDiscord:
-    """POST /channels/{id}/messages. Script items: ``(status, body)`` or ``"hang"``;
-    an exhausted script answers 200 with a fresh message id."""
-    def __init__(self, script=()):
-        self.script = list(script)
-        self.posts = []
-
-    def make_app(self):
-        # One aiohttp app per event loop; the script and the post log carry over.
-        app = web.Application()
-        app.router.add_post("/api/v10/channels/{channel_id}/messages", self.handle)
-        return app
-
-    async def handle(self, request):
-        self.posts.append({"channel_id": request.match_info["channel_id"],
-                           "authorization": request.headers.get("Authorization"),
-                           "json": await request.json()})
-        item = self.script.pop(0) if self.script else (200, {"id": f"msg{len(self.posts)}"})
-        if item == "hang":
-            await asyncio.sleep(5)
-            item = (200, {"id": "too_late"})
-        status, body = item
-        if isinstance(body, str):
-            return web.Response(status=status, text=body)
-        return web.json_response(body, status=status)
+class NoInjectCtx:
+    def noop(self):
+        return None
 
 
 class SSESink:
@@ -204,11 +169,8 @@ class CrossSourceBase(unittest.TestCase):
         self.db.create_session(API_SID, "api_server")
         self.cls = make_adapter_class(self.db)
         self.cls.native_calls = []
-        self.platform = FakePlatformAdapter()
-        from gateway.config import Platform
-        self.adapter = self.cls(FakeRunner({Platform.DISCORD: self.platform}))
+        self.adapter = self.cls(FakeRunner())
         self.ctx = FakeCtx([])
-        self.discord = FakeDiscord()
         self.sleeps = []
         self.bridge = None
 
@@ -229,16 +191,8 @@ class CrossSourceBase(unittest.TestCase):
         return self.bridge
 
     def drive(self, *calls):
-        """Run handler coroutine factories in order against a live fake Discord."""
         async def main():
-            server = TestServer(self.discord.make_app())
-            await server.start_server()
-            try:
-                if self.bridge is not None:
-                    self.bridge.api_base = str(server.make_url("/api/v10")).rstrip("/")
-                return [await call() for call in calls]
-            finally:
-                await server.close()
+            return [await call() for call in calls]
         out = asyncio.run(main())
         return out[0] if len(calls) == 1 else out
 
@@ -254,58 +208,40 @@ class CrossSourceBase(unittest.TestCase):
 
 class RoutingRedGreen(CrossSourceBase):
     """Red without the unit (Discord session goes native, where core says
-    permission_denied); green with it (Discord gets a REST post into the thread)."""
+    permission_denied); green with it (the text reaches inject_message)."""
 
     def test_red_without_unit_discord_target_reaches_native_admission(self):
         response = self.drive(self.stream("hi"))
         self.assertEqual([("stream", DISCORD_SID)], self.cls.native_calls)
-        self.assertEqual([], self.discord.posts)
+        self.assertEqual([], self.ctx.calls)
         self.assertEqual(200, response.status)
 
-    def test_green_discord_stream_posts_into_the_thread_then_triggers_a_turn(self):
+    def test_green_discord_stream_injects_the_plain_text_once(self):
         self.install()
         response = self.drive(self.stream("從 app 發的"))
         self.assertEqual([], self.cls.native_calls)
-        self.assertEqual(1, len(self.discord.posts))
-        post = self.discord.posts[0]
-        self.assertEqual(THREAD, post["channel_id"])
-        self.assertEqual(f"Bot {FAKE_TOKEN}", post["authorization"])
-        self.assertTrue(post["json"]["content"].startswith("從 app 發的"))
-        self.assertIn(crosssource.VIA_APP_MARK, post["json"]["content"])
-        self.assertEqual({"parse": []}, post["json"]["allowed_mentions"])
-        self.assertEqual([{"content": post["json"]["content"], "session_key": DISCORD_KEY}], self.ctx.calls)
-        events = response.events()
+        self.assertEqual([{"content": "從 app 發的", "session_key": DISCORD_KEY}], self.ctx.calls)
+        events = self.adapter.sinks[0].events()
         self.assertEqual(["run.started", "run.queued", "done"], [name for name, _ in events])
         queued = events[1][1]
         self.assertEqual(("queued", "discord", DISCORD_SID), (queued["status"], queued["via"], queued["session_id"]))
         rows = self.spool_rows()
         self.assertEqual(1, len(rows))
         self.assertEqual(queued["delivery_id"], rows[0]["id"])
-        self.assertEqual(("delivered", 1, "msg1", "injected"),
-                         (rows[0]["status"], rows[0]["attempts"], rows[0]["message_id"], rows[0]["trigger"]))
+        self.assertEqual(("delivered", 1, "injected"), (rows[0]["status"], rows[0]["attempts"], rows[0]["trigger"]))
 
-    def test_green_inject_refused_no_longer_fails_delivery(self):
-        # The live failure (TASK-CROSSSOURCE2): inject_message answered False on
-        # every attempt and the app got 502. Now REST delivers; the refused
-        # trigger is one call, recorded, not retried and not a 502.
-        self.ctx = FakeCtx([False, False, False])
+    def test_injected_text_carries_no_bot_mark(self):
         self.install()
-        response = self.drive(self.stream("test from app"))
-        self.assertEqual(["run.started", "run.queued", "done"], [n for n, _ in response.events()])
-        self.assertEqual(1, len(self.discord.posts))
-        self.assertEqual(1, len(self.ctx.calls))
-        row = self.spool_rows()[0]
-        self.assertEqual(("delivered", "inject_refused", None), (row["status"], row["trigger"], row["last_error"]))
+        self.drive(self.stream("plain line"))
+        content = self.ctx.calls[0]["content"]
+        self.assertEqual("plain line", content)
+        self.assertNotIn("代發", content)
 
-    def test_trigger_raising_or_missing_context_degrades_to_a_recorded_reason(self):
-        self.ctx = FakeCtx([RuntimeError("scheduling failed")])
-        self.install()
-        first = self.drive(self.chat("a"))
-        self.ctx = None
-        second = self.drive(self.chat("b"))
-        self.assertEqual((202, 202), (first.status, second.status))
-        self.assertEqual(["inject_error", "plugin_context_missing"], [r["trigger"] for r in self.spool_rows()])
-        self.assertEqual(2, len(self.discord.posts))
+    def test_no_rest_delivery_code_remains(self):
+        for gone in ("bot_token", "platform_adapter", "_post", "_proxy_kwargs"):
+            self.assertFalse(hasattr(crosssource.Bridge, gone), gone)
+        for gone in ("VIA_APP_MARK", "DISCORD_API", "REST_TIMEOUT_SECONDS", "DISCORD_MAX_CONTENT"):
+            self.assertFalse(hasattr(crosssource, gone), gone)
 
     def test_green_discord_sync_chat_answers_202_queued(self):
         self.install()
@@ -315,12 +251,20 @@ class RoutingRedGreen(CrossSourceBase):
         self.assertEqual("hermes.session.chat.queued", body["object"])
         self.assertEqual("discord", body["via"])
         self.assertEqual([], self.cls.native_calls)
+        self.assertEqual(1, len(self.ctx.calls))
+
+    def test_non_thread_discord_key_is_injected_too(self):
+        self.db.create_session("dm_session", "discord", session_key="agent:main:discord:dm:42")
+        self.install()
+        response = self.drive(self.chat("x", sid="dm_session"))
+        self.assertEqual(202, response.status)
+        self.assertEqual([{"content": "x", "session_key": "agent:main:discord:dm:42"}], self.ctx.calls)
 
     def test_api_server_session_keeps_native_path(self):
         self.install()
         self.drive(self.stream("hi", sid=API_SID), self.chat("hi", sid=API_SID))
         self.assertEqual([("stream", API_SID), ("chat", API_SID)], self.cls.native_calls)
-        self.assertEqual(([], []), (self.ctx.calls, self.discord.posts))
+        self.assertEqual([], self.ctx.calls)
         self.assertEqual([], self.spool_rows())
 
     def test_unknown_session_and_wake_batch_stay_native(self):
@@ -329,13 +273,13 @@ class RoutingRedGreen(CrossSourceBase):
                  lambda: self.adapter._handle_session_chat_stream(
                      request(DISCORD_SID, {"input": "hi", "wake_batch": "b1"}, stream=True)))
         self.assertEqual([("stream", "nope"), ("stream", DISCORD_SID)], self.cls.native_calls)
-        self.assertEqual([], self.discord.posts)
+        self.assertEqual([], self.ctx.calls)
 
     def test_unauthenticated_request_never_reaches_the_bridge(self):
         self.install()
         response = self.drive(self.stream("hi", auth="Bearer bad"))
         self.assertEqual(401, response.status)
-        self.assertEqual([], self.discord.posts)
+        self.assertEqual([], self.ctx.calls)
         self.assertEqual([], self.spool_rows())
 
     def test_multimodal_input_is_refused_before_spooling(self):
@@ -345,142 +289,104 @@ class RoutingRedGreen(CrossSourceBase):
             stream=True)))
         self.assertEqual(415, response.status)
         self.assertEqual("crosssource_text_only", json.loads(response.body)["error"]["code"])
-        self.assertEqual([], self.discord.posts)
+        self.assertEqual([], self.ctx.calls)
+        self.assertEqual([], self.spool_rows())
 
-    def test_text_over_the_discord_limit_is_refused_before_spooling(self):
+    def test_empty_message_is_refused(self):
         self.install()
-        response = self.drive(self.chat("x" * crosssource.DISCORD_MAX_CONTENT))
-        self.assertEqual(413, response.status)
-        self.assertEqual("crosssource_too_long", json.loads(response.body)["error"]["code"])
-        self.assertEqual(([], []), (self.discord.posts, self.spool_rows()))
+        response = self.drive(self.chat("   "))
+        self.assertEqual(400, response.status)
+        self.assertEqual([], self.spool_rows())
 
 
-class RestDelivery(CrossSourceBase):
-    def test_transient_5xx_retries_and_succeeds_on_third_attempt(self):
-        self.discord = FakeDiscord([(500, {}), (502, "bad gateway")])
+class DeliveryOutcomes(CrossSourceBase):
+    """A refused or raising inject is a failed attempt; a final failure is a
+    plain 502 bridge_unavailable with the text kept in the spool."""
+
+    def test_inject_refused_three_times_answers_502_and_keeps_the_text(self):
         self.install()
-        response = self.drive(self.stream("retry me"))
-        self.assertEqual(["run.started", "run.queued", "done"], [n for n, _ in response.events()])
-        self.assertEqual(3, len(self.discord.posts))
-        self.assertEqual(list(crosssource.BACKOFF_SECONDS), self.sleeps)
-        self.assertEqual(1, len(self.ctx.calls))
-        row = self.spool_rows()[0]
-        self.assertEqual(("delivered", 3, "msg3"), (row["status"], row["attempts"], row["message_id"]))
-
-    def test_three_failures_answer_502_bridge_unavailable_and_keep_the_text(self):
-        self.discord = FakeDiscord([(401, {"message": "401: Unauthorized", "code": 0})] * 3)
-        self.install()
+        self.ctx = FakeCtx([False, False, False])
         response = self.drive(self.stream("不能丟"))
         self.assertEqual(502, response.status)
         body = json.loads(response.body)
-        self.assertEqual(("bridge_unavailable", "bridge_unavailable", "rest_http_401"),
+        self.assertEqual(("bridge_unavailable", "bridge_unavailable", "inject_refused"),
                          (body["kind"], body["error"]["code"], body["reason"]))
-        self.assertEqual(crosssource.MAX_ATTEMPTS, len(self.discord.posts))
-        self.assertEqual([], self.ctx.calls)
+        self.assertEqual(3, len(self.ctx.calls))
         row = self.spool_rows()[0]
         self.assertEqual(body["delivery_id"], row["id"])
-        self.assertEqual(("failed", 3, "rest_http_401", None), (row["status"], row["attempts"], row["last_error"],
-                                                                row["message_id"]))
-        self.assertTrue(row["text"].startswith("不能丟"))
+        self.assertEqual(("failed", 3, "inject_refused"), (row["status"], row["attempts"], row["last_error"]))
+        self.assertEqual("不能丟", row["text"])
         self.assertEqual(DISCORD_KEY, row["session_key"])
+        self.assertEqual(list(crosssource.BACKOFF_SECONDS), self.sleeps)
 
-    def test_2xx_without_a_message_id_is_not_delivered(self):
-        self.discord = FakeDiscord([(200, {}), (204, ""), (200, "not json")])
+    def test_inject_raising_is_a_failed_attempt_not_a_crash(self):
         self.install()
+        self.ctx = FakeCtx([RuntimeError("scheduling failed")] * 3)
+        response = self.drive(self.stream("x"))
+        self.assertEqual(502, response.status)
+        self.assertEqual("inject_error", json.loads(response.body)["reason"])
+
+    def test_missing_plugin_context_answers_502(self):
+        self.install()
+        self.ctx = None
         response = self.drive(self.chat("x"))
         self.assertEqual(502, response.status)
-        self.assertEqual("rest_no_message_id", self.spool_rows()[0]["last_error"])
+        self.assertEqual("plugin_context_missing", json.loads(response.body)["reason"])
 
-    def test_timeout_is_a_failed_attempt(self):
-        self.discord = FakeDiscord(["hang", (200, {"id": "m2"})])
+    def test_context_without_inject_answers_502(self):
         self.install()
-        with mock.patch.object(crosssource, "REST_TIMEOUT_SECONDS", 0.2):
-            response = self.drive(self.chat("slow"))
+        self.ctx = NoInjectCtx()
+        response = self.drive(self.chat("x"))
+        self.assertEqual(502, response.status)
+        self.assertEqual("plugin_context_missing", json.loads(response.body)["reason"])
+
+    def test_transient_refusal_succeeds_on_the_second_attempt(self):
+        self.install()
+        self.ctx = FakeCtx([False, True])
+        response = self.drive(self.chat("x"))
         self.assertEqual(202, response.status)
-        row = self.spool_rows()[0]
-        self.assertEqual(("delivered", 2, "m2"), (row["status"], row["attempts"], row["message_id"]))
+        self.assertEqual(2, len(self.ctx.calls))
+        row, = self.spool_rows()
+        self.assertEqual(("delivered", 2, "injected"), (row["status"], row["attempts"], row["trigger"]))
 
-    def test_unreachable_discord_is_rest_error(self):
+    def test_resend_after_failure_retries_the_same_row(self):
         self.install()
-
-        async def go():
-            self.bridge.api_base = "http://127.0.0.1:9/api/v10"
-            return await self.chat("x")()
-        response = asyncio.run(go())
-        self.assertEqual(502, response.status)
-        self.assertEqual("rest_error", self.spool_rows()[0]["last_error"])
-
-    def test_token_falls_back_to_runner_config_then_the_secret(self):
-        from gateway.config import Platform
-        self.platform.config.token = None
-        self.adapter.gateway_runner.config = mock.Mock(platforms={Platform.DISCORD: FakePlatformConfig("cfg-tok")})
-        self.install()
-        self.drive(self.chat("a"))
-        self.adapter.gateway_runner.config = None
-        with mock.patch("agent.secret_scope.get_secret", return_value="env-tok") as secret:
-            self.drive(self.chat("b"))
-        secret.assert_called_with("DISCORD_BOT_TOKEN", "")
-        self.assertEqual(["Bot cfg-tok", "Bot env-tok"], [p["authorization"] for p in self.discord.posts])
-
-    def test_missing_token_fails_without_posting(self):
-        self.platform.config.token = ""
-        self.install()
-        with mock.patch("agent.secret_scope.get_secret", return_value=""):
-            response = self.drive(self.chat("x"))
-        self.assertEqual(502, response.status)
-        self.assertEqual([], self.discord.posts)
-        self.assertEqual("token_missing", self.spool_rows()[0]["last_error"])
-
-    def test_non_thread_session_key_fails_without_posting(self):
-        self.db.create_session("dm_session", "discord", session_key="agent:main:discord:dm:42")
-        self.install()
-        response = self.drive(self.chat("x", sid="dm_session"))
-        self.assertEqual(502, response.status)
-        self.assertEqual([], self.discord.posts)
-        self.assertEqual("session_key_unparsed", self.spool_rows()[0]["last_error"])
-
-    def test_thread_id_is_the_key_tail(self):
-        self.assertEqual("22", crosssource.thread_id_from_key("agent:main:discord:thread:11:22"))
-        self.assertIsNone(crosssource.thread_id_from_key("agent:main:discord:thread:11:"))
-        self.assertIsNone(crosssource.thread_id_from_key("agent:main:telegram:thread:11:22"))
-
-    def test_token_never_reaches_the_log(self):
-        self.discord = FakeDiscord([(401, {}), (500, {})])
-        self.install()
-        with self.assertLogs("hermes-app-compat.crosssource", level=logging.DEBUG) as logs:
-            self.drive(self.chat("x"))
-        joined = "\n".join(logs.output)
-        self.assertIn("as message msg3", joined)
-        self.assertNotIn(FAKE_TOKEN, joined)
-
-    def test_spool_survives_a_new_bridge_instance(self):
-        self.discord = FakeDiscord([(500, {})] * 3)
-        self.install()
-        self.drive(self.chat("durable"))
-        rows = crosssource.Outbox(self.spool_path).rows()
+        self.ctx = FakeCtx([False, False, False])
+        first = json.loads(self.drive(self.stream("x")).body)
+        self.ctx = FakeCtx([True])
+        self.drive(self.stream("x"))
+        rows = self.spool_rows()
         self.assertEqual(1, len(rows))
-        self.assertTrue(rows[0]["text"].startswith("durable"))
+        self.assertEqual(first["delivery_id"], rows[0]["id"])
+        self.assertEqual("delivered", rows[0]["status"])
 
 
 class SpoolDedup(CrossSourceBase):
-    def test_three_failed_retries_and_a_rescue_leave_one_row(self):
-        # The user pressed retry after each 502; the fourth press finds Discord healthy.
-        self.discord = FakeDiscord([(503, {})] * 9)
+    def test_spool_survives_a_new_bridge_instance(self):
         self.install()
+        self.ctx = FakeCtx([False, False, False])
+        self.drive(self.chat("durable"))
+        rows = crosssource.Outbox(self.spool_path).rows()
+        self.assertEqual(1, len(rows))
+        self.assertEqual("durable", rows[0]["text"])
+
+    def test_three_failed_retries_and_a_rescue_leave_one_row(self):
+        # The user pressed retry after each 502; the fourth press finds the seam healthy.
+        self.install()
+        self.ctx = FakeCtx([False] * 9 + [True])
         responses = self.drive(*[self.chat("test from app") for _ in range(4)])
         self.assertEqual([502, 502, 502, 202], [r.status for r in responses])
         ids = {json.loads(r.body)["delivery_id"] for r in responses}
         rows = self.spool_rows()
         self.assertEqual(1, len(rows))
         self.assertEqual({rows[0]["id"]}, ids)
-        self.assertEqual(("delivered", 10, None), (rows[0]["status"], rows[0]["attempts"], rows[0]["last_error"]))
-        self.assertEqual(10, len(self.discord.posts))
+        self.assertEqual(10, len(self.ctx.calls))
 
-    def test_double_send_of_a_delivered_message_is_not_posted_twice(self):
+    def test_double_send_of_a_delivered_message_is_not_injected_twice(self):
         self.install()
         first, second = self.drive(self.chat("hi"), self.chat("hi"))
         self.assertEqual(json.loads(first.body)["delivery_id"], json.loads(second.body)["delivery_id"])
-        self.assertEqual((1, 1), (len(self.discord.posts), len(self.ctx.calls)))
+        self.assertEqual(1, len(self.ctx.calls))
         self.assertEqual(1, len(self.spool_rows()))
 
     def test_different_text_or_session_is_a_new_row(self):
@@ -488,6 +394,7 @@ class SpoolDedup(CrossSourceBase):
         self.install()
         self.drive(self.chat("a"), self.chat("b"), self.chat("a", sid="other"))
         self.assertEqual(3, len(self.spool_rows()))
+        self.assertEqual(3, len(self.ctx.calls))
 
     def test_window_boundaries(self):
         box = crosssource.Outbox(self.spool_path)
@@ -495,7 +402,7 @@ class SpoolDedup(CrossSourceBase):
         t0 = 1_000_000.0
         first, merged = box.enqueue(now=t0, **kw)
         self.assertFalse(merged)
-        box.record(first, attempts=1, status="delivered", message_id="m")
+        box.record(first, attempts=1, status="delivered")
         with sqlite3.connect(self.spool_path) as conn:
             conn.execute("UPDATE outbox SET created_at=? WHERE id=?", (t0, first))
         self.assertEqual((first, True), box.enqueue(now=t0 + 59, **kw))
@@ -503,37 +410,40 @@ class SpoolDedup(CrossSourceBase):
         self.assertNotEqual(first, later)
         self.assertFalse(merged)
 
-    def test_concurrent_identical_sends_post_once(self):
+    def test_concurrent_identical_sends_inject_once(self):
         self.install()
 
         async def both():
             return await asyncio.gather(self.chat("same")(), self.chat("same")())
         first, second = self.drive(both)
         self.assertEqual((202, 202), (first.status, second.status))
-        self.assertEqual(1, len(self.discord.posts))
+        self.assertEqual(1, len(self.ctx.calls))
 
 
 class Drain(CrossSourceBase):
     def legacy_spool(self, created_ats):
-        """The pre-CROSSSOURCE2 schema and rows the live spool holds (inject_refused x4)."""
+        """The rows the live bot-forwarding spool holds (failed, mark on the text)."""
         with sqlite3.connect(self.spool_path) as conn:
             conn.execute(crosssource._SCHEMA)
+            for name, kind in crosssource._ADDED_COLUMNS:
+                try:
+                    conn.execute(f"ALTER TABLE outbox ADD COLUMN {name} {kind}")
+                except sqlite3.OperationalError:
+                    pass
             for n, created in enumerate(created_ats):
-                conn.execute("INSERT INTO outbox VALUES (?,?,?,?,?,'failed',3,'inject_refused',?,?)",
+                conn.execute("INSERT INTO outbox VALUES (?,?,?,?,?,'failed',3,'rest_http_401',?,?,?,?)",
                              (f"xsrc_legacy{n}", DISCORD_SID, DISCORD_KEY, "discord", LEGACY_TEXT,
-                              created, created))
+                              created, created, None, None))
 
-    def test_drain_retries_failed_rows_and_collapses_duplicates(self):
+    def test_drain_injects_legacy_rows_mark_free_and_collapses_duplicates(self):
         now = time.time()
         self.legacy_spool([now - 80, now - 75, now - 70, now - 3])
         self.install()
         result = self.drive(lambda: self.bridge.drain(self.adapter))
         self.assertEqual({"xsrc_legacy0": None}, result)
-        self.assertEqual(1, len(self.discord.posts))
-        self.assertEqual(LEGACY_TEXT, self.discord.posts[0]["json"]["content"])
+        self.assertEqual([{"content": "test from app", "session_key": DISCORD_KEY}], self.ctx.calls)
         rows = {r["id"]: r for r in self.spool_rows()}
-        self.assertEqual(("delivered", 4, "msg1", "injected"),
-                         tuple(rows["xsrc_legacy0"][k] for k in ("status", "attempts", "message_id", "trigger")))
+        self.assertEqual("delivered", rows["xsrc_legacy0"]["status"])
         for n in (1, 2, 3):
             self.assertEqual(("merged", "merged_into:xsrc_legacy0"),
                              (rows[f"xsrc_legacy{n}"]["status"], rows[f"xsrc_legacy{n}"]["last_error"]))
@@ -545,24 +455,24 @@ class Drain(CrossSourceBase):
         for name in ("pending", "failed", "delivered", "stale"):
             ids[name], _ = box.enqueue(session_id=DISCORD_SID, session_key=DISCORD_KEY, platform="discord",
                                        text=name)
-        box.record(ids["failed"], attempts=3, status="failed", error="rest_http_503")
-        box.record(ids["delivered"], attempts=1, status="delivered", message_id="m0")
+        box.record(ids["failed"], attempts=3, status="failed", error="inject_refused")
+        box.record(ids["delivered"], attempts=1, status="delivered")
         with sqlite3.connect(self.spool_path) as conn:
             conn.execute("UPDATE outbox SET status='failed', updated_at=? WHERE id=?",
                          (now - crosssource.DRAIN_MAX_AGE_SECONDS - 5, ids["stale"]))
         self.install()
         result = self.drive(lambda: self.bridge.drain(self.adapter))
         self.assertEqual({ids["pending"]: None, ids["failed"]: None}, result)
-        self.assertEqual(["pending", "failed"], [p["json"]["content"] for p in self.discord.posts])
+        self.assertEqual(["pending", "failed"], [c["content"] for c in self.ctx.calls])
         statuses = {r["id"]: r["status"] for r in self.spool_rows()}
         self.assertEqual("failed", statuses[ids["stale"]])
 
     def test_drain_failure_keeps_rows_failed(self):
         self.legacy_spool([time.time() - 5])
-        self.discord = FakeDiscord([(500, {})] * 3)
+        self.ctx = FakeCtx([False] * 3)
         self.install()
         result = self.drive(lambda: self.bridge.drain(self.adapter))
-        self.assertEqual({"xsrc_legacy0": "rest_http_500"}, result)
+        self.assertEqual({"xsrc_legacy0": "inject_refused"}, result)
         row = self.spool_rows()[0]
         self.assertEqual(("failed", 6), (row["status"], row["attempts"]))
 
