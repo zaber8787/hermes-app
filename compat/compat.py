@@ -105,8 +105,36 @@ V022_FINGERPRINTS = {
     "_handle_session_chat_stream": "814a13014255e099d694936b1a247b1c03252c362c13daa34edf042b17c59307",
     "_run_agent": "4ce2cc32292b5691a5f51f80c922ff19ff8b077ce7d0ca1831721bf0a3d905c5",
 }
-BACKENDS = {"base": BASE_FINGERPRINTS, "target": TARGET_FINGERPRINTS, "v022": V022_FINGERPRINTS}
-TARGET_LIKE = ("target", "v022")
+# vnew: hermes-agent main bf0203a794 (checked out 2026-11-01 02:37 over v0.22.2).
+# Reviewed 2026-11-01 (TASK-COMPATDRIFT) against the executing source:
+#   _handle_artifact_upload: byte-identical to v022.
+#   _handle_session_chat_stream: still under @_admit_api_agent_request; the only
+#     delta is two `await events.flush()` (after _run_agent returns and before
+#     `done`) for the new in-flight counter on _SessionEventQueue. The reviewed
+#     copy below carries both. Recorded digest is the disk/AST one (decorator
+#     line excluded), the same form the v022 entry matches through.
+#   _run_agent: four defaulted kwargs (request_id, history_from_session,
+#     run_owner_scope, walked_from) and an early hand-off to
+#     gateway.session_api_turn.run_api_turn whenever gateway_runner has a
+#     session_authority (always true for a launch profile). Every compat
+#     _run_agent wrapper only acts before/after the awaited call on kwargs it
+#     already read and returns the (result, usage) tuple untouched, so they still
+#     hold. What does NOT hold is anything relying on the executor body itself:
+#     _active_run_agents / tools.approval gateway queues are not populated on
+#     the authority path. steer_inbox binds through exactly that, so it stays
+#     fail-closed on this backend (see _install_steer_inbox); activity's
+#     compression-rotation follow and approval_inbox capture degrade to no-ops
+#     there (native approval answers pass through untouched).
+VNEW_FINGERPRINTS = {
+    "_handle_artifact_upload": "6be0d300a2c970353e2beacd93835fafadc76f27c0e5f7523fb4c04ed3687042",
+    "_handle_session_chat_stream": "d9ad1ca20a7217c0e49f4637121d4c0de4489ba6aecce6f67baf381e05a1a41f",
+    "_run_agent": "b101c09ffe673ff6bf0a9114865a23bb3645273a623c85ba581c8779c41d5757",
+}
+BACKENDS = {"base": BASE_FINGERPRINTS, "target": TARGET_FINGERPRINTS, "v022": V022_FINGERPRINTS,
+            "vnew": VNEW_FINGERPRINTS}
+TARGET_LIKE = ("target", "v022", "vnew")
+# Backends whose private seams (merge pass, writer) are the v022 revisions.
+V022_LIKE = ("v022", "vnew")
 FINGERPRINTS = BASE_FINGERPRINTS  # historical alias: the BASELINE backend table
 _BACKEND = None
 # P5 cron bridge: the reviewed private seams this unit binds inside the cron
@@ -133,6 +161,23 @@ CRON_V022_FINGERPRINTS = {
     "_bump_session_counters": "4bfa54a4fdee1247551ca342c2cdf9e99c4b8dca6006ffe2026292d690a18a71",
     "append_delegation_delivery": "a1e47028944465cef5f5204b4292be4623ef120a5e0a7a45e387a338b09bbaaf",
 }
+# Reviewed 2026-11-01, main bf0203a794 (TASK-COMPATDRIFT): the scheduler seams
+# and the write guards / _execute_write are byte-identical to v022, and
+# _INSERT_MESSAGE_SQL only moved lines. _message_row_params folds a DATA_USE
+# key into display_metadata only when the message dict carries one (bridge
+# rows never do). _bump_session_counters became a @staticmethod with the same
+# parameters; db._bump_session_counters(conn, ...) binds identically. The
+# writer reference moved: append_delegation_delivery now delegates to
+# _append_detached_result, whose guards -> row params -> INSERT -> counters
+# -> _execute_write sequence is what cron_delivery_store mirrors, so that
+# function is pinned here too.
+CRON_VNEW_FINGERPRINTS = {
+    **CRON_V022_FINGERPRINTS,
+    "_message_row_params": "cc0ffc1694ce91001d648fd7a4b362291d85fe99bb83db007f17c1de0db1c0e8",
+    "_bump_session_counters": "52ee538125543d17920bfcf6ee72cfce8ff9225fcdea48f6b64a5981a157809c",
+    "append_delegation_delivery": "800c560a29929b2047f891e59b39ce0c83486dc91eba7fe0dfd9c22f1cd513eb",
+    "_append_detached_result": "ab87deb29e9d463c9f23f9c7e3d2a63ee206a82f9f72a2940d72ec53e8aae659",
+}
 # APPWAKE B: the SessionDB read seams the admission ledger consults.
 WAKE_TARGET_FINGERPRINTS = {
     "_read_all": "38ac6ca079f7ea8ce91fd0f0330f28de8b4d7dbd5851cfd50b05e569bfacd2ae",
@@ -144,6 +189,8 @@ WAKE_V022_FINGERPRINTS = {
     **WAKE_TARGET_FINGERPRINTS,
     "_read_all": "a3ef661cdfa3713aff5bb41a6494a51137d77d8a2ba45fca2a4f7ab5e853245c",
 }
+# Reviewed 2026-11-01, main bf0203a794: both read seams byte-identical to v022.
+WAKE_VNEW_FINGERPRINTS = dict(WAKE_V022_FINGERPRINTS)
 # SELFWAKE S1: the reviewed agent seam that keeps a wake's canonical input from
 # being absorbed (with the prior report's internal_notification display
 # metadata) into the persisted merge carrier. The API-copy merge in request
@@ -160,6 +207,9 @@ MERGE_TARGET_FINGERPRINTS = {
 MERGE_V022_FINGERPRINTS = {
     "_merge_consecutive_users": "e44dcc6ea5dc7a606841469f3ef2a000d8e8776699311f25727f248b00820da7",
 }
+# Reviewed 2026-11-01, main bf0203a794: byte-identical to v022, so vnew rides
+# the v022 wake mirror (V022_LIKE).
+MERGE_VNEW_FINGERPRINTS = dict(MERGE_V022_FINGERPRINTS)
 
 
 class Transaction:
@@ -258,7 +308,8 @@ def _disk_digest(target, name):
 
 
 def _cron_fingerprint(target, name):
-    tables = {"target": CRON_TARGET_FINGERPRINTS, "v022": CRON_V022_FINGERPRINTS}
+    tables = {"target": CRON_TARGET_FINGERPRINTS, "v022": CRON_V022_FINGERPRINTS,
+              "vnew": CRON_VNEW_FINGERPRINTS}
     table = tables.get(_BACKEND)
     if table is None:
         raise RuntimeError("cron bridge backend not reviewed for this source")
@@ -278,15 +329,20 @@ def _detect_backend(cls):
         digests = {n: hashlib.sha256(
             inspect.getsource(inspect.unwrap(getattr(cls, n))).encode()).hexdigest()
             for n in BASE_FINGERPRINTS}
-        if not _detect_matches(digests):
-            # A previous load's wrappers may still sit on the class (reload
-            # re-registers before the old load fully unwinds): recompute from
-            # pristine source on disk. Still content-addressed — the table is
-            # the authority either way.
-            disk = _disk_digests(cls)
-            if _detect_matches(disk):
-                return _detect_matches(disk)
-            digests = disk if disk else digests
+        # A live match used to fall through to the no-match return below; it
+        # only went unnoticed because every reviewed chat-stream digest is the
+        # decorator-free disk form, which never matches the live getsource.
+        live = _detect_matches(digests)
+        if live:
+            return live
+        # A previous load's wrappers may still sit on the class (reload
+        # re-registers before the old load fully unwinds): recompute from
+        # pristine source on disk. Still content-addressed — the table is
+        # the authority either way.
+        disk = _disk_digests(cls)
+        if _detect_matches(disk):
+            return _detect_matches(disk)
+        digests = disk if disk else digests
     except Exception:
         return None
     log.warning("backend detect no match; live digests=%s", digests)
@@ -1218,7 +1274,11 @@ def _install_messages_timing(tx):
 
 def _install_skills(tx):
     from tools import skills_tool
-    original = skills_tool._find_all_skills
+    # main bf0203a794 renamed _find_all_skills -> find_all_skills (same
+    # keyword-only skip_disabled signature) while /v1/skills still passes
+    # include_editorial=True, so the unit is still what keeps that route alive.
+    attr = "find_all_skills" if hasattr(skills_tool, "find_all_skills") else "_find_all_skills"
+    original = getattr(skills_tool, attr)
     params = inspect.signature(original).parameters
     if "skip_disabled" not in params:
         raise RuntimeError("skills signature changed")
@@ -1234,7 +1294,7 @@ def _install_skills(tx):
                     warned.add(name)
             kwargs = {k: v for k, v in kwargs.items() if k in params}
         return original(skip_disabled=skip_disabled, **kwargs)
-    tx.set(skills_tool, "_find_all_skills", skills)
+    tx.set(skills_tool, attr, skills)
 
 
 # ---- activity unit (WAVE4: cross-device live run snapshot) -------------------
@@ -2329,6 +2389,9 @@ def _install_cron_bridge(tx):
     _signature(sd, "_deliver_result", "job", "content")
     _signature(sd, "_target_mirror_eligible", "job", "target", "global_mirror")
     _cron_fingerprint(SessionMessagesMixin, "append_delegation_delivery")  # writer reference
+    if _BACKEND == "vnew":
+        # The reference sequence moved into this helper on vnew.
+        _cron_fingerprint(SessionMessagesMixin, "_append_detached_result")
     for name in ("_check_transcript_write_guards", "_message_row_params",
                  "_bump_session_counters"):
         _cron_fingerprint(SessionMessagesMixin, name)
@@ -2436,7 +2499,8 @@ def _install_cron_bridge(tx):
 
 
 def _wake_fingerprint(target, name):
-    tables = {"target": WAKE_TARGET_FINGERPRINTS, "v022": WAKE_V022_FINGERPRINTS}
+    tables = {"target": WAKE_TARGET_FINGERPRINTS, "v022": WAKE_V022_FINGERPRINTS,
+              "vnew": WAKE_VNEW_FINGERPRINTS}
     table = tables.get(_BACKEND)
     if table is None:
         raise RuntimeError("wake backend not reviewed for this source")
@@ -2797,7 +2861,7 @@ def _install_wake(tx):
     # every other merge behaves verbatim. Wire alternation is unaffected:
     # request assembly merges the API copy regardless.
     from agent import agent_runtime_helpers as arh
-    _merge_table = (MERGE_V022_FINGERPRINTS if _BACKEND == "v022"
+    _merge_table = (MERGE_V022_FINGERPRINTS if _BACKEND in V022_LIKE
                     else MERGE_TARGET_FINGERPRINTS)
     _merge_src = inspect.getsource(arh._merge_consecutive_users)
     if (hashlib.sha256(_merge_src.encode()).hexdigest()
@@ -2901,7 +2965,7 @@ def _install_wake(tx):
     merge_passes = list(arh._SEQUENCE_REPAIR_PASSES)
     if merge_passes[3] is not arh._merge_consecutive_users:
         raise RuntimeError("wake source changed: _SEQUENCE_REPAIR_PASSES")
-    merge_passes[3] = (_merge_consecutive_users_wake_v022 if _BACKEND == "v022"
+    merge_passes[3] = (_merge_consecutive_users_wake_v022 if _BACKEND in V022_LIKE
                        else _merge_consecutive_users_wake)
     tx.set(arh, "_SEQUENCE_REPAIR_PASSES", tuple(merge_passes))
     state["wake"]["merge_pass"] = merge_passes[3]
@@ -3251,13 +3315,23 @@ def _install_approval_target(tx):
     tx.set(cls, "interrupt_active_runs", interrupt)
 
 
+# vnew's _SessionEventQueue counts in-flight worker-thread enqueues; flush waits
+# them out. Queues from target/v022 have no flush, so this is a no-op there.
+async def _events_flush(events):
+    flush = getattr(events, "flush", None)
+    if flush is not None:
+        await flush()
+
+
 # Reviewed TARGET copy at Hermes revision d0288be5b3330d2442e3907185b8e9d0958297bb.
 # Deltas from the upstream method (everything else is verbatim):
 #   1. queue-mirror register/pop keyed by (id(self), run_id) around the turn;
 #   2. activity registration hook (activity batch; no-op while _ACTIVITY is None);
 #   3. module references prefixed with `api.` because this lives outside upstream;
 #   4. SELFWAKE S1 launch-evidence stamps for a wake dispatch in flight
-#      (_WAKE_LAUNCH; no-op while that contextvar is unset).
+#      (_WAKE_LAUNCH; no-op while that contextvar is unset);
+#   5. vnew (bf0203a794) upstream `await events.flush()` after _run_agent
+#      returns and before `done`, via _events_flush.
 async def _session_stream_target(self, request, *, _queues) -> "web.StreamResponse":
     """POST /api/sessions/{session_id}/chat/stream — SSE wrapper over _run_agent."""
     launch = _WAKE_LAUNCH.get()
@@ -3337,6 +3411,7 @@ async def _session_stream_target(self, request, *, _queues) -> "web.StreamRespon
                 tool_progress_callback=_tool_progress, interim_assistant_callback=_commentary,
                 active_run_id=run_id, approval_notify_callback=approval_notify,
                 approval_session_key=run_id, **ctx["run_kwargs"])
+            await _events_flush(events)
             is_dict = isinstance(result, dict)
             final_response = api._resolve_media_to_data_urls(result.get("final_response", "") if is_dict else "")
             effective_session_id = result.get("session_id", session_id) if is_dict else session_id
@@ -3371,6 +3446,7 @@ async def _session_stream_target(self, request, *, _queues) -> "web.StreamRespon
             self._active_run_agents.pop(run_id, None)
             self._run_approval_sessions.pop(run_id, None)
             self._release_run_owner_if_forgotten(run_id)
+            await _events_flush(events)
             await queue.put(_event_payload("done", {}))
             await queue.put(None)
 
@@ -4073,6 +4149,13 @@ def _install_steer_inbox(tx):
     cls = api.APIServerAdapter
     if _BACKEND not in TARGET_LIKE:
         raise RuntimeError("steer_inbox backend not implemented for this source")
+    if _BACKEND == "vnew":
+        # Fail-closed by decision (TASK-COMPATDRIFT 2026-11-01): on vnew every
+        # app turn runs through session_authority's durable FIFO, which never
+        # registers _active_run_agents for the session stream, so hook 2
+        # (agent/run binding) cannot bind and every admit would close as
+        # run_not_bound. Rebinding onto authority.steer_agent is its own task.
+        raise RuntimeError("steer_inbox not bound to session_authority on this source")
     state = getattr(api, _STATE, None)
     if state is None:
         raise RuntimeError("compat state missing")
