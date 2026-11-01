@@ -238,3 +238,28 @@ attempts per delivery. Success answers the live-owner handoff shape
 answers 502 `kind=bridge_unavailable` with the spool id and keeps the text.
 Each load drains recent `pending` and `failed` rows once.
 Design and evidence: `docs/crosssource-20261101.md`.
+
+## WebSocket bridge (standalone service, TASK-WSBRIDGE)
+
+`wsbridge.py` is not loaded by the plugin. It is its own process on its own port
+(default `127.0.0.1:8650`, path `/api/bridge/ws`) so it never shares 8642's event
+loop and needs no gateway restart. The app authenticates with
+`Authorization: Bearer <API_SERVER_KEY>`; the bridge reads the key from the
+environment or `$HERMES_HOME/.env` and refuses to start without one.
+
+Each app connection gets its own upstream connection, dialed through core's
+`connect_gateway(endpoint=...)` with an endpoint discovered right before the dial
+(never `None`, which could start a gateway) and a freshly minted ticket for one
+fixed subject. Only `session.resume`, `prompt.submit`, `session.steer`,
+`session.interrupt`, `approval.respond`, `clarify.respond` and `session.create`
+are relayed; anything else answers `-32601 method_not_found` and is logged.
+Writes reach only sessions whose `thread_id` is listed in `test_thread_ids` of
+`$HERMES_HOME/app-wsbridge.json` (or `$HERMES_APP_WSBRIDGE_CONFIG`), or sessions
+created on the same connection; every other session may only be resumed. After an
+upstream drop the bridge replays `session.resume` and sends `bridge.resumed`
+notifications before it relays further requests.
+
+Config: `{"host": "127.0.0.1", "port": 8650, "test_thread_ids": ["<thread id>"]}`.
+Run: `PYTHONPATH=~/.hermes/hermes-agent ~/.hermes/hermes-agent/.venv/bin/python wsbridge.py`.
+launchd template: `docs/wsbridge.launchd.plist.example` (not installed by any script).
+Live probe: `tools/wsbridge_probe.py` (`--inprocess` uses a throwaway key).
