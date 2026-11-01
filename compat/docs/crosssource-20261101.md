@@ -75,3 +75,15 @@ B. core 正式跨面接口：`PluginContext.inject_message(content, session_key=
 spool 新增 `message_id`、`trigger` 兩欄，舊檔開啟時以 `ALTER TABLE` 補上。狀態改為 `pending`、`delivered`、`failed`、`merged`。去重規則：同 session 同文字時，24 小時內有未送達列就併進最舊的那列並重送（retry 鈕因此救得回 failed 列），否則 60 秒內已送達的列直接回成功不重發；同一列同時只有一個投遞在跑。drain 撈 24 小時內的 `pending` 與 `failed`，同 session 同文字的列先收斂到最舊一列（其餘標 `merged`），再各給一輪 3 次嘗試。每次 plugin 載入後 drain 一次：冷啟動由 api_server 的 route sync factory 觸發，熱重載由 live adapter 掃描觸發，延遲 10 秒讓平台先連上。超過 2000 字（含尾註）的訊息在進 spool 前回 413 `crosssource_too_long`。
 
 待測：live gateway 上的 REST 實發與 drain 實際觸發點未實測；`allow_gateway_injection` 開啟前，訊息會出現在 thread，但 agent 不會回覆。
+
+## TASK-RENDERPARITY：注入對話的渲染對齊 api_server（2026-11-01）
+
+app 注入 Discord session 的那一列，core 以 automation turn 落庫：`display_kind='internal_notification'`、`display_metadata={"gateway_input_owner": ...}`、內容帶 thread 的發話者前綴（`[zaber] test from app`）。app 的 `Message.isUserTurn`（`app/lib/models/message.dart:80`）要求 `display_kind == null`，所以這列被畫成「內部通知」卡，也不構成 turn 邊界，`projectMessages`（同檔 `:170`）因此把該輪回覆判成執行旁白，只有最後一個真正 user turn 之後的最後一則回覆是 HERMES 氣泡。
+
+`injected_rows.py` 包住 `APIServerAdapter._message_response`，只在讀取投影上改：user 列的 `gateway_input_owner` 若等於本 plugin 某筆 admission 的 owner，就把 `display_kind` 改回 null、內容換成 admission 的原文（也就是 app 端打的字），並附白名單欄位 `crosssource_provenance`（schema、admission_id、原 display_kind）。儲存不動。owner 由 `session_admissions` 中 request_id 以 `["plugin","hermes-app-compat",` 開頭的列重算，公式與 core `_hmwa_prepare_turn` 相同；Discord 本人訊息、cron 報告、背景程序通知、他 plugin 注入都對不上，原樣輸出。載入時檢查 core 四處原始碼 needle，漂移則整個 unit 以 ERROR `RENDERPARITY DISABLED` 跳過；執行期讀表失敗則每種原因記一次 ERROR `RENDERPARITY DEGRADED`，該列退回原生投影。
+
+「簡略對話」標頭（`chat_page.dart:1760-1762`）判的是每個 session 的檢視偏好 `detailed`（`local_store.dart:297`，預設 false），api_server 對話同樣顯示它，「執行了 N 個步驟」摺疊列也只在簡略模式產生，所以這個條件不改。
+
+drain 改以訊息建立時間判齡：`pending`／`failed` 列的 `created_at` 超過 `DRAIN_MAX_AGE_SECONDS`（沿用既有 24 小時常量）就標 `stale-dropped`、`last_error='age:<秒>s'`，不注入。舊行為用 `updated_at` 篩選，每次重試都會刷新它，持續失敗的舊列因此永遠不會過期；過期列則被靜默留在 `failed`。
+
+另記：10-30 的「hindsight 掛了？」在 11-01 11:48:12 被注入，spool 列 `created_at` 正是 11:48:12、attempts 1，gateway log 同秒有 Dart 客戶端的 `POST /api/sessions/20260824_031049_220b21ea/chat/stream`，期間沒有任何 drain 行，所以來源是 app 端送出，不是 drain。同一筆在 core 端是 `refused by the session authority ... (not_found)` 與 `was not routed`，spool 卻記為 `injected`，代表 `inject_message` 在未路由時仍回傳真值，這點本任務未處理。

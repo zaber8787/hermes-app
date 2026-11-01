@@ -33,8 +33,8 @@ EXTRA_MIMES = frozenset({
 })
 UNITS = ("limits", "upload", "media", "history", "approval", "skills", "activity", "push",
          "approval_inbox", "cron_bridge", "wake", "selfwake", "steer_inbox",
-         "notification_events", "messages_timing", "media_persist", "clarify", "session_list",
-         "crosssource")
+         "notification_events", "messages_timing", "media_persist", "clarify",
+         "injected_rows", "session_list", "crosssource")
 log = logging.getLogger("hermes-app-compat")
 _STATE = "_hermes_app_compat_state_v1"
 _MISSING = object()
@@ -768,6 +768,20 @@ def _install_session_list(tx):
     from . import session_list
     from hermes_state import SessionDB
     session_list.install(api.APIServerAdapter, SessionDB, tx)
+
+
+def _install_injected_rows(tx):
+    """RENDERPARITY: rows this plugin injected into a Discord session project as the owner's
+    own user turn (see injected_rows.py). A drifted seam skips the unit loudly; rows then keep
+    core's internal_notification projection."""
+    from . import injected_rows
+    from hermes_constants import get_hermes_home
+    try:
+        injected_rows.install(api.APIServerAdapter, tx, Path(get_hermes_home()) / "state.db")
+    except Exception as exc:
+        log.error("RENDERPARITY DISABLED: core seam drifted (%s); app-injected Discord rows keep the "
+                  "internal_notification projection until compat is reviewed against this core", exc)
+        raise
 
 
 def _install_crosssource(tx):
