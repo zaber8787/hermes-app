@@ -110,6 +110,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     ChatViewers.acquire(widget.session.id);
     title = widget.session.title;
     chat = ref.read(chatProvider(widget.session.id));
+    chat.attachSessionSource(widget.session.source);
     final deepLink = widget.deepLink;
     if (deepLink != null) chat.applyDeepLink(deepLink);
     final store = ref.read(localStoreProvider);
@@ -1443,6 +1444,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // the sent text haunting the input box whenever detach/recover made it
       // resolve only at run end, and an attachments.clear() throw used to
       // skip the clearing entirely.
+      controller.attachSessionSource(widget.session.source);
       await controller.send(prompt, draft: value, rawDraft: rawText);
       // R2 §4.3: decide from THIS attempt's outcome — never from the shared
       // error slot. Attachments clear only for a confirmed-accepted send; a
@@ -1921,6 +1923,28 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                       style: TextStyle(
                         color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
+                    ),
+                  ),
+                if (c.wsNotice != null)
+                  Padding(
+                    key: const ValueKey('chat.wsNotice'),
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          strings.render(c.wsNotice!),
+                          style: TextStyle(
+                            color: Theme.of(context).colorScheme.tertiary,
+                          ),
+                        ),
+                        for (final text in c.wsQueuedTexts)
+                          Text(
+                            text,
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                      ],
                     ),
                   ),
                 if (c.error != null ||

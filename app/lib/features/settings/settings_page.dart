@@ -1,8 +1,11 @@
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../api/hermes_repository.dart';
+import '../../data/gateway_ws.dart' show wsSupported;
+import '../../data/ws_route.dart';
 import '../../l10n/app_locale.dart';
 import '../../l10n/app_strings.dart';
 import '../../l10n/localized_text.dart';
@@ -23,6 +26,8 @@ class SettingsPage extends ConsumerStatefulWidget {
 
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   late final TextEditingController url, key;
+  // TASK-WSAPP: the direct-link overrides; null without a LocalStore.
+  TextEditingController? _wsUrl, _wsDirect;
   bool obscure = true, busy = false, savingLanguage = false;
   // APPWAKE D: toggle state + the server's offer (null = unknown/offline).
   bool _wakeOn = false;
@@ -50,6 +55,12 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     }
     _wakeStore = store;
     _wakeOn = store?.autoWakeEnabled(s.url) ?? false;
+    if (store != null) {
+      _wsUrl = TextEditingController(text: store.wsBridgeUrl() ?? '');
+      _wsDirect = TextEditingController(
+        text: WsDirectEntry.formatLines(loadWsDirect(store)),
+      );
+    }
     if (store != null && s.configured) {
       unawaited(_loadWakeFeature());
     }
@@ -69,7 +80,37 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   void dispose() {
     url.dispose();
     key.dispose();
+    _wsUrl?.dispose();
+    _wsDirect?.dispose();
     super.dispose();
+  }
+
+  /// Validate before anything is written; rebuilds the router (and with it
+  /// the chat controllers) only when a value really moved, since that drops
+  /// the running link.
+  Future<void> _saveWsSettings() async {
+    final store = _wakeStore;
+    final wsUrl = _wsUrl?.text.trim(), wsDirect = _wsDirect?.text;
+    if (store == null || wsUrl == null || wsDirect == null) return;
+    if (wsUrl.isNotEmpty && parseBridgeUrl(wsUrl) == null) {
+      throw const AppFormatException(
+        UiMessage.local(MessageKey.settingsWsUrlInvalid),
+      );
+    }
+    final entries = WsDirectEntry.parseLines(wsDirect);
+    if (entries == null) {
+      throw const AppFormatException(
+        UiMessage.local(MessageKey.settingsWsDirectInvalid),
+      );
+    }
+    final raw = entries.isEmpty
+        ? null
+        : jsonEncode([for (final e in entries) e.toJson()]);
+    final nextUrl = wsUrl.isEmpty ? null : wsUrl;
+    if (nextUrl == store.wsBridgeUrl() && raw == store.wsDirectRaw()) return;
+    await store.saveWsBridgeUrl(nextUrl);
+    await store.saveWsDirectRaw(raw);
+    ref.invalidate(wsRouterProvider);
   }
 
   AppSettings validated() {
@@ -157,7 +198,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       feedback = null;
     });
     try {
-      await ref.read(settingsProvider.notifier).save(validated());
+      final next = validated();
+      await _saveWsSettings();
+      await ref.read(settingsProvider.notifier).save(next);
       if (mounted && Navigator.canPop(context)) Navigator.pop(context);
     } on AppFormatException catch (e) {
       if (mounted) setState(() => feedback = e.uiMessage);
@@ -340,6 +383,44 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 style: const TextStyle(fontSize: 12),
               ),
               const SizedBox(height: 24),
+              // TASK-WSAPP: collapsed by default; empty allowlist = HTTP only.
+              if (_wsUrl != null && _wsDirect != null && wsSupported)
+                ExpansionTile(
+                  key: const ValueKey('settings.wsDirect'),
+                  tilePadding: EdgeInsets.zero,
+                  title: Text(strings.resolve(MessageKey.settingsWsTitle)),
+                  children: [
+                    TextField(
+                      key: const ValueKey('settings.wsUrl'),
+                      controller: _wsUrl,
+                      enabled: !busy,
+                      keyboardType: TextInputType.url,
+                      autocorrect: false,
+                      decoration: InputDecoration(
+                        labelText: strings.resolve(MessageKey.settingsWsUrl),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      key: const ValueKey('settings.wsAllow'),
+                      controller: _wsDirect,
+                      enabled: !busy,
+                      minLines: 2,
+                      maxLines: 6,
+                      autocorrect: false,
+                      enableSuggestions: false,
+                      decoration: InputDecoration(
+                        labelText: strings.resolve(MessageKey.settingsWsDirect),
+                        helperText: strings.resolve(
+                          MessageKey.settingsWsDirectHint,
+                        ),
+                        border: const OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 12),
+                  ],
+                ),
               // APPWAKE D: the auto-read switch. OFF is the shipped default;
               // an unavailable server explains itself instead of lying off.
               Semantics(

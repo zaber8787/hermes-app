@@ -152,6 +152,20 @@ const Map<MessageKey, String> catalogEn = {
       'Message not sent. Your draft and attachments have been kept.',
   MessageKey.chatSendOffline:
       'You are offline. The message has not been sent. Retry when connected.',
+  MessageKey.chatWsQueued:
+      'Queued. It will be sent automatically when the connection returns.',
+  MessageKey.chatWsNotEnabled:
+      'Direct link is not enabled for this conversation.',
+  MessageKey.chatWsReadOnly: 'This conversation is read-only now.',
+  MessageKey.chatWsRefusedDraft:
+      'A queued message was refused ({error}) and went back to your draft.',
+  MessageKey.settingsWsTitle: 'Direct link (WebSocket bridge)',
+  MessageKey.settingsWsUrl: 'Bridge URL (blank = derived from the server URL)',
+  MessageKey.settingsWsDirect: 'Allowlisted conversations',
+  MessageKey.settingsWsDirectHint: 'One "<thread_id> <session_id>" per line',
+  MessageKey.settingsWsDirectInvalid:
+      'Each allowlist line needs a thread id and a session id.',
+  MessageKey.settingsWsUrlInvalid: 'The bridge URL must start with ws or wss.',
   MessageKey.chatSendDispatching: 'Sending message…',
   MessageKey.chatRetryUnsent: 'Retry sending',
   MessageKey.chatStateRunLabel: '{who}: {what}',
@@ -791,6 +805,16 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.chatCrossTabSafetyReduced: '此瀏覽器無法協調多個分頁。請只開啟一個此對話分頁；重試送出暫停使用。',
   MessageKey.chatSendNotDispatched: '訊息未送出，草稿與附件已保留。',
   MessageKey.chatSendOffline: '目前離線，訊息尚未送出。恢復連線後可重試。',
+  MessageKey.chatWsQueued: '已排隊，連線恢復自動補送',
+  MessageKey.chatWsNotEnabled: '此對話尚未啟用直連',
+  MessageKey.chatWsReadOnly: '此對話已唯讀',
+  MessageKey.chatWsRefusedDraft: '排隊的訊息被拒收（{error}），已放回草稿。',
+  MessageKey.settingsWsTitle: '直連（WebSocket 橋）',
+  MessageKey.settingsWsUrl: '橋接網址（留空則由伺服器網址推得）',
+  MessageKey.settingsWsDirect: '直連白名單',
+  MessageKey.settingsWsDirectHint: '每行一組「<thread_id> <session_id>」',
+  MessageKey.settingsWsDirectInvalid: '白名單每行都要有 thread id 與 session id。',
+  MessageKey.settingsWsUrlInvalid: '橋接網址必須以 ws 或 wss 開頭。',
   MessageKey.chatSendDispatching: '正在送出訊息…',
   MessageKey.chatRetryUnsent: '重試送出',
   MessageKey.chatStateM022: '串流提早結束',

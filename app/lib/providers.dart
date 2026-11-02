@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_riverpod/misc.dart' show ProviderOrFamily;
 import 'package:flutter_riverpod/legacy.dart';
 import 'api/hermes_repository.dart';
+import 'data/ws_route.dart';
 import 'features/settings/local_store.dart';
 import 'features/chat/chat_controller.dart';
 import 'l10n/message_key.dart';
@@ -80,6 +81,16 @@ final healthProvider = FutureProvider<bool>((ref) async {
 /// app uses wall time; widget tests drive the binding's fake clock.
 final chatNowProvider = Provider<DateTime Function()>((ref) => DateTime.now);
 
+/// TASK-WSAPP: one bridge link per configured server. Disabled (no socket,
+/// routes nothing) until settings hold an allowlist; the key is the same
+/// API_SERVER_KEY the HTTP channel already carries.
+final wsRouterProvider = Provider<WsRouter>((ref) {
+  final s = ref.watch(settingsProvider);
+  final router = buildWsRouter(ref.watch(localStoreProvider), s.url, s.key);
+  ref.onDispose(router.dispose);
+  return router;
+});
+
 final chatProvider = ChangeNotifierProvider.family<ChatController, String>((
   ref,
   sid,
@@ -90,6 +101,7 @@ final chatProvider = ChangeNotifierProvider.family<ChatController, String>((
     sid,
     serverUrl: ref.watch(settingsProvider).url,
     now: ref.watch(chatNowProvider),
+    wsRouter: ref.watch(wsRouterProvider),
   );
 });
 

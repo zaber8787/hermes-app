@@ -246,6 +246,29 @@ class LocalStore {
       ? prefs.remove('voice.mic')
       : prefs.setString('voice.mic', v);
 
+  // ---- TASK-WSAPP: bridge direct link (global, never _scope-d) -----------
+  // `ws.url` is an OPTIONAL override (unset = derived from server.url);
+  // `ws.direct` is the allowlist of [{thread, session}] pairs, unset = no
+  // session routes over WS. The outbox is keyed per server URL so a switch
+  // of server never submits one server's queued text to another.
+  String? wsBridgeUrl() => prefs.getString('ws.url');
+
+  Future<void> saveWsBridgeUrl(String? v) => v == null || v.trim().isEmpty
+      ? prefs.remove('ws.url')
+      : prefs.setString('ws.url', v.trim());
+
+  String? wsDirectRaw() => prefs.getString('ws.direct');
+
+  Future<void> saveWsDirectRaw(String? json) => json == null || json.isEmpty
+      ? prefs.remove('ws.direct')
+      : prefs.setString('ws.direct', json);
+
+  String? wsOutboxRaw(String server) => prefs.getString('ws.outbox.$server');
+
+  Future<void> saveWsOutboxRaw(String server, String? json) => json == null
+      ? prefs.remove('ws.outbox.$server')
+      : prefs.setString('ws.outbox.$server', json);
+
   // ---- I18N: global UI language (I18N-PLAN §4.2) --------------------------
   // `ui.locale` is GLOBAL (never _scope-d), independent of credentials: a
   // corrupt/missing value normalizes to English and must never block

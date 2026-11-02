@@ -5,6 +5,9 @@ import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import '../../diagnostics/diagnostics.dart';
 import '../../api/hermes_repository.dart';
 import '../../api/transport.dart' show DispatchObservation, TransportStage;
+import '../../data/gateway_ws.dart' show GatewayRpcError, WsEvent;
+import '../../data/ws_outbox.dart' show WsDelivery, WsRefusal;
+import '../../data/ws_route.dart';
 import '../../l10n/app_strings.dart';
 import '../../l10n/message_key.dart';
 import '../../l10n/ui_message.dart';
@@ -219,6 +222,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     ConnectivityHint Function()? connectivity,
     StoreTxCapability Function()? txCapability,
     @visibleForTesting bool? webStreamRecovery,
+    this._wsRouter,
   }) : wait = wait ?? ((duration) => Future<void>.delayed(duration)),
        serverUrl = serverUrl ?? repo.baseUrl,
        _webStreamRecovery = webStreamRecovery ?? kIsWeb,
@@ -239,6 +243,171 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         WidgetsBinding.instance.lifecycleState == AppLifecycleState.hidden;
   }
   final Future<void> Function(Duration) wait;
+
+  // ---- TASK-WSAPP: bridge direct link -------------------------------------
+  // Null source or a non-routed session means every path below is the HTTP
+  // one, untouched. `_wsAdmitted` is the WS counterpart of a known run id: a
+  // WS turn has no HTTP run, so steer and stop aim at the session instead.
+  final WsRouter? _wsRouter;
+  String? _wsSource;
+  bool _wsAdmitted = false, _wsWatching = false;
+  UiMessage? _wsRefusal;
+  final _wsSubs = <StreamSubscription<Object?>>[];
+
+  bool get _wsRouted => _wsRouter?.routes(sid, _wsSource) ?? false;
+
+  /// The page names the session's source (the controller is keyed by id
+  /// only). Idempotent; a routed session opens the link and watches its
+  /// outbox from here on.
+  void attachSessionSource(String source) {
+    _wsSource = source;
+    final router = _wsRouter;
+    if (_disposed || _wsWatching || router == null || !_wsRouted) return;
+    _wsWatching = true;
+    router.start();
+    final outbox = router.outbox!;
+    outbox.addListener(notifyListeners);
+    _wsSubs
+      ..add(outbox.deliveries.listen(_onWsDelivery))
+      ..add(outbox.refusals.listen(_onWsRefusal))
+      ..add(router.ws!.events.listen(_onWsEvent));
+  }
+
+  /// §4: shown while this session's sends wait for the link; a refused flush
+  /// says so until the next send.
+  UiMessage? get wsNotice => wsQueuedTexts.isNotEmpty
+      ? const UiMessage.local(MessageKey.chatWsQueued)
+      : _wsRefusal;
+
+  List<String> get wsQueuedTexts => [
+    for (final e in _wsRouter?.outbox?.queued(sid) ?? const []) e.text,
+  ];
+
+  void _onWsDelivery(WsDelivery d) {
+    if (d.entry.sid == sid && !busy) unawaited(load());
+  }
+
+  void _onWsRefusal(WsRefusal r) {
+    if (r.entry.sid != sid) return;
+    _wsRefusal = UiMessage.local(
+      MessageKey.chatWsRefusedDraft,
+      args: {'error': messageForError(WsRouter.refusal(r.error))},
+    );
+    notifyListeners();
+  }
+
+  /// A flushed send has no live turn to settle it: its reply lands through
+  /// the same history read as any other idle refresh.
+  void _onWsEvent(WsEvent e) {
+    if (busy || e.type != 'message.complete') return;
+    final ws = _wsRouter!.ws!;
+    if (e.sessionId == sid || e.sessionId == ws.resolvedId(sid)) {
+      unawaited(load());
+    }
+  }
+
+  void _cancelTurnStream() {
+    repo.cancelStream(sid);
+    _wsRouter?.cancel(sid);
+  }
+
+  /// §4: the text goes to the outbox and nothing else moves: no claim, no
+  /// journal entry (the outbox owns delivery), no turn. Spent like an
+  /// accepted send, because it will go out without the user doing anything.
+  Future<void> _queueOverWs(
+    String input,
+    String spentDraft, {
+    String? retryOf,
+  }) async {
+    if (retryOf != null &&
+        !await _stampRetriedBy(retryOf, LocalStore.newAttemptId())) {
+      if (!_disposed) {
+        error = const UiMessage.local(MessageKey.chatSendNotDispatched);
+        notifyListeners();
+      }
+      return;
+    }
+    if (_disposed) return;
+    await _wsRouter!.queue(sid, input);
+    await _spendWsDraft(spentDraft);
+    if (_disposed) return;
+    notifyListeners();
+  }
+
+  Future<void> _spendWsDraft(String spentDraft) async {
+    sendOutcome = SendOutcome.accepted;
+    error = null;
+    _wsRefusal = null;
+    if (spentDraft.isNotEmpty && store.draft(serverUrl, sid) == spentDraft) {
+      await store.saveDraft(serverUrl, sid, '');
+    }
+  }
+
+  /// A live WS turn whose submit the link could not carry: the text stays in
+  /// the outbox under its key, so the turn retires without a failed card and
+  /// its journal entry leaves (the outbox owns delivery from here on).
+  Future<void> _parkOnWsOutbox(
+    Object? token, {
+    required String claim,
+    required String spentDraft,
+  }) async {
+    await _evidenceQueue;
+    final attemptId = _turnAttemptId;
+    await _retireNeverDispatched(token, claim: claim);
+    if (_disposed) return;
+    _turnAttemptId = null;
+    _mirrorAttemptId = null;
+    _attemptMirror = null;
+    if (attemptId != null) {
+      await store.removeAttempt(serverUrl, sid, attemptId);
+    }
+    await _spendWsDraft(spentDraft);
+    if (!_disposed) notifyListeners();
+  }
+
+  /// `session.interrupt` for a WS turn; the turn's stream then ends with the
+  /// owner's interrupted `message.complete`, like an SSE terminal frame.
+  Future<StopResult> _stopOverWs(Object? token) async {
+    stopBusy = true;
+    error = null;
+    _setStop(
+      StopNotice.requested,
+      const UiMessage.local(MessageKey.chatStateM030),
+    );
+    notifyListeners();
+    try {
+      await _wsRouter!.interrupt(sid);
+    } catch (e) {
+      if (!identical(_turnToken, token)) {
+        return const StopResult(StopResultKind.failure);
+      }
+      final failed = UiMessage.local(
+        MessageKey.chatStateM032,
+        args: {
+          'error': messageForError(
+            e is GatewayRpcError ? WsRouter.refusal(e) : e,
+          ),
+        },
+      );
+      _setStop(StopNotice.failed, failed);
+      stopBusy = false;
+      notifyListeners();
+      return StopResult(StopResultKind.failure, message: failed);
+    }
+    if (!identical(_turnToken, token)) {
+      return const StopResult(StopResultKind.failure);
+    }
+    _setStop(
+      StopNotice.accepted,
+      const UiMessage.local(MessageKey.chatStateStoppedByYou),
+    );
+    stopBusy = false;
+    notifyListeners();
+    return const StopResult(
+      StopResultKind.serverStopRequested,
+      serverDisposition: 'requested',
+    );
+  }
 
   /// STUCK-BUSY B3: one injectable clock for every recovery deadline
   /// (deterministic tests never wait real 60s).
@@ -2000,7 +2169,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _turnRecoveryCause = null;
     _recoveryEpoch++; // abandon any in-flight recover() loop
     _recovery = null;
-    repo.cancelStream(sid);
+    _cancelTurnStream();
     _watchTimer?.cancel();
     _watchTimer = Timer.periodic(watchInterval, (_) => unawaited(_pollRun()));
     unawaited(_pollRun());
@@ -2560,7 +2729,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> reconfirmApprovals(ApprovalRequest req) =>
       _refreshApprovals(req.runId);
 
-  bool get canControl => live?.runId != null && !live!.completed && busy;
+  bool get canControl =>
+      (live?.runId != null || (live != null && _wsAdmitted)) &&
+      !live!.completed &&
+      busy;
 
   // ---- stopping a turn the user can see but the SSE may not know ----------
   // runId order for a stop target: live turn → bootstrap-known runId →
@@ -3004,7 +3176,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   void dispose() {
     if (_disposed) return; // idempotent: body + addTearDown both call it
     repo.releaseStreamKeepalive(sid);
-    repo.cancelStream(sid);
+    _cancelTurnStream();
+    for (final sub in _wsSubs) {
+      unawaited(sub.cancel());
+    }
+    _wsSubs.clear();
+    if (_wsWatching) _wsRouter?.outbox?.removeListener(notifyListeners);
     _watchTimer?.cancel();
     _deadlineTimer?.cancel();
     _countdownTicker?.cancel();
@@ -3819,6 +3996,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     if (sendBlocked || input.trim().isEmpty) return; // AUDIT-09 gate
     final spentDraft = draft ?? input;
     final isWake = wakeBatch != null;
+    // TASK-WSAPP §2: a wake keeps its HTTP ledger path; every api_server or
+    // non-allowlisted session has wsRouted false and never leaves HTTP.
+    final wsRouted = !isWake && _wsRouted;
     // R3 §5.3: a retry child must still see its parent's UNRETRIED
     // notDispatched evidence at entry; a second view that already stamped
     // retriedBy loses here, before any state or claim is touched.
@@ -3838,6 +4018,14 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // (Slash commands run through client commands upstream and the
     // auto-wake dispatch path is deliberately NOT gated: it has its own
     // server ledger and this gate would strand admitted batches.)
+    // TASK-WSAPP §4: a WS-routed send has an outbox that survives the outage,
+    // so it queues instead of being blocked.
+    if (wsRouted &&
+        (_connectivity() == ConnectivityHint.offline ||
+            _wsRouter!.mustQueue(sid))) {
+      await _queueOverWs(input, spentDraft, retryOf: retryOf);
+      return;
+    }
     if (!isWake && _connectivity() == ConnectivityHint.offline) {
       await _blockSendBeforeDispatch(rawDraft ?? spentDraft, retryOf: retryOf);
       return;
@@ -3877,6 +4065,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _turnServerEpoch = null;
     _wakeBatchInFlight = wakeBatch;
     _wakeAdopted = false;
+    _wsAdmitted = false;
+    _wsRefusal = null;
     sendOutcome = null; // this attempt owns its outcome from here on
     storageNotice = null;
     // R3: the evidence bookkeeping is PER TURN — a new send never inherits
@@ -4142,9 +4332,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final observation = !isWake && _turnAttemptId != null
         ? _JournalObservation(this, token, _turnAttemptId!)
         : null;
-    repo.stageChatObservation(sid, observation);
+    if (!wsRouted) repo.stageChatObservation(sid, observation);
     try {
-      await for (final event in repo.chat(sid, input, wakeBatch: wakeBatch)) {
+      await for (final event
+          in wsRouted
+              ? _wsRouter!.turn(sid, input, observation: observation)
+              : repo.chat(sid, input, wakeBatch: wakeBatch)) {
         if (!accepted) {
           accepted = true;
           if (isWake) _wakePostHappened = true; // POST proven at the server
@@ -4163,6 +4356,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         }
         if (_disposed) return;
         if (!identical(live, turn) || !identical(_turnToken, token)) continue;
+        if (wsRouted) _wsAdmitted = true; // first frame = receipt in hand
         _lastEventAt = _clock();
         if (_quietStream) {
           _quietStream = false;
@@ -4307,6 +4501,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
         return;
       }
       await _finish(token: token);
+    } on WsQueued {
+      if (_disposed || !identical(live, turn) || _detached) return;
+      await _parkOnWsOutbox(token, claim: claim, spentDraft: spentDraft);
+      return;
     } on ApiException catch (e) {
       if (_disposed || !identical(live, turn) || _detached) return;
       if (isWake) _wakePostHappened = true; // a response = the POST arrived
@@ -4807,7 +5005,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _recoveryEpoch++; // abandon stragglers of THIS turn
     _recovery = null;
     repo.releaseStreamKeepalive(sid);
-    repo.cancelStream(sid);
+    _cancelTurnStream();
     // 2) Turn-scoped persistence. A failed cleanup leaves the record (the
     //    next bootstrap reconsiders it read-only) instead of either stranding
     //    busy or claiming a clean settle. D2: the clear is COMPARE-AND-
@@ -5798,6 +5996,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       return done.future;
     }
     final token = _turnToken; // stop belongs to a TURN (AUDIT-12)
+    if (_wsAdmitted && canControl) return _stopOverWs(token);
     final run = activeRunId;
     if (run == null) {
       final pending = store.loadPending(serverUrl, sid);
@@ -6053,6 +6252,32 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     steerBusy = true;
     error = null;
     notifyListeners();
+    // TASK-WSAPP §3: a WS turn has no HTTP run for the inbox or the legacy
+    // POST to aim at; `session.steer` names the running generation instead.
+    if (_wsAdmitted) {
+      try {
+        final outcome = await _wsRouter!.steer(sid, input.trim());
+        if (outcome == WsSteerOutcome.rejected) {
+          throw const ApiException('steer_rejected', 409);
+        }
+      } catch (e) {
+        if (_owns(token)) {
+          error = UiMessage.local(
+            MessageKey.chatStateM035,
+            args: {
+              'error': messageForError(
+                e is GatewayRpcError ? WsRouter.refusal(e) : e,
+              ),
+            },
+          );
+        }
+        rethrow;
+      } finally {
+        steerBusy = false;
+        notifyListeners();
+      }
+      return;
+    }
     // STEERWEB R4: with the durable inbox live the LOCAL composer submits
     // through the SAME resolver/receipt path; the legacy POST is only the
     // capability-off fallback.
