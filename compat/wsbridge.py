@@ -22,8 +22,10 @@ connection per app connection and relays JSON-RPC between them:
   wait for that replay, since a submit on a connection that has not resumed
   the session is ``permission_denied`` (gateway/session_controls.py:752).
 * writes (submit, steer, interrupt, approval/clarify answers) reach only
-  sessions whose Discord thread is listed in the config's ``test_thread_ids``
-  or that this connection created; any other session may only be resumed.
+  foreign sessions (``sessions.source`` not in ``HTTP_OWNED_SOURCES``) or
+  sessions this connection created; any other session may only be resumed. A
+  config that lists ``test_thread_ids`` further narrows the foreign sessions to
+  those threads; absent means the source alone decides.
 
 Run: ``python wsbridge.py [--config PATH]`` with hermes-agent on PYTHONPATH.
 """
@@ -51,11 +53,13 @@ ALLOWED_METHODS = frozenset({
     "session.resume", "prompt.submit", "session.steer", "session.interrupt",
     "approval.respond", "clarify.respond", "session.create",
 })
-# Verbs that change a session: only allowlisted test threads (or sessions this
+# Verbs that change a session: only foreign sessions (or sessions this
 # connection created) may receive them.
 WRITE_METHODS = frozenset({
     "prompt.submit", "session.steer", "session.interrupt", "approval.respond", "clarify.respond",
 })
+# These own their sessions on the HTTP API; the bridge never writes to them.
+HTTP_OWNED_SOURCES = frozenset({"api_server", "bot_room"})
 # gateway/session_busy_controls.py:175-179, session_controls.py:826-830.
 GENERATION_METHODS = frozenset({"session.steer", "session.interrupt"})
 # ``GatewayClient.rpc`` keyword that never goes on the wire.
@@ -92,13 +96,22 @@ def discover_endpoint():
 
 def state_db_thread_of(db_path):
     """``session_id -> thread_id`` read from ``state.db`` (read-only), None when unknown."""
+    return _state_db_column(db_path, "thread_id")
+
+
+def state_db_source_of(db_path):
+    """``session_id -> source`` read from ``state.db`` (read-only), None when unknown."""
+    return _state_db_column(db_path, "source")
+
+
+def _state_db_column(db_path, column):
     def lookup(session_id):
         try:
             con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=2)
         except sqlite3.Error:
             return None
         try:
-            row = con.execute("SELECT thread_id FROM sessions WHERE id = ?", (session_id,)).fetchone()
+            row = con.execute(f"SELECT {column} FROM sessions WHERE id = ?", (session_id,)).fetchone()
         except sqlite3.Error:
             return None
         finally:
@@ -108,7 +121,8 @@ def state_db_thread_of(db_path):
 
 
 def load_config(path):
-    """``{host, port, test_thread_ids}``; a missing file means loopback defaults and no writes."""
+    """``{host, port, test_thread_ids}``; a missing file means loopback defaults and no thread
+    limit. ``test_thread_ids`` is None when absent, an explicit ``[]`` admits no thread at all."""
     try:
         with open(path, encoding="utf-8") as f:
             raw = json.load(f)
@@ -116,11 +130,11 @@ def load_config(path):
         raw = {}
     if not isinstance(raw, dict):
         raise ValueError(f"{path}: expected a JSON object")
-    threads = raw.get("test_thread_ids") or []
-    if not isinstance(threads, list):
+    threads = raw.get("test_thread_ids")
+    if threads is not None and not isinstance(threads, list):
         raise ValueError(f"{path}: test_thread_ids must be a list")
     return {"host": str(raw.get("host") or DEFAULT_HOST), "port": int(raw.get("port") or DEFAULT_PORT),
-            "test_thread_ids": frozenset(str(t) for t in threads)}
+            "test_thread_ids": None if threads is None else frozenset(str(t) for t in threads)}
 
 
 def _error(rid, code, message, data=None):
@@ -129,12 +143,13 @@ def _error(rid, code, message, data=None):
 
 
 class Bridge:
-    def __init__(self, *, key, test_thread_ids=frozenset(), discover=discover_endpoint, thread_of=None,
+    def __init__(self, *, key, test_thread_ids=None, discover=discover_endpoint, thread_of=None, source_of=None,
                  connect=None, reconnect_delays=(0.5, 1, 2, 5, 10), request_wait=15.0):
         self.key = key
-        self.test_thread_ids = frozenset(str(t) for t in test_thread_ids)
+        self.test_thread_ids = None if test_thread_ids is None else frozenset(str(t) for t in test_thread_ids)
         self.discover = discover
         self.thread_of = thread_of or (lambda _sid: None)
+        self.source_of = source_of or (lambda _sid: None)
         self.connect = connect
         self.reconnect_delays = tuple(reconnect_delays)
         self.request_wait = request_wait
@@ -148,6 +163,12 @@ class Bridge:
         return connect(endpoint=endpoint, subject=subject())
 
     async def may_write(self, session_id):
+        # An unknown source is no evidence of a foreign session: refuse.
+        source = await asyncio.to_thread(self.source_of, session_id)
+        if not source or source in HTTP_OWNED_SOURCES:
+            return False
+        if self.test_thread_ids is None:
+            return True
         thread = await asyncio.to_thread(self.thread_of, session_id)
         return thread is not None and str(thread) in self.test_thread_ids
 
@@ -349,8 +370,8 @@ def _api_server_key(home):
 
 async def _serve_forever(bridge, host, port):
     server = await bridge.serve(host, port)
-    log.info("wsbridge listening on %s:%s%s (%d test thread(s))", host, port, BRIDGE_PATH,
-             len(bridge.test_thread_ids))
+    limit = "source only" if bridge.test_thread_ids is None else f"{len(bridge.test_thread_ids)} test thread(s)"
+    log.info("wsbridge listening on %s:%s%s (%s)", host, port, BRIDGE_PATH, limit)
     async with server:
         await server.serve_forever()
 
@@ -369,7 +390,8 @@ def main(argv=None):
     if not key:
         raise SystemExit("wsbridge: API_SERVER_KEY is unavailable; refusing to serve unauthenticated")
     bridge = Bridge(key=key, test_thread_ids=cfg["test_thread_ids"],
-                    thread_of=state_db_thread_of(home / "state.db"))
+                    thread_of=state_db_thread_of(home / "state.db"),
+                    source_of=state_db_source_of(home / "state.db"))
     asyncio.run(_serve_forever(bridge, args.host or cfg["host"], args.port or cfg["port"]))
 
 

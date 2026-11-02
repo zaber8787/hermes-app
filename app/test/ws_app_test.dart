@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:hermes_app/api/hermes_repository.dart';
 import 'package:hermes_app/api/sse.dart';
@@ -8,13 +10,19 @@ import 'package:hermes_app/data/gateway_ws.dart';
 import 'package:hermes_app/data/ws_outbox.dart';
 import 'package:hermes_app/data/ws_route.dart';
 import 'package:hermes_app/features/chat/chat_controller.dart';
+import 'package:hermes_app/features/chat/chat_page.dart';
 import 'package:hermes_app/features/settings/local_store.dart';
+import 'package:hermes_app/l10n/app_locale.dart';
 import 'package:hermes_app/l10n/message_key.dart';
 import 'package:hermes_app/l10n/ui_message.dart';
 import 'package:hermes_app/models/message.dart';
+import 'package:hermes_app/models/session.dart';
 import 'package:hermes_app/models/session_activity.dart';
 import 'package:hermes_app/platform/connectivity_hint.dart';
+import 'package:hermes_app/providers.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'support/localized_app.dart';
 
 /// TASK-WSAPP: the app side of the bridge, against a fake that speaks the
 /// wire shape of compat/wsbridge.py (id pairing, `method:"event"` frames,
@@ -274,11 +282,192 @@ void main() {
     expect(parseBridgeUrl('wss://ok.example/x'), isNotNull);
   });
 
-  test('allowlist text parses pairs and refuses a malformed line', () {
-    final ok = WsDirectEntry.parseLines('111 s-1\n\n222 s-2\n')!;
-    expect(ok.map((e) => e.sessionId), ['s-1', 's-2']);
-    expect(WsDirectEntry.formatLines(ok), '111 s-1\n222 s-2');
-    expect(WsDirectEntry.parseLines('only-one-token'), isNull);
+  group('TASK-WSAUTO: the server mark routes, no setup', () {
+    const foreignRow = {
+      'id': sid,
+      'title': 'from discord',
+      'source': 'discord',
+      'started_at': 1.0,
+      'foreign_source': true,
+      'thread_id': '1544350912389189704',
+    };
+
+    test('every Session copy keeps the mark; only true sets it', () {
+      final s = Session.fromJson(foreignRow);
+      expect(s.foreignSource, isTrue);
+      expect(s.withActivity(2).foreignSource, isTrue);
+      expect(s.withTitle('x').foreignSource, isTrue);
+      expect(s.withHidden(true).foreignSource, isTrue);
+      expect(s.withPinned(true).foreignSource, isTrue);
+      expect(
+        Session.fromJson(const {'id': 'a', 'source': 'discord'}).foreignSource,
+        isFalse,
+        reason: 'a server without the field stays on HTTP',
+      );
+    });
+
+    test('the mark alone routes; a threadless source needs nothing else', () {
+      final bridge = FakeBridge();
+      final ws = newWs(bridge);
+      final router = WsRouter(
+        ws: ws,
+        outbox: WsOutbox(ws, MapPersistence()),
+        supported: true,
+      );
+      addTearDown(router.dispose);
+      expect(router.routes('cron-1', 'cron', foreignSource: true), isTrue);
+      expect(router.routes('cron-1', 'cron'), isFalse);
+      expect(router.routes(sid, 'api_server'), isFalse);
+      expect(
+        WsRouter.disabled().routes(sid, 'x', foreignSource: true),
+        isFalse,
+      );
+    });
+
+    test('a fresh install builds a live router and dials nothing', () async {
+      SharedPreferences.setMockInitialValues({});
+      final store = LocalStore(await SharedPreferences.getInstance());
+      final bridge = FakeBridge();
+      final router = buildWsRouter(
+        store,
+        url,
+        'test-only',
+        connector: bridge.connect,
+        supported: true,
+      );
+      addTearDown(router.dispose);
+      expect(router.routes(sid, 'discord', foreignSource: true), isTrue);
+      expect(router.routes(sid, 'api_server'), isFalse);
+      await Future<void>.delayed(const Duration(milliseconds: 5));
+      expect(bridge.dials, 0, reason: 'only a routed session opens the link');
+    });
+
+    test('an upgrade keeps its saved allowlist in the union', () async {
+      SharedPreferences.setMockInitialValues({
+        'ws.direct': jsonEncode([
+          {'thread': 'thread-1', 'session': sid},
+        ]),
+      });
+      final store = LocalStore(await SharedPreferences.getInstance());
+      final router = buildWsRouter(
+        store,
+        url,
+        'test-only',
+        connector: FakeBridge().connect,
+        supported: true,
+      );
+      addTearDown(router.dispose);
+      expect(router.routes(sid, 'discord'), isTrue);
+      expect(router.routes('other', 'discord', foreignSource: true), isTrue);
+      expect(router.routes('other', 'discord'), isFalse);
+      expect(router.routes(sid, 'api_server'), isFalse);
+    });
+
+    test('a platform without the bridge stays disabled', () async {
+      SharedPreferences.setMockInitialValues({});
+      final store = LocalStore(await SharedPreferences.getInstance());
+      final router = buildWsRouter(store, url, 'test-only', supported: false);
+      expect(router.routes(sid, 'discord', foreignSource: true), isFalse);
+    });
+
+    group('a list row opened in the real page', () {
+      late FakeBridge bridge;
+      late FakeRepo repo;
+      late WsRouter router;
+      late ProviderContainer container;
+
+      setUp(() async {
+        SharedPreferences.setMockInitialValues({});
+        final store = LocalStore(await SharedPreferences.getInstance());
+        bridge = FakeBridge();
+        repo = FakeRepo();
+        final ws = newWs(bridge);
+        router = WsRouter(
+          ws: ws,
+          outbox: WsOutbox(ws, MapPersistence()),
+          supported: true,
+        );
+        container = ProviderContainer(
+          overrides: [
+            localStoreProvider.overrideWithValue(store),
+            initialSettingsProvider.overrideWithValue(
+              const AppSettings(url: url, key: 'fake'),
+            ),
+            repositoryProvider.overrideWithValue(repo),
+            skillsProvider.overrideWith((ref) async => []),
+            wsRouterProvider.overrideWithValue(router),
+          ],
+        );
+      });
+      tearDown(() {
+        container.dispose();
+        router.dispose();
+        repo.close();
+      });
+
+      Future<void> settle(WidgetTester tester) async {
+        for (var i = 0; i < 20; i++) {
+          await tester.runAsync(
+            () => Future<void>.delayed(const Duration(milliseconds: 5)),
+          );
+          await tester.pump();
+        }
+      }
+
+      Future<void> openAndSend(WidgetTester tester, Json row) async {
+        await tester.pumpWidget(
+          UncontrolledProviderScope(
+            container: container,
+            child: localizedWrap(
+              ChatPage(session: Session.fromJson(row)),
+              locale: AppLocale.zhHant,
+            ),
+          ),
+        );
+        await settle(tester);
+      }
+
+      Future<void> send(WidgetTester tester, String text) async {
+        await tester.enterText(find.byType(TextField), text);
+        await tester.pump();
+        await tester.tap(find.byIcon(Icons.arrow_upward));
+        await settle(tester);
+      }
+
+      testWidgets('foreign_source: the link opens and the send goes over WS', (
+        tester,
+      ) async {
+        repo.history = const [
+          Message(id: '1', role: 'user', content: 'hi'),
+          Message(id: '2', role: 'assistant', content: 'pong'),
+        ];
+        await openAndSend(tester, foreignRow);
+        expect(bridge.dials, 1, reason: 'opening the page opens the link');
+        await send(tester, 'hi');
+        expect(bridge.userRows, ['hi']);
+        expect(repo.httpSends, 0);
+        await tester.pumpWidget(const SizedBox());
+        await settle(tester);
+      });
+
+      testWidgets('no mark: an api_server row stays on HTTP, zero WS', (
+        tester,
+      ) async {
+        await openAndSend(tester, const {
+          'id': sid,
+          'title': 'mine',
+          'source': 'api_server',
+          'started_at': 1.0,
+        });
+        await send(tester, 'hi');
+        expect(repo.httpSends, 1);
+        expect(bridge.dials, 0);
+        await tester.pumpWidget(const SizedBox());
+        // The HTTP turn never ends here: its controller holds live timers.
+        container.dispose();
+        await tester.pump(const Duration(minutes: 2));
+      });
+    });
   });
 
   group('GatewayWs', () {

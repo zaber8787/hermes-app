@@ -1,11 +1,11 @@
 /// TASK-WSAPP §2/§3/§5: which sessions send over the bridge, and how one
 /// WS turn looks to the chat controller.
 ///
-/// Routing is allowlisted (主 Agent 回填 2): a session goes over WS only when
-/// its source is a foreign surface (not `api_server`/`bot_room`) AND it is
-/// listed in the app's direct-link allowlist, whose thread ids are the same
-/// set as the bridge's `test_thread_ids`. Everything else, every
-/// api_server session included, keeps the HTTP route untouched.
+/// Routing needs no setup (TASK-WSAUTO): a session the server marks
+/// `foreign_source` goes over WS. An allowlist an older version saved in
+/// `ws.direct` still routes its foreign sessions, so an upgrade loses nothing.
+/// Everything else, every api_server session included, keeps the HTTP route
+/// untouched.
 ///
 /// A WS turn is handed to the controller as the SAME session SSE vocabulary
 /// the HTTP route streams (`message.started`, `assistant.delta`,
@@ -30,8 +30,8 @@ import 'ws_outbox.dart';
 /// Sources that own their sessions on the HTTP API (never WS-routed).
 const httpOwnedSources = {'api_server', 'bot_room'};
 
-/// One allowlisted direct-link session: the Discord thread (as listed in
-/// the bridge's `test_thread_ids`) and the session it maps to.
+/// One direct-link session an older version saved in `ws.direct`: the Discord
+/// thread and the session it maps to. Read only; nothing writes these anymore.
 class WsDirectEntry {
   const WsDirectEntry(this.threadId, this.sessionId);
   final String threadId, sessionId;
@@ -44,22 +44,6 @@ class WsDirectEntry {
     if (t is! String || s is! String || t.isEmpty || s.isEmpty) return null;
     return WsDirectEntry(t, s);
   }
-
-  /// Settings text form: one `<thread_id> <session_id>` pair per line.
-  static List<WsDirectEntry>? parseLines(String text) {
-    final out = <WsDirectEntry>[];
-    for (final raw in text.split('\n')) {
-      final line = raw.trim();
-      if (line.isEmpty) continue;
-      final parts = line.split(RegExp(r'[\s,=:]+'));
-      if (parts.length != 2 || parts.any((p) => p.isEmpty)) return null;
-      out.add(WsDirectEntry(parts[0], parts[1]));
-    }
-    return out;
-  }
-
-  static String formatLines(List<WsDirectEntry> entries) =>
-      entries.map((e) => '${e.threadId} ${e.sessionId}').join('\n');
 }
 
 /// `<base>/bridge/api/bridge/ws` on the server's own host, http(s) mapped to
@@ -173,7 +157,7 @@ class WsRouter {
   WsRouter({
     required this.ws,
     required this.outbox,
-    required Iterable<WsDirectEntry> allow,
+    Iterable<WsDirectEntry> allow = const [],
     bool? supported,
     this.heartbeatEvery = const Duration(seconds: 20),
     this.quietCheckEvery = const Duration(minutes: 2),
@@ -205,15 +189,18 @@ class WsRouter {
   final _cancels = <String, Completer<void>>{};
   final _turnGeneration = <String, int>{};
 
-  /// §2 + 回填 2: foreign surface AND allowlisted, on a platform that can
-  /// open the bridge. An unknown source never routes (HTTP is the default).
-  bool routes(String sid, String? source) =>
+  /// TASK-WSAUTO: [foreignSource] (the server's word) or a legacy allowlist
+  /// entry on a foreign surface, on a platform that can open the bridge. An
+  /// unknown source without the server's word never routes (HTTP is the
+  /// default).
+  bool routes(String sid, String? source, {bool foreignSource = false}) =>
       supported &&
       ws != null &&
-      source != null &&
-      source.isNotEmpty &&
-      !httpOwnedSources.contains(source) &&
-      allowed.contains(sid);
+      (foreignSource ||
+          (source != null &&
+              source.isNotEmpty &&
+              !httpOwnedSources.contains(source) &&
+              allowed.contains(sid)));
 
   /// A new send must wait in the outbox: the link is down, or older sends
   /// of this session are still waiting (order never breaks).
@@ -436,7 +423,7 @@ class _StoreOutboxPersistence implements WsOutboxPersistence {
   Future<void> write(String? value) => store.saveWsOutboxRaw(server, value);
 }
 
-/// The allowlist as saved in settings; anything unreadable routes nothing.
+/// The allowlist an older version saved; anything unreadable routes nothing.
 List<WsDirectEntry> loadWsDirect(LocalStore store) {
   final raw = store.wsDirectRaw();
   if (raw == null || raw.isEmpty) return const [];
@@ -450,9 +437,10 @@ List<WsDirectEntry> loadWsDirect(LocalStore store) {
 }
 
 /// The router for one configured server. Without a platform that can open
-/// the bridge, an allowlist entry or a usable URL it stays disabled and never
-/// opens a socket. A refused flush puts its text back into the session's
-/// draft here, because no chat page may be alive to do it.
+/// the bridge or a usable URL it stays disabled. Building one opens no socket:
+/// the first routed session (or a waiting outbox) does. A refused flush puts
+/// its text back into the session's draft here, because no chat page may be
+/// alive to do it.
 WsRouter buildWsRouter(
   LocalStore store,
   String serverUrl,
@@ -462,10 +450,7 @@ WsRouter buildWsRouter(
 }) {
   final allow = loadWsDirect(store);
   final url = parseBridgeUrl(store.wsBridgeUrl() ?? deriveBridgeUrl(serverUrl));
-  if (!(supported ?? wsSupported) ||
-      allow.isEmpty ||
-      url == null ||
-      apiKey.isEmpty) {
+  if (!(supported ?? wsSupported) || url == null || apiKey.isEmpty) {
     return WsRouter.disabled();
   }
   final ws = GatewayWs(url: url, apiKey: apiKey, connector: connector);

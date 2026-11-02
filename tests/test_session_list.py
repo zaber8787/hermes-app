@@ -106,7 +106,82 @@ class CronLeavesTheList(unittest.TestCase):
         self.assertIn("cron", self.sources())
 
 
+class ForeignFields(unittest.TestCase):
+    """Real SessionDB rows through core's real handlers: only the wrapper adds these keys."""
+
+    def setUp(self):
+        self.tmp = pathlib.Path(tempfile.mkdtemp())
+        self.cls, self.db_cls, self.adapter, self.db = adapter_and_db(self.tmp)
+        self.db.create_session("discord_thread", "discord", session_key="agent:main:discord:thread:1:1")
+        self.db.create_session("discord_dm", "discord")
+        self.db.create_session("api_chat", "api_server")
+        self.db.create_session("room", "bot_room")
+        self.db.create_session("tui_chat", "tui")
+        self.db.create_session("cron_run", "cron")
+        self.db._conn.execute("UPDATE sessions SET thread_id = '1544350912389189704' WHERE id = 'discord_thread'")
+        self.db._conn.commit()
+
+    def tearDown(self):
+        self.db.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def rows(self):
+        status, body = get(self.adapter, "/api/sessions?limit=500&include_hidden=true")
+        self.assertEqual(200, status)
+        return {row["id"]: row for row in body["data"]}
+
+    def test_red_without_unit_no_row_carries_them(self):
+        for row in self.rows().values():
+            self.assertNotIn("foreign_source", row)
+            self.assertNotIn("thread_id", row)
+
+    def test_foreign_rows_are_marked_and_http_owned_rows_are_not(self):
+        session_list.install(self.cls, self.db_cls, Tx())
+        rows = self.rows()
+        self.assertIs(True, rows["discord_thread"]["foreign_source"])
+        self.assertEqual("1544350912389189704", rows["discord_thread"]["thread_id"])
+        self.assertIs(True, rows["discord_dm"]["foreign_source"])
+        self.assertNotIn("thread_id", rows["discord_dm"])
+        self.assertIs(True, rows["tui_chat"]["foreign_source"])
+        self.assertNotIn("thread_id", rows["tui_chat"])
+        for sid in ("api_chat", "room"):
+            self.assertNotIn("foreign_source", rows[sid])
+            self.assertNotIn("thread_id", rows[sid])
+
+    def test_core_safe_fields_stay_and_nothing_else_leaks(self):
+        session_list.install(self.cls, self.db_cls, Tx())
+        row = self.db.get_session("discord_thread")
+        wrapped = self.cls._session_response(row)
+        plain = self.cls.__mro__[1]._session_response(row)
+        extra = {k: v for k, v in wrapped.items() if k not in plain}
+        self.assertEqual({"foreign_source": True, "thread_id": "1544350912389189704"}, extra)
+
+    def test_a_cron_row_read_by_id_is_marked(self):
+        session_list.install(self.cls, self.db_cls, Tx())
+        status, body = get(self.adapter, "/api/sessions/cron_run", "_handle_get_session", session_id="cron_run")
+        self.assertEqual(200, status)
+        self.assertIs(True, body["session"]["foreign_source"])
+
+    def test_real_transaction_binds_and_restores_a_static(self):
+        from compat import compat as c
+        tx = c.Transaction()
+        session_list.install(self.cls, self.db_cls, tx)
+        self.assertIs(True, self.rows()["tui_chat"]["foreign_source"])
+        tx.restore()
+        self.assertNotIn("foreign_source", self.rows()["tui_chat"])
+
+
 class Drift(unittest.TestCase):
+    def test_response_seam_drift_raises(self):
+        from gateway.platforms import api_server
+        from hermes_state import SessionDB
+
+        class Adapter(api_server.APIServerAdapter):
+            def _session_response(self, session):
+                return {}
+        with self.assertRaisesRegex(RuntimeError, "_session_response"):
+            session_list.check(Adapter, SessionDB)
+
     def test_real_seams_hold(self):
         from gateway.platforms import api_server
         from hermes_state import SessionDB

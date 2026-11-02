@@ -250,17 +250,21 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   // WS turn has no HTTP run, so steer and stop aim at the session instead.
   final WsRouter? _wsRouter;
   String? _wsSource;
+  bool _wsForeignSource = false;
   bool _wsAdmitted = false, _wsWatching = false;
   UiMessage? _wsRefusal;
   final _wsSubs = <StreamSubscription<Object?>>[];
 
-  bool get _wsRouted => _wsRouter?.routes(sid, _wsSource) ?? false;
+  bool get _wsRouted =>
+      _wsRouter?.routes(sid, _wsSource, foreignSource: _wsForeignSource) ??
+      false;
 
-  /// The page names the session's source (the controller is keyed by id
-  /// only). Idempotent; a routed session opens the link and watches its
-  /// outbox from here on.
-  void attachSessionSource(String source) {
+  /// The page names the session's source and the server's foreign mark (the
+  /// controller is keyed by id only). Idempotent; a routed session opens the
+  /// link and watches its outbox from here on.
+  void attachSessionSource(String source, {bool foreignSource = false}) {
     _wsSource = source;
+    _wsForeignSource = foreignSource;
     final router = _wsRouter;
     if (_disposed || _wsWatching || router == null || !_wsRouted) return;
     _wsWatching = true;
@@ -3997,7 +4001,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     final spentDraft = draft ?? input;
     final isWake = wakeBatch != null;
     // TASK-WSAPP §2: a wake keeps its HTTP ledger path; every api_server or
-    // non-allowlisted session has wsRouted false and never leaves HTTP.
+    // otherwise non-foreign session has wsRouted false and never leaves HTTP.
     final wsRouted = !isWake && _wsRouted;
     // R3 §5.3: a retry child must still see its parent's UNRETRIED
     // notDispatched evidence at entry; a second view that already stamped

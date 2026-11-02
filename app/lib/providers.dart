@@ -81,9 +81,9 @@ final healthProvider = FutureProvider<bool>((ref) async {
 /// app uses wall time; widget tests drive the binding's fake clock.
 final chatNowProvider = Provider<DateTime Function()>((ref) => DateTime.now);
 
-/// TASK-WSAPP: one bridge link per configured server. Disabled (no socket,
-/// routes nothing) until settings hold an allowlist; the key is the same
-/// API_SERVER_KEY the HTTP channel already carries.
+/// TASK-WSAPP: one bridge link per configured server, opened only once a
+/// routed session needs it; the key is the same API_SERVER_KEY the HTTP
+/// channel already carries.
 final wsRouterProvider = Provider<WsRouter>((ref) {
   final s = ref.watch(settingsProvider);
   final router = buildWsRouter(ref.watch(localStoreProvider), s.url, s.key);

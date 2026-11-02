@@ -19,6 +19,7 @@ class Session {
     required this.source,
     this.pinned = false,
     this.hidden,
+    this.foreignSource = false,
   });
   final String id, title, source;
   final int count;
@@ -29,6 +30,10 @@ class Session {
   /// unknown. Never default-false: an absent field must not erase the
   /// local mirror's opinion.
   final bool? hidden;
+
+  /// TASK-WSAUTO: the server says the HTTP API does not own this session, so
+  /// its sends go over the WS bridge. A server without the field routes HTTP.
+  final bool foreignSource;
   factory Session.fromJson(Json json) {
     final start = (json['started_at'] as num?)?.toDouble() ?? 0;
     return Session(
@@ -50,6 +55,7 @@ class Session {
         final b? => b == true || b == 1,
         _ => null,
       },
+      foreignSource: json['foreign_source'] == true,
     );
   }
   Session withActivity(double timestamp) => Session(
@@ -61,6 +67,7 @@ class Session {
     source: source,
     pinned: pinned,
     hidden: hidden,
+    foreignSource: foreignSource,
   );
   Session withTitle(String newTitle) => Session(
     id: id,
@@ -71,6 +78,7 @@ class Session {
     source: source,
     pinned: pinned,
     hidden: hidden,
+    foreignSource: foreignSource,
   );
   Session withHidden(bool? value) => Session(
     id: id,
@@ -81,6 +89,7 @@ class Session {
     source: source,
     pinned: pinned,
     hidden: value,
+    foreignSource: foreignSource,
   );
   Session withPinned(bool value) => Session(
     id: id,
@@ -91,6 +100,7 @@ class Session {
     source: source,
     pinned: value,
     hidden: hidden,
+    foreignSource: foreignSource,
   );
   String get readFingerprint => '$count:$activity';
 }

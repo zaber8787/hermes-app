@@ -143,6 +143,18 @@ void main() {
     expect(tester.widget<SwitchListTile>(sw).value, isTrue);
   });
 
+  testWidgets('TASK-WSAUTO: direct link offers only the URL override', (
+    tester,
+  ) async {
+    await boot();
+    await pumpSettings(tester);
+    await tester.tap(find.byKey(const ValueKey('settings.wsDirect')));
+    await tester.pumpAndSettle();
+    expect(find.byKey(const ValueKey('settings.wsUrl')), findsOneWidget);
+    expect(find.byKey(const ValueKey('settings.wsAllow')), findsNothing);
+    repo.closeAll();
+  });
+
   testWidgets('pure server: toggle is OFF, inert, and says why', (tester) async {
     await boot(offer: false);
     await pumpSettings(tester);

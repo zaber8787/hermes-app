@@ -248,9 +248,10 @@ class LocalStore {
 
   // ---- TASK-WSAPP: bridge direct link (global, never _scope-d) -----------
   // `ws.url` is an OPTIONAL override (unset = derived from server.url);
-  // `ws.direct` is the allowlist of [{thread, session}] pairs, unset = no
-  // session routes over WS. The outbox is keyed per server URL so a switch
-  // of server never submits one server's queued text to another.
+  // `ws.direct` is the allowlist of [{thread, session}] pairs older versions
+  // saved, read-only now and joined with the server's `foreign_source` mark.
+  // The outbox is keyed per server URL so a switch of server never submits
+  // one server's queued text to another.
   String? wsBridgeUrl() => prefs.getString('ws.url');
 
   Future<void> saveWsBridgeUrl(String? v) => v == null || v.trim().isEmpty
@@ -258,10 +259,6 @@ class LocalStore {
       : prefs.setString('ws.url', v.trim());
 
   String? wsDirectRaw() => prefs.getString('ws.direct');
-
-  Future<void> saveWsDirectRaw(String? json) => json == null || json.isEmpty
-      ? prefs.remove('ws.direct')
-      : prefs.setString('ws.direct', json);
 
   String? wsOutboxRaw(String server) => prefs.getString('ws.outbox.$server');
 

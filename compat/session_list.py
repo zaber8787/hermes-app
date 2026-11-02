@@ -11,6 +11,12 @@ This unit wraps the list handler only: while it runs and the request names no
 ``?source=cron`` still lists them and ``GET /api/sessions/{id}`` (or its
 messages) still reads any one of them; nothing else calls the list with the
 flag set. No core file is written.
+
+TASK-WSAUTO: core's ``_session_response`` keeps a fixed key list, which drops
+``thread_id`` and says nothing about who owns the session. The wrapper adds
+``foreign_source: true`` for a session the HTTP API does not own (the app routes
+those over the WS bridge) and its ``thread_id`` when it has one. Every response
+built from it carries them, not just the list.
 """
 from __future__ import annotations
 
@@ -19,6 +25,8 @@ from functools import wraps
 import inspect
 
 EXCLUDED = ("cron",)
+# Sources that own their sessions on the HTTP API; compat/wsbridge.py refuses the same set.
+HTTP_OWNED = frozenset({"api_server", "bot_room"})
 # Set only inside the wrapped GET /api/sessions; asyncio.to_thread copies it to the worker.
 _LISTING = contextvars.ContextVar("hermes_app_session_list", default=False)
 
@@ -36,12 +44,19 @@ def check(cls, db_cls):
     for needle in ('request.query.get("source")', "db.list_sessions_rich"):
         if needle not in text:
             raise RuntimeError(f"source changed: _handle_list_sessions ({needle})")
+    if "self._session_response(" not in text:
+        raise RuntimeError("source changed: _handle_list_sessions (self._session_response)")
+    if not isinstance(inspect.getattr_static(cls, "_session_response", None), staticmethod):
+        raise RuntimeError("missing static _session_response")
+    if "def _session_response(session" not in inspect.getsource(cls._session_response):
+        raise RuntimeError("source changed: _session_response")
 
 
 def install(cls, db_cls, tx):
     check(cls, db_cls)
     old_list = cls._handle_list_sessions
     old_rich = db_cls.list_sessions_rich
+    old_response = cls._session_response
 
     @wraps(old_list)
     async def list_sessions(self, request, *args, **kwargs):
@@ -57,5 +72,16 @@ def install(cls, db_cls, tx):
             kwargs["exclude_sources"] = sorted(set(kwargs.get("exclude_sources") or ()) | set(EXCLUDED))
         return old_rich(self, *args, **kwargs)
 
+    @wraps(old_response)
+    def session_response(session):
+        payload = old_response(session)
+        source = session.get("source")
+        if source and source not in HTTP_OWNED:
+            payload["foreign_source"] = True
+            if session.get("thread_id"):
+                payload["thread_id"] = str(session["thread_id"])
+        return payload
+
     tx.set(cls, "_handle_list_sessions", list_sessions)
+    tx.set(cls, "_session_response", staticmethod(session_response))
     tx.set(db_cls, "list_sessions_rich", list_sessions_rich)

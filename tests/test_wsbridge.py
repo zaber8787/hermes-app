@@ -14,6 +14,7 @@ import contextlib
 import json
 import os
 import secrets
+import sqlite3
 import tempfile
 import unittest
 from unittest import mock
@@ -34,6 +35,13 @@ ALIAS = "20261101_000000_cont0001"   # a compression continuation
 ROOT = "20261101_000000_root0001"    # ... whose lineage root the resume names
 PROD = "20261101_000000_prod0001"
 THREADS = {ALIAS: TEST_THREAD, ROOT: TEST_THREAD, PROD: PROD_THREAD}
+CRON = "20261101_000000_cron0001"    # foreign, no Discord thread
+API = "20261101_000000_api00001"
+ROOM = "20261101_000000_room0001"
+SOURCES = {ALIAS: "discord", ROOT: "discord", PROD: "discord", CRON: "cron", API: "api_server", ROOM: "bot_room"}
+# gateway/session_cron.py:113 and the settled completion it renders (session_settlement_recovery.py:66-73).
+CRON_REFUSAL = {"role": "assistant", "status": "error", "text": "This chat belongs to a scheduled job",
+                "error_surface": {"layer": "gateway", "code": "cron_session_read_only", "retryable": False}}
 
 
 class Clock:
@@ -141,8 +149,10 @@ class FakeGateway:
                         reply = ok({"admission_id": "adm1", "status": "queued", "outcome": "admitted",
                                     "execution_generation": self.generation})
                         await ws.send(json.dumps(reply))
-                        for kind, payload in (("message.delta", {"text": "po"}),
-                                              ("message.complete", {"text": "pong", "role": "assistant"})):
+                        turn = (("message.complete", CRON_REFUSAL),) if sid == CRON else (
+                            ("message.delta", {"text": "po"}),
+                            ("message.complete", {"text": "pong", "role": "assistant"}))
+                        for kind, payload in turn:
                             seq += 1
                             await ws.send(json.dumps({"jsonrpc": "2.0", "method": "event", "params": {
                                 "type": kind, "session_id": sid, "payload": payload, "replay_epoch": "e1",
@@ -185,7 +195,7 @@ class BridgeHarness:
             p.start()
         await self.gateway.start()
         self.bridge = wsbridge.Bridge(key=BEARER, test_thread_ids=self.test_thread_ids, discover=self.discover,
-                                      thread_of=THREADS.get, reconnect_delays=(0.05,), request_wait=2.0)
+                                      thread_of=THREADS.get, source_of=SOURCES.get, reconnect_delays=(0.05,), request_wait=2.0)
         self.server = await self.bridge.serve("127.0.0.1", 0)
         self.port = self.server.sockets[0].getsockname()[1]
         return self
@@ -444,9 +454,79 @@ class Config(unittest.TestCase):
             self.assertEqual(cfg["host"], "127.0.0.1")
             self.assertEqual(cfg["port"], 8650)
 
-    def test_missing_config_means_no_writes(self):
+    def test_missing_config_means_no_thread_limit(self):
         cfg = wsbridge.load_config("/nonexistent/app-wsbridge.json")
-        self.assertEqual(cfg["test_thread_ids"], frozenset())
+        self.assertIsNone(cfg["test_thread_ids"])
+
+    def test_absent_key_is_no_limit_but_an_empty_list_is_one(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "app-wsbridge.json")
+            with open(path, "w") as f:
+                json.dump({"port": 8650}, f)
+            self.assertIsNone(wsbridge.load_config(path)["test_thread_ids"])
+            with open(path, "w") as f:
+                json.dump({"test_thread_ids": []}, f)
+            self.assertEqual(wsbridge.load_config(path)["test_thread_ids"], frozenset())
+
+
+class MayWriteBySource(unittest.TestCase):
+    def may(self, sid, **kwargs):
+        bridge = wsbridge.Bridge(key=BEARER, thread_of=THREADS.get, source_of=SOURCES.get, **kwargs)
+        return asyncio.run(bridge.may_write(sid))
+
+    def test_no_thread_limit_opens_every_foreign_source(self):
+        self.assertTrue(self.may(PROD))
+        self.assertTrue(self.may(CRON), "a foreign session needs no thread")
+
+    def test_http_owned_and_unknown_sources_are_refused(self):
+        self.assertFalse(self.may(API))
+        self.assertFalse(self.may(ROOM))
+        self.assertFalse(self.may("20261101_000000_gone0001"))
+
+    def test_thread_limit_narrows_foreign_but_never_widens(self):
+        self.assertTrue(self.may(ROOT, test_thread_ids=(TEST_THREAD,)))
+        self.assertFalse(self.may(PROD, test_thread_ids=(TEST_THREAD,)))
+        self.assertFalse(self.may(CRON, test_thread_ids=(TEST_THREAD,)))
+        with_thread = wsbridge.Bridge(key=BEARER, test_thread_ids=(TEST_THREAD,), thread_of=lambda _s: TEST_THREAD,
+                                      source_of=SOURCES.get)
+        self.assertFalse(asyncio.run(with_thread.may_write(API)))
+
+    def test_state_db_lookups_read_real_rows(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "state.db")
+            con = sqlite3.connect(path)
+            con.execute("CREATE TABLE sessions (id TEXT PRIMARY KEY, source TEXT, thread_id TEXT)")
+            con.execute("INSERT INTO sessions VALUES (?, 'cron', NULL), (?, 'api_server', NULL)", (CRON, API))
+            con.commit()
+            con.close()
+            bridge = wsbridge.Bridge(key=BEARER, thread_of=wsbridge.state_db_thread_of(path),
+                                     source_of=wsbridge.state_db_source_of(path))
+            self.assertTrue(asyncio.run(bridge.may_write(CRON)))
+            self.assertFalse(asyncio.run(bridge.may_write(API)))
+            self.assertFalse(asyncio.run(bridge.may_write("nope")))
+
+    def test_submit_reaches_a_threadless_foreign_session_end_to_end(self):
+        async def main():
+            async with BridgeHarness(test_thread_ids=None) as h, h.app() as app:
+                await app.call("session.resume", session_id=CRON)
+                receipt = await app.call("prompt.submit", session_id=CRON, submission_id="s", text="x")
+                self.assertEqual(receipt["result"]["outcome"], "admitted")
+                await app.call("session.resume", session_id=API)
+                refused = await app.call("prompt.submit", session_id=API, submission_id="t", text="x")
+                self.assertEqual(refused["error"]["message"], "session_not_allowlisted")
+        run(main())
+
+    def test_core_cron_refusal_reaches_the_app_untouched(self):
+        async def main():
+            async with BridgeHarness(test_thread_ids=None) as h, h.app() as app:
+                await app.call("session.resume", session_id=CRON)
+                receipt = await app.call("prompt.submit", session_id=CRON, submission_id="s", text="x")
+                self.assertNotIn("error", receipt, "the bridge lets the submit through; core does the refusing")
+                self.assertIn(("prompt.submit", CRON), [(m, p.get("session_id")) for _, m, p in h.gateway.seen])
+                done = await app.until_event(lambda f: f.get("method") == "event"
+                                             and f["params"]["type"] == "message.complete")
+                self.assertEqual(done["params"]["payload"], CRON_REFUSAL)
+        run(main())
 
 
 if __name__ == "__main__":

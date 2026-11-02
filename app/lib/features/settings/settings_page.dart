@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:convert';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -27,7 +26,7 @@ class SettingsPage extends ConsumerStatefulWidget {
 class _SettingsPageState extends ConsumerState<SettingsPage> {
   late final TextEditingController url, key;
   // TASK-WSAPP: the direct-link overrides; null without a LocalStore.
-  TextEditingController? _wsUrl, _wsDirect;
+  TextEditingController? _wsUrl;
   bool obscure = true, busy = false, savingLanguage = false;
   // APPWAKE D: toggle state + the server's offer (null = unknown/offline).
   bool _wakeOn = false;
@@ -57,9 +56,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     _wakeOn = store?.autoWakeEnabled(s.url) ?? false;
     if (store != null) {
       _wsUrl = TextEditingController(text: store.wsBridgeUrl() ?? '');
-      _wsDirect = TextEditingController(
-        text: WsDirectEntry.formatLines(loadWsDirect(store)),
-      );
     }
     if (store != null && s.configured) {
       unawaited(_loadWakeFeature());
@@ -81,7 +77,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     url.dispose();
     key.dispose();
     _wsUrl?.dispose();
-    _wsDirect?.dispose();
     super.dispose();
   }
 
@@ -90,26 +85,16 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   /// the running link.
   Future<void> _saveWsSettings() async {
     final store = _wakeStore;
-    final wsUrl = _wsUrl?.text.trim(), wsDirect = _wsDirect?.text;
-    if (store == null || wsUrl == null || wsDirect == null) return;
+    final wsUrl = _wsUrl?.text.trim();
+    if (store == null || wsUrl == null) return;
     if (wsUrl.isNotEmpty && parseBridgeUrl(wsUrl) == null) {
       throw const AppFormatException(
         UiMessage.local(MessageKey.settingsWsUrlInvalid),
       );
     }
-    final entries = WsDirectEntry.parseLines(wsDirect);
-    if (entries == null) {
-      throw const AppFormatException(
-        UiMessage.local(MessageKey.settingsWsDirectInvalid),
-      );
-    }
-    final raw = entries.isEmpty
-        ? null
-        : jsonEncode([for (final e in entries) e.toJson()]);
     final nextUrl = wsUrl.isEmpty ? null : wsUrl;
-    if (nextUrl == store.wsBridgeUrl() && raw == store.wsDirectRaw()) return;
+    if (nextUrl == store.wsBridgeUrl()) return;
     await store.saveWsBridgeUrl(nextUrl);
-    await store.saveWsDirectRaw(raw);
     ref.invalidate(wsRouterProvider);
   }
 
@@ -383,8 +368,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 style: const TextStyle(fontSize: 12),
               ),
               const SizedBox(height: 24),
-              // TASK-WSAPP: collapsed by default; empty allowlist = HTTP only.
-              if (_wsUrl != null && _wsDirect != null && wsSupported)
+              // TASK-WSAPP: collapsed by default; only the URL override is left
+              // to set, routing itself needs none (TASK-WSAUTO).
+              if (_wsUrl != null && wsSupported)
                 ExpansionTile(
                   key: const ValueKey('settings.wsDirect'),
                   tilePadding: EdgeInsets.zero,
@@ -398,23 +384,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                       autocorrect: false,
                       decoration: InputDecoration(
                         labelText: strings.resolve(MessageKey.settingsWsUrl),
-                        border: const OutlineInputBorder(),
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    TextField(
-                      key: const ValueKey('settings.wsAllow'),
-                      controller: _wsDirect,
-                      enabled: !busy,
-                      minLines: 2,
-                      maxLines: 6,
-                      autocorrect: false,
-                      enableSuggestions: false,
-                      decoration: InputDecoration(
-                        labelText: strings.resolve(MessageKey.settingsWsDirect),
-                        helperText: strings.resolve(
-                          MessageKey.settingsWsDirectHint,
-                        ),
                         border: const OutlineInputBorder(),
                       ),
                     ),

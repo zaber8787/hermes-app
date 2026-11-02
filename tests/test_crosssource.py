@@ -18,6 +18,7 @@ the frames core publishes for an admitted plugin turn, built by core's own
 payload functions.
 """
 import asyncio
+import inspect
 import json
 import os
 import pathlib
@@ -235,7 +236,7 @@ class Tx:
         self.cleanups = []
 
     def set(self, target, name, value):
-        self.changes.append((target, name, getattr(target, name)))
+        self.changes.append((target, name, inspect.getattr_static(target, name)))
         setattr(target, name, value)
 
 

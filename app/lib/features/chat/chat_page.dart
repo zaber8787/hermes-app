@@ -110,7 +110,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     ChatViewers.acquire(widget.session.id);
     title = widget.session.title;
     chat = ref.read(chatProvider(widget.session.id));
-    chat.attachSessionSource(widget.session.source);
+    chat.attachSessionSource(
+      widget.session.source,
+      foreignSource: widget.session.foreignSource,
+    );
     final deepLink = widget.deepLink;
     if (deepLink != null) chat.applyDeepLink(deepLink);
     final store = ref.read(localStoreProvider);
@@ -1444,7 +1447,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
       // the sent text haunting the input box whenever detach/recover made it
       // resolve only at run end, and an attachments.clear() throw used to
       // skip the clearing entirely.
-      controller.attachSessionSource(widget.session.source);
+      controller.attachSessionSource(
+        widget.session.source,
+        foreignSource: widget.session.foreignSource,
+      );
       await controller.send(prompt, draft: value, rawDraft: rawText);
       // R2 §4.3: decide from THIS attempt's outcome — never from the shared
       // error slot. Attachments clear only for a confirmed-accepted send; a
