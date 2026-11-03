@@ -76,6 +76,31 @@ class FakeBridge {
   /// Submits run a turn on their own unless a test drives it by hand.
   bool autoTurn = true;
 
+  /// What `session.resume` reports about the owner right now.
+  bool resumeRunning = false;
+  List<Json> resumePending = const [];
+  String? refuseResume;
+
+  /// The bridge's own replay of a resume (wsbridge.py `replay`).
+  void replayResume(String session) {
+    socket?.push({
+      'jsonrpc': '2.0',
+      'method': 'bridge.resumed',
+      'params': {
+        'session_id': session,
+        'result': {
+          'session_id': session,
+          'messages': const [],
+          'running': resumeRunning,
+          'execution_generation': generation,
+          'replay_epoch': 'e1',
+          'last_sequence': 0,
+          'pending': resumePending,
+        },
+      },
+    });
+  }
+
   Future<WsSocket> connect(Uri u, String key) async {
     dials++;
     if (!up) throw StateError('bridge down');
@@ -121,15 +146,19 @@ class FakeBridge {
     switch (method) {
       case 'session.resume':
         resumes.add(params['session_id'] as String);
+        if (refuseResume != null) {
+          err(refuseResume!);
+          return;
+        }
         s.resumed.add(params['session_id'] as String);
         ok({
           'session_id': params['session_id'],
           'messages': const [],
-          'running': false,
+          'running': resumeRunning,
           'execution_generation': generation,
           'replay_epoch': 'e1',
           'last_sequence': 0,
-          'pending': const [],
+          'pending': resumePending,
         });
       case 'prompt.submit':
         if (!s.resumed.contains(params['session_id'])) {
@@ -450,6 +479,34 @@ void main() {
         await settle(tester);
       });
 
+      testWidgets(
+        'a turn already running shows in progress and can be stopped',
+        (tester) async {
+          bridge.resumeRunning = true;
+          await openAndSend(tester, foreignRow);
+          expect(bridge.resumes, [sid], reason: 'opening asks the owner');
+          expect(find.text('進行中'), findsOneWidget);
+          final stop = find.widgetWithIcon(
+            TextButton,
+            Icons.stop_circle_outlined,
+          );
+          expect(tester.widget<TextButton>(stop).onPressed, isNotNull);
+
+          await tester.tap(stop);
+          await settle(tester);
+          expect(bridge.interrupts, hasLength(1));
+
+          bridge.event('message.complete', {
+            'text': '',
+            'status': 'interrupted',
+          }, admission: 'discord-adm');
+          await settle(tester);
+          expect(find.text('進行中'), findsNothing);
+          await tester.pumpWidget(const SizedBox());
+          await settle(tester);
+        },
+      );
+
       testWidgets('no mark: an api_server row stays on HTTP, zero WS', (
         tester,
       ) async {
@@ -489,6 +546,35 @@ void main() {
       expect(seen.single.replayEpoch, 'e1');
       expect(ws.generation(sid), 7);
     });
+
+    test(
+      'overlapping resumes share one request, then the slot frees',
+      () async {
+        final bridge = FakeBridge();
+        final ws = newWs(bridge);
+        addTearDown(ws.dispose);
+        ws.start();
+        await until(() => ws.connected);
+
+        final first = ws.resume(sid), second = ws.ensureResumed(sid);
+        expect((await first).sessionId, (await second).sessionId);
+        expect(bridge.resumes, [
+          sid,
+        ], reason: 'the answer is the whole history');
+
+        await ws.resume(sid);
+        expect(bridge.resumes, [
+          sid,
+          sid,
+        ], reason: 'a later ask is a fresh one');
+
+        bridge.refuseResume = 'session_superseded';
+        await expectLater(ws.resume(sid), throwsA(isA<GatewayRpcError>()));
+        bridge.refuseResume = null;
+        await ws.resume(sid);
+        expect(bridge.resumes, hasLength(4), reason: 'a refusal frees it too');
+      },
+    );
 
     test('a reconnect replays the resume of every attached session', () async {
       final bridge = FakeBridge();
@@ -874,6 +960,353 @@ void main() {
       expect(bridge.userRows, ['hi', 'turn left']);
       bridge.event('message.complete', {'text': 'ok', 'status': 'complete'});
       await until(() => !c.busy, reason: 'turn settled');
+    });
+
+    // TASK-RUNSTATE: the owner already runs a turn this page never sent (a
+    // Discord message, or this page's own turn before a reload).
+    group('a turn the page did not send', () {
+      const foreign = 'discord-adm';
+
+      ChatController reopen({DateTime Function()? now}) {
+        final next = ChatController(
+          repo,
+          store,
+          sid,
+          serverUrl: url,
+          now: now,
+          wait: (_) => Future<void>.delayed(const Duration(milliseconds: 1)),
+          watchInterval: const Duration(milliseconds: 5),
+          connectivity: () => ConnectivityHint.unknown,
+          wsRouter: router,
+        );
+        addTearDown(next.dispose);
+        return next;
+      }
+
+      test(
+        'resume says running: in progress, the composer stays open',
+        () async {
+          bridge.resumeRunning = true;
+          await attachUp();
+          await c.bootstrap();
+          await until(() => c.displayBusy, reason: 'running shown');
+          expect(bridge.resumes, [sid]);
+          expect(c.busy, isFalse, reason: 'no local turn was invented');
+          expect(
+            c.sendBlocked,
+            isFalse,
+            reason: 'the owner queues a new prompt',
+          );
+          expect(c.canStop, isTrue);
+        },
+      );
+
+      test('an earlier stop record never suppresses a live turn', () async {
+        await store.saveStop(url, sid, 'old-run', 'accepted');
+        bridge.resumeRunning = true;
+        final next = reopen();
+        expect(next.stopNoticeKind, StopNotice.previousStopRecord);
+        next.attachSessionSource('discord');
+        await next.bootstrap();
+        await until(() => next.displayBusy, reason: 'running shown');
+        expect(
+          next.stopNoticeKind,
+          StopNotice.previousStopRecord,
+          reason: 'the banner may stay, it just does not win',
+        );
+      });
+
+      test('an admission still queued counts as running', () async {
+        bridge.resumePending = const [
+          {'admission_id': foreign, 'status': 'unknown'},
+        ];
+        await attachUp();
+        await until(() => c.displayBusy, reason: 'pending shown');
+      });
+
+      test('an idle owner stays idle, one resume only', () async {
+        await attachUp();
+        await c.bootstrap();
+        await until(() => bridge.resumes.isNotEmpty, reason: 'asked');
+        await Future<void>.delayed(const Duration(milliseconds: 20));
+        expect(c.displayBusy, isFalse);
+        expect(c.canStop, isFalse);
+        expect(bridge.resumes, [sid]);
+      });
+
+      test('the link comes up after the page opened', () async {
+        bridge
+          ..up = false
+          ..resumeRunning = true;
+        c.attachSessionSource('discord');
+        await c.bootstrap();
+        expect(c.displayBusy, isFalse);
+        bridge.up = true;
+        await until(() => c.displayBusy, reason: 'asked once the link is up');
+        expect(bridge.resumes, [sid]);
+      });
+
+      test(
+        'a page reopened on a live link asks again, never the cache',
+        () async {
+          await attachUp();
+          await until(() => bridge.resumes.length == 1, reason: 'first ask');
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+          expect(c.displayBusy, isFalse);
+          bridge.resumeRunning = true;
+          c.attachSessionSource('discord');
+          await until(() => c.displayBusy, reason: 'fresh answer');
+          expect(bridge.resumes, [sid, sid]);
+        },
+      );
+
+      test('its message.complete ends it', () async {
+        bridge.resumeRunning = true;
+        await attachUp();
+        await until(() => c.displayBusy, reason: 'running shown');
+        repo.history = const [
+          Message(id: '2', role: 'assistant', content: 'x'),
+        ];
+        bridge.event('message.complete', {
+          'text': 'x',
+          'status': 'complete',
+        }, admission: foreign);
+        await until(() => !c.displayBusy, reason: 'back to idle');
+        await until(() => c.messages.isNotEmpty, reason: 'reply loaded');
+        expect(c.canStop, isFalse);
+      });
+
+      test('a turn that starts while the page sits idle shows too', () async {
+        await attachUp();
+        await until(() => bridge.resumes.isNotEmpty, reason: 'asked');
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        expect(c.displayBusy, isFalse);
+        bridge.event('tool.start', {'tool_name': 'x'}, admission: foreign);
+        await until(() => c.displayBusy, reason: 'running shown');
+        bridge.event('message.complete', {
+          'text': '',
+          'status': 'complete',
+        }, admission: foreign);
+        await until(() => !c.displayBusy, reason: 'back to idle');
+      });
+
+      test('a notice outside a turn does not count as running', () async {
+        await attachUp();
+        await until(() => bridge.resumes.isNotEmpty, reason: 'asked');
+        await Future<void>.delayed(const Duration(milliseconds: 5));
+        bridge.event('status.update', {'kind': 'goal'}, admission: foreign);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(c.displayBusy, isFalse);
+      });
+
+      test(
+        'a dropped link is no evidence; the reconnect answer decides',
+        () async {
+          bridge.resumeRunning = true;
+          await attachUp();
+          await until(() => c.displayBusy, reason: 'running shown');
+
+          bridge.up = false;
+          bridge.drop();
+          await until(() => !c.displayBusy, reason: 'no link, no claim');
+
+          bridge
+            ..resumeRunning = false
+            ..up = true;
+          await until(() => bridge.resumes.length == 2, reason: 'replayed');
+          await until(() => ws.connected, reason: 'link back');
+          await Future<void>.delayed(const Duration(milliseconds: 5));
+          expect(c.displayBusy, isFalse, reason: 'it ended while we were away');
+
+          bridge.drop();
+          bridge.resumeRunning = true;
+          await until(
+            () => c.displayBusy,
+            reason: 'still running after a drop',
+          );
+        },
+      );
+
+      test('the bridge replaying a resume updates the state', () async {
+        bridge.resumeRunning = true;
+        await attachUp();
+        await until(() => c.displayBusy, reason: 'running shown');
+        bridge
+          ..resumeRunning = false
+          ..replayResume(sid);
+        await until(() => !c.displayBusy, reason: 'the replay says idle');
+        bridge
+          ..resumeRunning = true
+          ..replayResume(sid);
+        await until(() => c.displayBusy, reason: 'the replay says running');
+      });
+
+      test('stop interrupts the session over the link', () async {
+        bridge.resumeRunning = true;
+        await attachUp();
+        await until(() => c.canStop, reason: 'stoppable');
+        final stopped = await c.stop();
+        expect(stopped.kind, StopResultKind.serverStopRequested);
+        expect(bridge.interrupts.single['execution_generation'], 7);
+        expect(c.displayBusy, isTrue, reason: 'the terminal ends it, not us');
+        bridge.event('message.complete', {
+          'text': '',
+          'status': 'interrupted',
+        }, admission: foreign);
+        await until(() => !c.displayBusy, reason: 'terminal seen');
+      });
+
+      test('this page\'s own live turn never raises it', () async {
+        await attachUp();
+        bridge.autoTurn = false;
+        unawaited(c.send('hi'));
+        await until(() => c.canControl, reason: 'admitted');
+        bridge.event('message.delta', {'text': 'po'});
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+        expect(c.wsRemoteRunning, isFalse);
+        bridge.event('message.complete', {'text': 'ok', 'status': 'complete'});
+        await until(() => !c.busy, reason: 'turn settled');
+        expect(c.displayBusy, isFalse);
+      });
+
+      test('a send while it runs still goes in over the link', () async {
+        bridge
+          ..resumeRunning = true
+          ..autoTurn = false;
+        await attachUp();
+        await until(() => c.displayBusy, reason: 'running shown');
+        unawaited(c.send('next'));
+        await until(() => c.canControl, reason: 'admitted');
+        expect(bridge.userRows, ['next']);
+        bridge.event('message.complete', {
+          'text': '',
+          'status': 'complete',
+        }, admission: foreign);
+        await until(() => !c.wsRemoteRunning, reason: 'the other one ended');
+        expect(c.busy, isTrue, reason: 'our own turn is still on');
+        bridge.event('message.complete', {'text': 'ok', 'status': 'complete'});
+        await until(() => !c.busy, reason: 'turn settled');
+        expect(c.displayBusy, isFalse);
+      });
+
+      group('a WS turn the page reloads into', () {
+        // The real session's shape: every assistant row so far carries tool
+        // calls, so history alone reads as "ended without a final answer".
+        const midTurn = [
+          Message(id: '1', role: 'user', content: 'hi'),
+          Message(
+            id: '2',
+            role: 'assistant',
+            toolCalls: [ToolCall('t1', 'terminal', '{}')],
+          ),
+          Message(id: '3', role: 'tool', toolCallId: 't1', content: 'ok'),
+        ];
+
+        Future<void> sendThenReload() async {
+          await attachUp();
+          bridge.autoTurn = false;
+          unawaited(c.send('hi'));
+          await until(() => c.canControl, reason: 'turn admitted');
+          c.dispose();
+          expect(store.loadPending(url, sid), isNotNull);
+          repo.history = midTurn;
+        }
+
+        test('running: never settled as incomplete, pending kept', () async {
+          await sendThenReload();
+          bridge.resumeRunning = true;
+          final next = reopen();
+          next.attachSessionSource('discord');
+          await next.bootstrap();
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          expect(next.busy, isTrue);
+          expect(next.displayBusy, isTrue);
+          expect(next.error, isNull);
+          expect(store.loadPending(url, sid), isNotNull);
+
+          repo.history = const [
+            ...midTurn,
+            Message(id: '4', role: 'assistant', content: 'done'),
+          ];
+          bridge.event('message.complete', {
+            'text': 'done',
+            'status': 'complete',
+          });
+          await until(() => !next.displayBusy, reason: 'settled');
+          expect(next.error, isNull);
+          expect(store.loadPending(url, sid), isNull);
+        });
+
+        test('no answer yet: quiet activity alone settles nothing', () async {
+          await sendThenReload();
+          bridge.resumeRunning = true;
+          bridge.up = false;
+          bridge.drop();
+          await until(() => !ws.connected, reason: 'link gone');
+          final next = reopen();
+          next.attachSessionSource('discord');
+          await next.bootstrap();
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          expect(next.busy, isTrue, reason: 'the owner has not answered');
+          expect(next.error, isNull);
+          expect(store.loadPending(url, sid), isNotNull);
+
+          bridge.up = true;
+          await until(() => next.wsRemoteRunning, reason: 'answer arrived');
+          expect(next.busy, isTrue);
+        });
+
+        test('owner idle: the existing incomplete settle still runs', () async {
+          await sendThenReload();
+          final next = reopen();
+          next.attachSessionSource('discord');
+          await next.bootstrap();
+          await until(() => !next.busy, reason: 'settled');
+          expect((next.error! as UiLocal).key, MessageKey.chatTurnIncomplete);
+          expect(next.displayBusy, isFalse);
+        });
+
+        test('a long turn outlives the recovery budget', () async {
+          await sendThenReload();
+          bridge.resumeRunning = true;
+          var clock = DateTime.now();
+          final next = reopen(now: () => clock);
+          next.attachSessionSource('discord');
+          await next.bootstrap();
+          await until(() => next.wsRemoteRunning, reason: 'answer arrived');
+          clock = clock.add(const Duration(minutes: 13));
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          expect(next.phase, ChatPhase.recovering);
+          expect(next.error, isNull);
+        });
+
+        test('a refused resume falls back to the existing reads', () async {
+          await sendThenReload();
+          bridge.refuseResume = 'session_superseded';
+          final next = reopen();
+          next.attachSessionSource('discord');
+          await next.bootstrap();
+          await until(() => !next.busy, reason: 'not stuck on the owner');
+          expect((next.error! as UiLocal).key, MessageKey.chatTurnIncomplete);
+          expect(next.displayBusy, isFalse);
+        });
+
+        test(
+          'stop reaches the owner instead of ending only the wait',
+          () async {
+            await sendThenReload();
+            bridge.resumeRunning = true;
+            final next = reopen();
+            next.attachSessionSource('discord');
+            await next.bootstrap();
+            await until(() => next.wsRemoteRunning, reason: 'answer arrived');
+            final stopped = await next.stop();
+            expect(stopped.kind, StopResultKind.serverStopRequested);
+            expect(bridge.interrupts, hasLength(1));
+            expect(store.loadPending(url, sid), isNotNull);
+          },
+        );
+      });
     });
 
     test('stop interrupts the session, the terminal ends the turn', () async {

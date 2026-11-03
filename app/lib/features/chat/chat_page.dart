@@ -1772,7 +1772,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                         style: Theme.of(context).textTheme.labelMedium,
                       ),
                       const Spacer(),
-                      if (c.busy)
+                      if (c.busy || c.wsRemoteRunning)
                         Text(
                           strings.resolve(MessageKey.chatM013),
                           style: const TextStyle(fontSize: 12),
@@ -2612,7 +2612,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                   padding: const EdgeInsets.all(12),
                   child: Column(
                     children: [
-                      if (c.busy)
+                      if (c.busy || c.wsRemoteRunning)
                         Row(
                           mainAxisAlignment: MainAxisAlignment.end,
                           children: [

@@ -5,7 +5,8 @@ import 'package:flutter/foundation.dart' show kIsWeb, visibleForTesting;
 import '../../diagnostics/diagnostics.dart';
 import '../../api/hermes_repository.dart';
 import '../../api/transport.dart' show DispatchObservation, TransportStage;
-import '../../data/gateway_ws.dart' show GatewayRpcError, WsEvent;
+import '../../data/gateway_ws.dart'
+    show GatewayRpcError, ResumeState, WsEvent;
 import '../../data/ws_outbox.dart' show WsDelivery, WsRefusal;
 import '../../data/ws_route.dart';
 import '../../l10n/app_strings.dart';
@@ -255,6 +256,32 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   UiMessage? _wsRefusal;
   final _wsSubs = <StreamSubscription<Object?>>[];
 
+  /// TASK-RUNSTATE: what the owner says about this session, independent of
+  /// any turn this page runs. A phase would be wrong here: a busy phase locks
+  /// load() and the composer, and the turn may not be ours at all.
+  bool _wsOwnerRunning = false;
+
+  /// The owner answered on the current link. Until it has, history and
+  /// activity cannot close a WS turn: neither one sees WS or Discord runs.
+  bool _wsOwnerAnswered = false;
+
+  /// The owner reports a turn in flight. It may be a Discord message, another
+  /// device, or this page's own turn from before a reload.
+  bool get wsRemoteRunning => _wsOwnerRunning;
+
+  /// Owner events that only exist inside a running turn. `status.update` and
+  /// the request frames are left out: they can fire outside one, and nothing
+  /// would then end the state they raised.
+  static const _wsTurnEvents = {
+    'message.start',
+    'message.delta',
+    'thinking.delta',
+    'reasoning.delta',
+    'tool.start',
+    'tool.progress',
+    'tool.complete',
+  };
+
   bool get _wsRouted =>
       _wsRouter?.routes(sid, _wsSource, foreignSource: _wsForeignSource) ??
       false;
@@ -266,7 +293,11 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _wsSource = source;
     _wsForeignSource = foreignSource;
     final router = _wsRouter;
-    if (_disposed || _wsWatching || router == null || !_wsRouted) return;
+    if (_disposed || router == null || !_wsRouted) return;
+    if (_wsWatching) {
+      _askWsOwner(); // a page opening again on a live link
+      return;
+    }
     _wsWatching = true;
     router.start();
     final outbox = router.outbox!;
@@ -274,7 +305,55 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _wsSubs
       ..add(outbox.deliveries.listen(_onWsDelivery))
       ..add(outbox.refusals.listen(_onWsRefusal))
-      ..add(router.ws!.events.listen(_onWsEvent));
+      ..add(router.ws!.events.listen(_onWsEvent))
+      ..add(router.ws!.linkChanges.listen(_onWsLink))
+      ..add(router.ws!.resumeAnswers.listen(_onWsResumeAnswer));
+    _askWsOwner();
+  }
+
+  /// Always a real resume, never `ensureResumed`: its cached answer is as old
+  /// as the connection. Only page opens and reconnects come here, because the
+  /// answer carries the whole history. An answer lands in [_onWsResumeAnswer].
+  void _askWsOwner() {
+    final ws = _wsRouter!.ws!;
+    if (!ws.connected) return; // [_onWsLink] asks once it is
+    unawaited(
+      ws
+          .resume(sid)
+          .then<void>(
+            (_) {},
+            onError: (Object e) {
+              // A refusal is an answer without evidence: the session keeps the
+              // HTTP-side reads it had. A lost answer stays unknown.
+              if (e is GatewayRpcError && !e.outcomeUnknown) {
+                _wsOwnerAnswered = true;
+              }
+            },
+          ),
+    );
+  }
+
+  void _onWsLink(bool usable) {
+    if (usable) {
+      // A reconnect has already replayed this session's resume.
+      if (!_wsOwnerAnswered) _askWsOwner();
+      return;
+    }
+    _wsOwnerAnswered = false;
+    _setWsOwnerRunning(false); // no link, no evidence either way
+  }
+
+  void _onWsResumeAnswer(ResumeState state) {
+    if (state.requestedId != sid && state.sessionId != sid) return;
+    _wsOwnerAnswered = true;
+    // `running` alone misses an admission the owner holds as `unknown`.
+    _setWsOwnerRunning(state.running || state.pending > 0);
+  }
+
+  void _setWsOwnerRunning(bool running) {
+    if (_wsOwnerRunning == running || _disposed) return;
+    _wsOwnerRunning = running;
+    notifyListeners();
   }
 
   /// §4: shown while this session's sends wait for the link; a refused flush
@@ -301,12 +380,19 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   /// A flushed send has no live turn to settle it: its reply lands through
-  /// the same history read as any other idle refresh.
+  /// the same history read as any other idle refresh. The owner's state moves
+  /// here too: a page's own live turn never raises it, so its stream stays
+  /// the only owner of that turn's end.
   void _onWsEvent(WsEvent e) {
-    if (busy || e.type != 'message.complete') return;
     final ws = _wsRouter!.ws!;
-    if (e.sessionId == sid || e.sessionId == ws.resolvedId(sid)) {
-      unawaited(load());
+    if (e.sessionId != sid && e.sessionId != ws.resolvedId(sid)) return;
+    if (e.type == 'message.complete') {
+      _wsOwnerAnswered = true;
+      _setWsOwnerRunning(false);
+      if (!busy) unawaited(load());
+    } else if (live == null && _wsTurnEvents.contains(e.type)) {
+      _wsOwnerAnswered = true;
+      _setWsOwnerRunning(true);
     }
   }
 
@@ -778,8 +864,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   bool _bootstrapping = false;
 
   /// WAVE4: what a visible page may SHOW as "in progress" — our own turn,
-  /// or a remote run the activity snapshot has confirmed.
-  bool get displayBusy => busy || remoteBusy;
+  /// a remote run the activity snapshot has confirmed, or a turn the bridge
+  /// reports (activity is written by the HTTP run path and never sees those).
+  bool get displayBusy => busy || remoteBusy || wsRemoteRunning;
 
   /// Remote (not this page's) runs the latest snapshot proves active.
   List<ActivityRun> get remoteActiveRuns => observedActivity == null
@@ -3048,7 +3135,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   bool get canStop =>
-      !_localCleanupOnly && !stopBusy && !_stopping && activeRunId != null;
+      !_localCleanupOnly &&
+      !stopBusy &&
+      !_stopping &&
+      (activeRunId != null || wsRemoteRunning);
 
   /// R2 §4.3: the LOCAL end affordance — a busy page whose run the server
   /// never named (sending before run.started, recovering/uncertain after a
@@ -3709,6 +3799,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> _bootstrapTick() async {
     if (_disposed || !_bootActive) return;
+    if (wsRemoteRunning) _lastActiveSeen = _clock(); // active outranks budget
     // Checked BEFORE the single-flight guard: an in-flight GET must not
     // delay the budget's expiry (B3: "到限 even if GET未完成").
     if (_budgetExpiredNow()) return;
@@ -3860,6 +3951,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       if (inspection.anchorFound &&
           !inspection.ambiguous &&
           (_bootRunId == null)) {
+        // Quiet activity proves nothing about a WS turn (it never sees one):
+        // only the owner can close it, and it has to have answered first.
+        if (_wsRouted && (!_wsOwnerAnswered || wsRemoteRunning)) return;
         final quiet = await _quietRound(token, epoch, () => _latest(token));
         if (!_owns(token) || epoch != _recoveryEpoch) return;
         final verdict = evaluateRecoveryEvidence(
@@ -6001,6 +6095,8 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     }
     final token = _turnToken; // stop belongs to a TURN (AUDIT-12)
     if (_wsAdmitted && canControl) return _stopOverWs(token);
+    // Ahead of the local end below: that one would leave the turn running.
+    if (wsRemoteRunning) return _stopOverWs(token);
     final run = activeRunId;
     if (run == null) {
       final pending = store.loadPending(serverUrl, sid);

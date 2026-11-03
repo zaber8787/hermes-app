@@ -204,6 +204,8 @@ class GatewayWs extends ChangeNotifier {
   final _pending = <int, Completer<Json>>{};
   final _events = StreamController<WsEvent>.broadcast();
   final _links = StreamController<bool>.broadcast();
+  final _resumeAnswers = StreamController<ResumeState>.broadcast();
+  final _resuming = <String, Future<ResumeState>>{};
 
   /// requested id -> last resume answer; replayed in insertion order after
   /// every reconnect.
@@ -217,6 +219,10 @@ class GatewayWs extends ChangeNotifier {
   /// `true` each time the link becomes usable (after the resume replay),
   /// `false` each time it stops being usable.
   Stream<bool> get linkChanges => _links.stream;
+
+  /// Every answer the owner gives about a session, in wire order with
+  /// [events]: requested resumes and the bridge's own replays alike.
+  Stream<ResumeState> get resumeAnswers => _resumeAnswers.stream;
 
   ResumeState? resumed(String sid) => _attached[sid];
   String resolvedId(String sid) => _attached[sid]?.sessionId ?? sid;
@@ -407,6 +413,7 @@ class GatewayWs extends ChangeNotifier {
     _attached[requested] = state;
     final g = state.executionGeneration;
     if (g != null) _generation[state.sessionId] = g;
+    if (!_resumeAnswers.isClosed) _resumeAnswers.add(state);
   }
 
   /// One JSON-RPC request. Throws [WsUnavailable] when no socket is open (or
@@ -441,8 +448,14 @@ class GatewayWs extends ChangeNotifier {
     );
   }
 
-  /// `session.resume`, remembered for the reconnect replay.
-  Future<ResumeState> resume(String sid) async {
+  /// `session.resume`, remembered for the reconnect replay. Callers that
+  /// overlap share one request: the answer carries the whole history.
+  Future<ResumeState> resume(String sid) =>
+      _resuming[sid] ??= _resumeOnce(sid).whenComplete(() {
+        _resuming.remove(sid); // a block: whenComplete awaits what it returns
+      });
+
+  Future<ResumeState> _resumeOnce(String sid) async {
     final result = await call('session.resume', {'session_id': sid});
     _recordResume(sid, result);
     return _attached[sid]!;
@@ -461,6 +474,7 @@ class GatewayWs extends ChangeNotifier {
     unawaited(socket?.close());
     unawaited(_events.close());
     unawaited(_links.close());
+    unawaited(_resumeAnswers.close());
     super.dispose();
   }
 }
