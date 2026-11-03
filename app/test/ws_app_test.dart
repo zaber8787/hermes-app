@@ -803,6 +803,32 @@ void main() {
       },
     );
 
+    // i18n-exempt: matching-rule fixtures (protocol), not UI text.
+    const prefixed = {
+      '製作 Ch5': '[zaber] 製作 Ch5',
+      '[PUBWSTEST] ok': '[zaber] [PUBWSTEST] ok',
+      '[附件: x]': '[zaber] [附件: x]',
+    };
+    for (final MapEntry(key: typed, value: row) in prefixed.entries) {
+      test('the prefixed row "$row" retires the pending bubble', () async {
+        await attachUp();
+        bridge.autoTurn = false;
+        unawaited(c.send(typed));
+        await until(() => c.canControl, reason: 'turn admitted');
+        expect(c.turnIsAttemptBacked, isTrue, reason: 'the WS route');
+        expect(c.pendingBubbleText, typed);
+
+        repo.history = [Message(id: '67541', role: 'user', content: row)];
+        await c.reconcileForeground();
+        expect(c.pendingDelivered, isTrue);
+        expect(c.pendingBubbleText, isNull);
+        expect(c.messages.where((m) => m.isUserTurn), hasLength(1));
+
+        bridge.event('message.complete', {'text': 'ok', 'status': 'complete'});
+        await until(() => !c.busy, reason: 'turn settled');
+      });
+    }
+
     test('a bridge refusal says not enabled and keeps the draft', () async {
       await attachUp();
       bridge.refuseSubmit = 'session_not_allowlisted';

@@ -26,7 +26,23 @@ String foldTurnText(String s) =>
 /// CANDIDATE/diagnostic filter only. Text equality alone never decides
 /// delivered/settle/row-claims and never hides another attempt — durable
 /// run/row identity (or an event-supplied row id) is the only proof.
+///
+/// ECHODEDUP: [a] is the persisted row / observed text, [b] the text as
+/// typed. Core persists a shared session's turn as `[name] text`, so [a]
+/// alone also gets one try without a leading `[xxx] `. [b] is never
+/// stripped: what the user typed is verbatim, and stripping it would pair
+/// `[TODO] x` with `[DONE] x`. The raw compare comes first on the stripped
+/// form too, so `[name] [附件: x]` still meets `[附件: x]` although both
+/// fold to empty.
 bool foldedTurnTextEquals(String a, String b) {
+  if (_foldedEquals(a, b)) return true;
+  final stripped = a.replaceFirst(_senderPrefix, '');
+  return stripped != a && _foldedEquals(stripped, b);
+}
+
+final _senderPrefix = RegExp(r'^\[[^\]\n]{1,60}\] ');
+
+bool _foldedEquals(String a, String b) {
   if (a == b) return true;
   final fa = foldTurnText(a), fb = foldTurnText(b);
   if (fa.isEmpty || fb.isEmpty) return false;

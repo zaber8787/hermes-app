@@ -33,6 +33,47 @@ void main() {
     });
   });
 
+  // i18n-exempt: matching-rule fixtures (protocol), not UI text.
+  group('foldedTurnTextEquals: the row may carry a sender prefix', () {
+    test('plain text under a shared-session prefix', () {
+      expect(foldedTurnTextEquals('[zaber] 製作 Ch5', '製作 Ch5'), isTrue);
+      // The prefix is whoever core named, never one hardcoded user.
+      expect(foldedTurnTextEquals('[Alice B] 製作 Ch5', '製作 Ch5'), isTrue);
+      // Still folds after the strip: reformatted body, same turn.
+      expect(foldedTurnTextEquals('[zaber] a\n\tb', 'a b'), isTrue);
+    });
+
+    test('input that itself opens with brackets', () {
+      expect(
+        foldedTurnTextEquals('[zaber] [PUBWSTEST] ok', '[PUBWSTEST] ok'),
+        isTrue,
+      );
+    });
+
+    test('attachment-only: raw exact after the strip beats fold-to-empty', () {
+      expect(foldedTurnTextEquals('[zaber] [附件: x]', '[附件: x]'), isTrue);
+      // Different attachments stay different: both fold empty, neither raw.
+      expect(foldedTurnTextEquals('[zaber] [附件: x]', '[附件: y]'), isFalse);
+    });
+
+    test('different bracket words never pair up', () {
+      expect(foldedTurnTextEquals('[TODO] 修這個', '[DONE] 修這個'), isFalse);
+      expect(foldedTurnTextEquals('[x] 買牛奶', '[ ] 買牛奶'), isFalse);
+    });
+
+    test('one-way: the second argument is never stripped', () {
+      expect(foldedTurnTextEquals('修這個', '[urgent] 修這個'), isFalse);
+    });
+
+    test('only one prefix, only at the start, only with its space', () {
+      expect(foldedTurnTextEquals('[a] [b] hi', 'hi'), isFalse);
+      expect(foldedTurnTextEquals('hi [zaber] there', 'hi there'), isFalse);
+      expect(foldedTurnTextEquals('[zaber]hi', 'hi'), isFalse);
+      expect(foldedTurnTextEquals('[za\nber] hi', 'hi'), isFalse);
+      expect(foldedTurnTextEquals('[${'n' * 61}] hi', 'hi'), isFalse);
+    });
+  });
+
   group('inspectPendingHistory', () {
     const user = Message(id: '1', role: 'user', content: '問題一');
     const asstFinal = Message(id: '2', role: 'assistant', content: '答復');
