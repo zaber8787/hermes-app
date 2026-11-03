@@ -112,10 +112,10 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('ticketEndpoint', () {
-    test('stays on the Serve mount, https for wss', () {
+    test('rides the mount twice: the proxy strips it, the bridge wants it', () {
       expect(
         ticketEndpoint(wsUrl).toString(),
-        'https://host.test/bridge/ticket',
+        'https://host.test/bridge/bridge/ticket',
       );
     });
     test('a bridge on its own port, no mount, http for ws', () {
@@ -138,7 +138,7 @@ void main() {
       expect(b.requests.single.method, 'GET');
       expect(
         b.requests.single.url.toString(),
-        'https://host.test/bridge/ticket',
+        'https://host.test/bridge/bridge/ticket',
       );
       expect(b.requests.single.headers['Authorization'], 'Bearer $key');
       expect(

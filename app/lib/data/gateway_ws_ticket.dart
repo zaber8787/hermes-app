@@ -12,8 +12,12 @@ import 'package:http/http.dart' as http;
 import 'gateway_ws_socket.dart';
 
 const _wsPath = '/api/bridge/ws';
-const _ticketPath = '/bridge/ticket';  // direct bridge port; behind the Serve mount the
-// proxy strips /bridge before forwarding, so the mint rides '$mount/ticket'
+const _ticketPath = '/bridge/ticket';  // the bridge's own path; a Serve mount in
+// front of it STRIPS its prefix before forwarding, so the public URL is
+// '$mount$_ticketPath' — the mount appears twice: once for the proxy, once
+// for the bridge. Dropping it once (68ade6d) made the mint arrive as
+// '/ticket' and 404; minting straight off a direct bridge URL still works
+// because there the path already is the bridge's own.
 const _mintTimeout = Duration(seconds: 10);
 
 /// The ticket endpoint beside [wsUrl], same host and mount; null for a URL
@@ -25,7 +29,7 @@ Uri? ticketEndpoint(Uri wsUrl) {
     scheme: wsUrl.scheme == 'wss' ? 'https' : 'http',
     host: wsUrl.host,
     port: wsUrl.hasPort ? wsUrl.port : null,
-    path: mount.isEmpty ? _ticketPath : '$mount/ticket',
+    path: '$mount$_ticketPath',
   );
 }
 
