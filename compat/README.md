@@ -247,6 +247,13 @@ loop and needs no gateway restart. The app authenticates with
 `Authorization: Bearer <API_SERVER_KEY>`; the bridge reads the key from the
 environment or `$HERMES_HOME/.env` and refuses to start without one.
 
+A browser cannot set that header on an upgrade, so the web build first calls
+`POST /bridge/ticket` on the same port with the same bearer header and gets
+`{"ticket", "expires_in": 60}`, then upgrades with `/api/bridge/ws?ticket=<t>`.
+A ticket is random (nothing derived from the key), single use, kept in memory as a
+digest, and logs name at most the first 8 characters of that digest. Behind the
+Tailscale Serve `/bridge` mount the public path is `/bridge/bridge/ticket`.
+
 Each app connection gets its own upstream connection, dialed through core's
 `connect_gateway(endpoint=...)` with an endpoint discovered right before the dial
 (never `None`, which could start a gateway) and a freshly minted ticket for one

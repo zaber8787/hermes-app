@@ -26,6 +26,11 @@ connection per app connection and relays JSON-RPC between them:
   sessions this connection created; any other session may only be resumed. A
   config that lists ``test_thread_ids`` further narrows the foreign sessions to
   those threads; absent means the source alone decides.
+* a browser cannot put a header on a WebSocket upgrade, so it first spends the
+  key over ``POST /bridge/ticket`` for a random 60 s single-use ticket
+  (same shape as core's gateway/session_ticket_store.py) and upgrades with
+  ``?ticket=``. Tickets live in memory only; a restart loses them and the client
+  mints again.
 
 Run: ``python wsbridge.py [--config PATH]`` with hermes-agent on PYTHONPATH.
 """
@@ -34,16 +39,24 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import hashlib
 import hmac
 import json
 import logging
 import os
+import secrets
 import sqlite3
+import time
 from pathlib import Path
+from urllib.parse import parse_qs
 
 log = logging.getLogger("hermes_app.wsbridge")
 
 BRIDGE_PATH = "/api/bridge/ws"
+TICKET_PATH = "/bridge/ticket"
+TICKET_TTL = 60
+TICKET_REQUEST = f"POST {TICKET_PATH} ".encode()
+TICKET_REQUEST_MAX = 16 * 1024   # same order as websockets' own header limits
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8650
 CONFIG_ENV = "HERMES_APP_WSBRIDGE_CONFIG"
@@ -142,10 +155,102 @@ def _error(rid, code, message, data=None):
                                                    "data": data or {"reason": message}}}
 
 
+def ticket_digest(ticket):
+    """What the store keeps and, cut to 8 characters, what a log may name."""
+    return hashlib.sha256(ticket.encode("utf-8", "surrogateescape")).hexdigest()
+
+
+class TicketStore:
+    """Single-use upgrade tickets, held as digests. Random, so nothing about the key can leak."""
+
+    def __init__(self, ttl=TICKET_TTL, clock=time.monotonic):
+        self.ttl = ttl
+        self.clock = clock
+        self.expiry = {}       # ticket digest -> clock value it stops working at
+
+    def prune(self):
+        now = self.clock()
+        self.expiry = {digest: at for digest, at in self.expiry.items() if now < at}
+
+    def live(self):
+        self.prune()
+        return len(self.expiry)
+
+    def mint(self):
+        self.prune()
+        ticket = secrets.token_urlsafe(32)
+        self.expiry[ticket_digest(ticket)] = self.clock() + self.ttl
+        return ticket
+
+    def redeem(self, ticket):
+        self.prune()
+        digest = ticket_digest(ticket)
+        found = None
+        for known in self.expiry:
+            if hmac.compare_digest(known, digest):
+                found = known
+        return found is not None and self.expiry.pop(found, None) is not None
+
+
+def _ticket_answer(status, reason, body):
+    return (f"HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nCache-Control: no-store\r\n"
+            f"Content-Length: {len(body)}\r\nConnection: close\r\n\r\n").encode() + body
+
+
+def _authorization_of(head):
+    """The Authorization value of a raw request head; '' when absent or sent twice."""
+    values = [line.partition(b":")[2].strip() for line in head.split(b"\r\n")[1:]
+              if line.partition(b":")[0].strip().lower() == b"authorization"]
+    return values[0].decode("latin-1") if len(values) == 1 else ""
+
+
+def ticket_connection(bridge):
+    """A ``ServerConnection`` that answers ``POST /bridge/ticket`` itself: the websockets parser
+    refuses any method but GET (websockets/http11.py ``Request.parse``) before ``process_request``
+    could see it, and the Serve mount leaves this one port to share. Everything else reaches
+    websockets byte for byte, a refused POST included."""
+    from websockets.asyncio.server import ServerConnection
+
+    class TicketConnection(ServerConnection):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.sniffed = b""
+            self.sniffing = True
+            self.answered = False
+
+        def data_received(self, data):
+            if self.answered:
+                return
+            if not self.sniffing:
+                super().data_received(data)
+                return
+            self.sniffed += data
+            head = self.sniffed
+            if (not head.startswith(TICKET_REQUEST) and not TICKET_REQUEST.startswith(head)
+                    or len(head) > TICKET_REQUEST_MAX):
+                self.sniffing, self.sniffed = False, b""
+                super().data_received(head)
+            elif b"\r\n\r\n" in head:
+                self.sniffing, self.sniffed, self.answered = False, b"", True
+                self.transport.write(bridge.answer_ticket_request(head, self.transport.get_extra_info("peername")))
+                self.transport.close()   # flushes first; open_timeout bounds a head that never ends
+
+        async def handshake(self, *args, **kwargs):
+            try:
+                await super().handshake(*args, **kwargs)
+            except Exception:
+                # The answered POST closed the transport with no request parsed: not a failed handshake.
+                if not self.answered:
+                    raise
+
+    return TicketConnection
+
+
 class Bridge:
     def __init__(self, *, key, test_thread_ids=None, discover=discover_endpoint, thread_of=None, source_of=None,
-                 connect=None, reconnect_delays=(0.5, 1, 2, 5, 10), request_wait=15.0):
+                 connect=None, reconnect_delays=(0.5, 1, 2, 5, 10), request_wait=15.0, tickets=None):
         self.key = key
+        self.tickets = tickets or TicketStore()
         self.test_thread_ids = None if test_thread_ids is None else frozenset(str(t) for t in test_thread_ids)
         self.discover = discover
         self.thread_of = thread_of or (lambda _sid: None)
@@ -172,20 +277,39 @@ class Bridge:
         thread = await asyncio.to_thread(self.thread_of, session_id)
         return thread is not None and str(thread) in self.test_thread_ids
 
+    def bearer_ok(self, authorization):
+        scheme, _, token = authorization.partition(" ")
+        return bool(scheme.lower() == "bearer" and self.key
+                    and hmac.compare_digest(token.strip().encode(), self.key.encode()))
+
     def authorize(self, connection, request):
-        if request.path.split("?", 1)[0] != BRIDGE_PATH:
+        path, _, query = request.path.partition("?")
+        if path != BRIDGE_PATH:
             return connection.respond(404, "not found\n")
-        scheme, _, token = request.headers.get("Authorization", "").partition(" ")
-        if (scheme.lower() != "bearer" or not self.key
-                or not hmac.compare_digest(token.strip().encode(), self.key.encode())):
+        if self.bearer_ok(request.headers.get("Authorization", "")):
+            return None
+        tickets = parse_qs(query).get("ticket", [])
+        if len(tickets) == 1 and self.tickets.redeem(tickets[0]):
+            return None
+        if tickets:
+            log.warning("bridge refused ticket %s from %s",
+                        ",".join(ticket_digest(t)[:8] for t in tickets), connection.remote_address)
+        else:
             log.warning("bridge refused an unauthenticated upgrade from %s", connection.remote_address)
-            return connection.respond(401, "unauthorized\n")
-        return None
+        return connection.respond(401, "unauthorized\n")
+
+    def answer_ticket_request(self, head, peer):
+        if not self.bearer_ok(_authorization_of(head)):
+            log.warning("bridge refused a ticket request from %s", peer)
+            return _ticket_answer(401, "Unauthorized", b'{"error":"unauthorized"}')
+        body = {"ticket": self.tickets.mint(), "expires_in": self.tickets.ttl}
+        return _ticket_answer(200, "OK", json.dumps(body).encode())
 
     async def serve(self, host, port):
         from websockets.asyncio.server import serve
         return await serve(lambda ws: AppLink(self, ws).run(), host, port,
-                           process_request=self.authorize, max_size=8 * 1024 * 1024)
+                           process_request=self.authorize, max_size=8 * 1024 * 1024,
+                           create_connection=ticket_connection(self))
 
 
 class AppLink:

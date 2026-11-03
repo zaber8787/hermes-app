@@ -349,6 +349,151 @@ class UpstreamHandshake(unittest.TestCase):
         run(main())
 
 
+class BridgeTicket(unittest.TestCase):
+    """``POST /bridge/ticket`` and ``?ticket=``: the browser's way in, one upgrade per ticket."""
+
+    @staticmethod
+    async def post(port, *, key=BEARER, chunks=None):
+        """A raw POST: answers (status, headers text, json body)."""
+        auth = f"Authorization: Bearer {key}\r\n" if key else ""
+        raw = (f"POST {wsbridge.TICKET_PATH} HTTP/1.1\r\nHost: x\r\n{auth}Content-Length: 0\r\n\r\n").encode()
+        reader, writer = await asyncio.open_connection("127.0.0.1", port)
+        for piece in (chunks(raw) if chunks else [raw]):
+            writer.write(piece)
+            await writer.drain()
+            await asyncio.sleep(0.01)
+        answer = await asyncio.wait_for(reader.read(), 5)   # EOF: the bridge closes after answering
+        writer.close()
+        head, _, body = answer.partition(b"\r\n\r\n")
+        return int(head.split()[1]), head.decode().lower(), json.loads(body) if body.startswith(b"{") else body
+
+    @staticmethod
+    def dial(port, ticket, headers=None):
+        return ws_connect(f"ws://127.0.0.1:{port}{wsbridge.BRIDGE_PATH}?ticket={ticket}",
+                          additional_headers=headers or {}, proxy=None)
+
+    def assert_refused(self, port, ticket):
+        async def attempt():
+            with self.assertRaises(InvalidStatus) as ctx:
+                async with self.dial(port, ticket):
+                    pass
+            self.assertEqual(ctx.exception.response.status_code, 401)
+        return attempt()
+
+    def test_minted_ticket_opens_a_working_link_without_a_header(self):
+        async def main():
+            async with BridgeHarness(test_thread_ids=None) as h:
+                status, head, body = await self.post(h.port)
+                self.assertEqual(status, 200)
+                self.assertIn("cache-control: no-store", head)
+                self.assertEqual(set(body), {"ticket", "expires_in"})
+                self.assertEqual(body["expires_in"], 60)
+                self.assertGreaterEqual(len(body["ticket"]), 43)   # token_urlsafe(32)
+                async with self.dial(h.port, body["ticket"]) as ws:
+                    app = AppClient(ws)
+                    await app.call("session.resume", session_id=CRON)
+                    receipt = await app.call("prompt.submit", session_id=CRON, submission_id="s", text="x")
+                    self.assertEqual(receipt["result"]["outcome"], "admitted")
+        run(main())
+
+    def test_ticket_is_single_use(self):
+        async def main():
+            async with BridgeHarness() as h:
+                _, _, body = await self.post(h.port)
+                async with self.dial(h.port, body["ticket"]):
+                    pass
+                await self.assert_refused(h.port, body["ticket"])
+        run(main())
+
+    def test_ticket_expires_after_its_ttl(self):
+        async def main():
+            async with BridgeHarness() as h:
+                clock = Clock()
+                h.bridge.tickets = wsbridge.TicketStore(clock=clock)
+                _, _, late = await self.post(h.port)
+                _, _, on_time = await self.post(h.port)
+                clock.now += 59
+                async with self.dial(h.port, on_time["ticket"]):
+                    pass
+                clock.now += 1
+                await self.assert_refused(h.port, late["ticket"])
+                self.assertEqual(h.bridge.tickets.live(), 0, "expired tickets do not pile up")
+        run(main())
+
+    def test_unknown_and_repeated_ticket_parameters_are_refused(self):
+        async def main():
+            async with BridgeHarness() as h:
+                await self.assert_refused(h.port, "not-a-ticket")
+                _, _, one = await self.post(h.port)
+                _, _, two = await self.post(h.port)
+                await self.assert_refused(h.port, f"{one['ticket']}&ticket={two['ticket']}")
+                self.assertEqual(h.gateway.minted, [])
+        run(main())
+
+    def test_mint_needs_the_bearer_key(self):
+        async def main():
+            async with BridgeHarness() as h:
+                for key in (None, "wrong"):
+                    status, _, body = await self.post(h.port, key=key)
+                    self.assertEqual(status, 401)
+                    self.assertNotIn(b"ticket", body)
+                self.assertEqual(h.bridge.tickets.live(), 0)
+        run(main())
+
+    def test_request_split_across_packets_still_mints(self):
+        def bytewise(raw):
+            return [raw[:3], raw[3:10], raw[10:30], raw[30:]]
+
+        async def main():
+            async with BridgeHarness() as h:
+                status, _, body = await self.post(h.port, chunks=bytewise)
+                self.assertEqual(status, 200)
+                async with self.dial(h.port, body["ticket"]):
+                    pass
+        run(main())
+
+    def test_bearer_header_path_stays_and_spends_no_ticket(self):
+        async def main():
+            async with BridgeHarness() as h:
+                _, _, body = await self.post(h.port)
+                async with self.dial(h.port, body["ticket"], {"Authorization": f"Bearer {BEARER}"}):
+                    pass
+                async with self.dial(h.port, body["ticket"]):   # still unspent
+                    pass
+        run(main())
+
+    def test_answer_carries_nothing_derived_from_the_key_and_logs_no_ticket(self):
+        async def main():
+            async with BridgeHarness() as h:
+                with self.assertLogs(wsbridge.log, "INFO") as logs:
+                    _, _, body = await self.post(h.port)
+                    await self.assert_refused(h.port, "wrong-ticket-value")
+                    async with self.dial(h.port, body["ticket"]):
+                        pass
+                    await self.assert_refused(h.port, body["ticket"])
+                text = "\n".join(logs.output)
+                self.assertNotIn(body["ticket"], text)
+                self.assertNotIn("wrong-ticket-value", text)
+                self.assertNotIn(BEARER, text)
+                self.assertIn(wsbridge.ticket_digest(body["ticket"])[:8], text)
+                self.assertNotIn(BEARER, json.dumps(body))
+                # Two mints under one key share nothing: random, not derived.
+                _, _, again = await self.post(h.port)
+                self.assertNotEqual(again["ticket"], body["ticket"])
+        run(main())
+
+    def test_other_non_get_requests_stay_refused_without_noise(self):
+        async def main():
+            async with BridgeHarness() as h:
+                reader, writer = await asyncio.open_connection("127.0.0.1", h.port)
+                writer.write(b"POST /api/bridge/ws HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\n")
+                await writer.drain()
+                self.assertNotIn(b"200", await asyncio.wait_for(reader.read(), 5))
+                writer.close()
+                self.assertEqual(h.bridge.tickets.live(), 0)
+        run(main())
+
+
 class Reconnect(unittest.TestCase):
     def test_drop_rediscovers_remints_and_replays_resume(self):
         async def main():
