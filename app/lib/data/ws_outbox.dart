@@ -64,6 +64,9 @@ class WsRefusal {
   final GatewayRpcError error;
 }
 
+/// The [WsRefusal] reason of an entry released by a degraded link.
+const wsDegraded = 'ws_degraded';
+
 class WsDelivery {
   const WsDelivery(this.entry, this.receipt);
   final WsOutboxEntry entry;
@@ -82,6 +85,7 @@ class WsOutbox extends ChangeNotifier {
     _linkSub = ws.linkChanges.listen((usable) {
       if (usable) unawaited(flush());
     });
+    unawaited(ws.whenDegraded.then((_) => _releaseAll()));
   }
 
   final GatewayWs ws;
@@ -231,6 +235,23 @@ class WsOutbox extends ChangeNotifier {
       return once();
     }
   }
+
+  /// The link is gone for good and these sessions now send over HTTP: nothing
+  /// would ever flush what waits here, so each entry goes out as a refusal
+  /// and lands back in its draft.
+  Future<void> _releaseAll() => _serialized(() async {
+    _retry?.cancel();
+    _retry = null;
+    for (final entry in List.of(_entries)) {
+      if (_disposed) return;
+      await _remove(entry);
+      if (!_refusals.isClosed) {
+        _refusals.add(
+          WsRefusal(entry, const GatewayRpcError(null, wsDegraded)),
+        );
+      }
+    }
+  });
 
   /// Submit every waiting entry in order; stops at the first one the link
   /// cannot carry (the next reconnect, or the retry timer while the link

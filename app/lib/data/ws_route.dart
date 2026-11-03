@@ -164,7 +164,7 @@ class WsRouter {
   }) : allowed = {for (final e in allow) e.sessionId},
        supported = supported ?? wsSupported;
 
-  /// No usable bridge (no URL, no key, or Web): routes nothing.
+  /// No usable bridge (no URL or no key): routes nothing.
   WsRouter.disabled()
     : ws = null,
       outbox = null,
@@ -196,6 +196,7 @@ class WsRouter {
   bool routes(String sid, String? source, {bool foreignSource = false}) =>
       supported &&
       ws != null &&
+      !ws!.degraded &&
       (foreignSource ||
           (source != null &&
               source.isNotEmpty &&
@@ -229,7 +230,7 @@ class WsRouter {
   /// The refusal the controller shows; status 4xx so the controller's
   /// rejected path settles it (draft kept, no recovery, no retry).
   static ApiException refusal(GatewayRpcError e) => switch (e.reason) {
-    'session_not_allowlisted' => const ApiException.local(
+    'session_not_allowlisted' || wsDegraded => const ApiException.local(
       MessageKey.chatWsNotEnabled,
       status: 403,
     ),

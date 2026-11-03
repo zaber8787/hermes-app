@@ -20,7 +20,8 @@ import '../models/message.dart' show Json;
 import 'gateway_ws_socket.dart';
 
 export '../models/message.dart' show Json;
-export 'gateway_ws_socket.dart' show WsSocket, WsConnector, wsSupported;
+export 'gateway_ws_socket.dart'
+    show WsSocket, WsConnector, WsBridgeRefused, wsSupported;
 
 /// The bridge (or the owner behind it) answered a JSON-RPC error. [reason]
 /// is the structured `data.reason` when present, else the message: the
@@ -188,6 +189,14 @@ class GatewayWs extends ChangeNotifier {
   bool get connected => _state == WsLinkState.connected && _upstreamReady;
   bool _upstreamReady = false;
 
+  /// The connector gave up on the bridge for good: the link stays down until
+  /// the router is rebuilt (settings change, page reload) and its sessions go
+  /// back to the HTTP route.
+  bool get degraded => _degraded.isCompleted;
+  Future<void> get whenDegraded => _degraded.future;
+  final _degraded = Completer<void>();
+  bool _everConnected = false;
+
   WsSocket? _socket;
   bool _disposed = false;
   bool _started = false;
@@ -227,6 +236,16 @@ class GatewayWs extends ChangeNotifier {
       WsSocket? socket;
       try {
         socket = await _connector(url, apiKey);
+      } on WsBridgeRefused catch (e) {
+        // Never worked: HTTP right away, no user waits on a dead link. Once
+        // it has worked a refusal may be a bridge restart, so only a full
+        // backoff of definite refusals ends it; going offline never does.
+        if (!_everConnected || (!e.transient && attempt >= backoff.length)) {
+          _setState(WsLinkState.disconnected);
+          if (!_disposed) _degraded.complete();
+          return;
+        }
+        socket = null;
       } catch (_) {
         socket = null;
       }
@@ -236,6 +255,7 @@ class GatewayWs extends ChangeNotifier {
       }
       if (socket != null) {
         attempt = 0;
+        _everConnected = true;
         _socket = socket;
         _upstreamReady = true;
         final done = Completer<void>();
