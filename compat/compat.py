@@ -34,7 +34,7 @@ EXTRA_MIMES = frozenset({
 UNITS = ("limits", "upload", "media", "history", "approval", "skills", "activity", "push",
          "approval_inbox", "cron_bridge", "wake", "selfwake", "steer_inbox",
          "notification_events", "messages_timing", "media_persist", "clarify",
-         "injected_rows", "session_list", "crosssource")
+         "injected_rows", "api_turn_display", "session_list", "crosssource")
 log = logging.getLogger("hermes-app-compat")
 _STATE = "_hermes_app_compat_state_v1"
 _MISSING = object()
@@ -837,6 +837,18 @@ def _install_injected_rows(tx):
     except Exception as exc:
         log.error("RENDERPARITY DISABLED: core seam drifted (%s); app-injected Discord rows keep the "
                   "internal_notification projection until compat is reviewed against this core", exc)
+        raise
+
+
+def _install_api_turn_display(tx):
+    """DISPLAYKIND: a person's HTTP turn persists with no display kind (see api_turn_display.py).
+    A drifted seam skips the unit loudly; rows then keep core's internal_notification stamp."""
+    from . import api_turn_display
+    try:
+        api_turn_display.install(tx)
+    except Exception as exc:
+        log.error("DISPLAYKIND DISABLED: core seam drifted (%s); HTTP user rows keep the "
+                  "internal_notification stamp until compat is reviewed against this core", exc)
         raise
 
 

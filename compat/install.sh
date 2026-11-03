@@ -17,6 +17,6 @@ rsync -a -- "$source_dir/install.sh" "$source_dir/plugin.yaml" "$source_dir/__in
   "$source_dir/status_context.py" \
   "$source_dir/patch_clarify.py" "$source_dir/patch_dupguard.py" \
   "$source_dir/crosssource.py" "$source_dir/session_list.py" \
-  "$source_dir/injected_rows.py" \
+  "$source_dir/injected_rows.py" "$source_dir/api_turn_display.py" \
   "$source_dir/README.md" "$source_dir/HINDSIGHT-MIGRATION.md" "$target/"
 printf 'Installed source at %s\nEnable separately: hermes plugins enable hermes-app-compat\n' "$target"
