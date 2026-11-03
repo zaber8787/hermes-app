@@ -43,6 +43,7 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import os
 import secrets
 import sqlite3
@@ -57,6 +58,9 @@ TICKET_PATH = "/bridge/ticket"
 TICKET_TTL = 60
 TICKET_REQUEST = f"POST {TICKET_PATH} ".encode()
 TICKET_REQUEST_MAX = 16 * 1024   # same order as websockets' own header limits
+# Reverse proxies (Tailscale Serve) forward absolute-form request lines, so the
+# sniff accepts either origin-form or any-absolute-form of the ticket path.
+TICKET_LINE = re.compile(rb"^POST (?:\S+)?/bridge/ticket HTTP/1\.[01]\r\n")
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8650
 CONFIG_ENV = "HERMES_APP_WSBRIDGE_CONFIG"
@@ -226,8 +230,14 @@ def ticket_connection(bridge):
                 return
             self.sniffed += data
             head = self.sniffed
-            if (not head.startswith(TICKET_REQUEST) and not TICKET_REQUEST.startswith(head)
-                    or len(head) > TICKET_REQUEST_MAX):
+            line, sep, _ = head.partition(b"\r\n")
+            if b"\r\n" in head:
+                settled = TICKET_LINE.match(head) is None
+            elif len(head) > TICKET_REQUEST_MAX:
+                settled = True
+            else:  # request line still arriving: keep sniffing until it completes
+                settled = not (head.startswith(b"POST ") or b"POST ".startswith(head))
+            if settled:
                 self.sniffing, self.sniffed = False, b""
                 super().data_received(head)
             elif b"\r\n\r\n" in head:
