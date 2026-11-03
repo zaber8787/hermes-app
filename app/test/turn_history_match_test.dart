@@ -63,6 +63,13 @@ void main() {
 
     test('one-way: the second argument is never stripped', () {
       expect(foldedTurnTextEquals('修這個', '[urgent] 修這個'), isFalse);
+      // Accepted asymmetry (主 Agent 裁決): a row that HAPPENS to open with
+      // a bracket token — not a routing prefix — also strips, so the literal
+      // direction reads true. Shared-session rows always carry core's
+      // `[name] ` prefix (run_inbound.py), so this shape needs a coincidental
+      // collision; the dangerous pair direction above (both bracket-open,
+      // different tokens) stays false by construction.
+      expect(foldedTurnTextEquals('[urgent] 修這個', '修這個'), isTrue);
     });
 
     test('only one prefix, only at the start, only with its space', () {
