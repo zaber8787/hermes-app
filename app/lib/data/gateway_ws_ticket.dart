@@ -12,7 +12,8 @@ import 'package:http/http.dart' as http;
 import 'gateway_ws_socket.dart';
 
 const _wsPath = '/api/bridge/ws';
-const _ticketPath = '/bridge/ticket';
+const _ticketPath = '/bridge/ticket';  // direct bridge port; behind the Serve mount the
+// proxy strips /bridge before forwarding, so the mint rides '$mount/ticket'
 const _mintTimeout = Duration(seconds: 10);
 
 /// The ticket endpoint beside [wsUrl], same host and mount; null for a URL
@@ -24,7 +25,7 @@ Uri? ticketEndpoint(Uri wsUrl) {
     scheme: wsUrl.scheme == 'wss' ? 'https' : 'http',
     host: wsUrl.host,
     port: wsUrl.hasPort ? wsUrl.port : null,
-    path: '$mount$_ticketPath',
+    path: mount.isEmpty ? _ticketPath : '$mount/ticket',
   );
 }
 
