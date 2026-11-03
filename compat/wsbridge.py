@@ -60,7 +60,14 @@ TICKET_REQUEST = f"POST {TICKET_PATH} ".encode()
 TICKET_REQUEST_MAX = 16 * 1024   # same order as websockets' own header limits
 # Reverse proxies (Tailscale Serve) forward absolute-form request lines, so the
 # sniff accepts either origin-form or any-absolute-form of the ticket path.
-TICKET_LINE = re.compile(rb"^POST (?:\S+)?/bridge/ticket HTTP/1\.[01]\r\n")
+TICKET_LINE = re.compile(rb"^(?:POST|GET) (?:\S+)?/bridge/ticket HTTP/1\.[01]\r\n")
+_TICKET_PARTIALS = (b"POST ", b"GET ") + tuple(b"POST"[:i] for i in range(1, 4)) + tuple(b"GET"[:i] for i in range(1, 3))
+_TICKET_IN_URL = re.compile(rb"([?&]ticket=)[^&\s]+")
+
+
+def _redact_ticket(line: bytes) -> bytes:
+    """Never let a live ticket reach the log through a request-line echo."""
+    return _TICKET_IN_URL.sub(rb"\1<redacted>", line)
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8650
 CONFIG_ENV = "HERMES_APP_WSBRIDGE_CONFIG"
@@ -235,9 +242,11 @@ def ticket_connection(bridge):
                 settled = TICKET_LINE.match(head) is None
             elif len(head) > TICKET_REQUEST_MAX:
                 settled = True
-            else:  # request line still arriving: keep sniffing until it completes
-                settled = not (head.startswith(b"POST ") or b"POST ".startswith(head))
+            else:  # request line still arriving: keep sniffing while it could match
+                settled = not any(head.startswith(p) for p in _TICKET_PARTIALS)
             if settled:
+                log.info("bridge passing a non-ticket request: %s",
+                         _redact_ticket(head.split(b"\r\n", 1)[0][:140]))
                 self.sniffing, self.sniffed = False, b""
                 super().data_received(head)
             elif b"\r\n\r\n" in head:

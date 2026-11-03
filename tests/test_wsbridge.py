@@ -350,13 +350,13 @@ class UpstreamHandshake(unittest.TestCase):
 
 
 class BridgeTicket(unittest.TestCase):
-    """``POST /bridge/ticket`` and ``?ticket=``: the browser's way in, one upgrade per ticket."""
+    """``GET /bridge/ticket`` and ``?ticket=``: the browser's way in, one upgrade per ticket."""
 
     @staticmethod
     async def post(port, *, key=BEARER, chunks=None):
         """A raw POST: answers (status, headers text, json body)."""
         auth = f"Authorization: Bearer {key}\r\n" if key else ""
-        raw = (f"POST {wsbridge.TICKET_PATH} HTTP/1.1\r\nHost: x\r\n{auth}Content-Length: 0\r\n\r\n").encode()
+        raw = (f"GET {wsbridge.TICKET_PATH} HTTP/1.1\r\nHost: x\r\n{auth}Content-Length: 0\r\n\r\n").encode()
         reader, writer = await asyncio.open_connection("127.0.0.1", port)
         for piece in (chunks(raw) if chunks else [raw]):
             writer.write(piece)

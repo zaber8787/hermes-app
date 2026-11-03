@@ -1,4 +1,4 @@
-/// The browser's way onto the bridge: `POST /bridge/ticket` with the bearer
+/// The browser's way onto the bridge: `GET /bridge/ticket` with the bearer
 /// key, then upgrade with the single-use `?ticket=` (compat/wsbridge.py
 /// `TicketStore`). Platform-neutral so the mint/retry rules run under a fake
 /// client; gateway_ws_socket_web.dart supplies the real socket.
@@ -36,7 +36,7 @@ Future<String> _mint(http.Client client, Uri endpoint, String key) async {
   final http.Response response;
   try {
     response = await client
-        .post(endpoint, headers: {'Authorization': 'Bearer $key'})
+        .get(endpoint, headers: {'Authorization': 'Bearer $key'})
         .timeout(_mintTimeout);
   } catch (_) {
     throw const WsBridgeRefused('ticket_unreachable', transient: true);

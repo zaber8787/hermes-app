@@ -135,7 +135,7 @@ void main() {
     test('mints with the bearer key, connects with the ticket only', () async {
       final b = FakeTicketBridge();
       await b.connect(wsUrl, key);
-      expect(b.requests.single.method, 'POST');
+      expect(b.requests.single.method, 'GET');
       expect(
         b.requests.single.url.toString(),
         'https://host.test/bridge/bridge/ticket',
