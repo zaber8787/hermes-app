@@ -154,6 +154,20 @@ class ResumeState {
   );
 }
 
+/// One session's line in the owner's live list (compat/wsbridge.py `liveness`).
+/// Cheaper than [ResumeState] and no history at all: [listed] is false when the
+/// owner's live registry holds no row for it, [status] is then null.
+class WsLiveness {
+  const WsLiveness({required this.listed, this.status});
+  final bool listed;
+  final String? status;
+
+  factory WsLiveness.fromResult(Json r) => WsLiveness(
+    listed: r['listed'] == true,
+    status: r['status'] as String?,
+  );
+}
+
 enum WsLinkState { idle, connecting, connected, disconnected }
 
 class GatewayWs extends ChangeNotifier {
@@ -464,6 +478,12 @@ class GatewayWs extends ChangeNotifier {
   /// Resume [sid] on this connection unless it already is.
   Future<ResumeState> ensureResumed(String sid) async =>
       _attached[sid] ?? await resume(sid);
+
+  /// The owner's cheap word on [sid]: one row, no history, nothing shared or
+  /// remembered. An older bridge answers `-32601`, which the caller treats as
+  /// "this bridge has no poll" rather than as a missing session.
+  Future<WsLiveness> liveness(String sid) async =>
+      WsLiveness.fromResult(await call('session.liveness', {'session_id': sid}));
 
   @override
   void dispose() {

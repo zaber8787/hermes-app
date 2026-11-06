@@ -6,7 +6,7 @@ import '../../diagnostics/diagnostics.dart';
 import '../../api/hermes_repository.dart';
 import '../../api/transport.dart' show DispatchObservation, TransportStage;
 import '../../data/gateway_ws.dart'
-    show GatewayRpcError, ResumeState, WsEvent;
+    show GatewayRpcError, ResumeState, WsEvent, WsLiveness;
 import '../../data/ws_outbox.dart' show WsDelivery, WsRefusal;
 import '../../data/ws_route.dart';
 import '../../l10n/app_strings.dart';
@@ -223,6 +223,17 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     ConnectivityHint Function()? connectivity,
     StoreTxCapability Function()? txCapability,
     @visibleForTesting bool? webStreamRecovery,
+    this.wsOwnerPollInterval = const Duration(seconds: 10),
+    this.wsOwnerRetryDelays = const [
+      Duration(seconds: 2),
+      Duration(seconds: 5),
+      Duration(seconds: 10),
+      Duration(seconds: 30),
+      Duration(seconds: 30),
+      Duration(seconds: 30),
+      Duration(minutes: 5),
+    ],
+    this.wsOwnerConfirmGap = const Duration(minutes: 2),
     this._wsRouter,
   }) : wait = wait ?? ((duration) => Future<void>.delayed(duration)),
        serverUrl = serverUrl ?? repo.baseUrl,
@@ -265,6 +276,36 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// activity cannot close a WS turn: neither one sees WS or Discord runs.
   bool _wsOwnerAnswered = false;
 
+  /// TASK-RUNLIVENESS: how often the cheap poll asks, how long a lost resume
+  /// waits before it is asked again (last entry repeats: M13's ceiling, six
+  /// failures in and the retry slows to one full-history pull per 5 minutes),
+  /// and the floor between two confirming resumes.
+  final Duration? wsOwnerPollInterval;
+  final List<Duration> wsOwnerRetryDelays;
+  final Duration wsOwnerConfirmGap;
+
+  /// Absent (or errored) polls in a row, while the flag is up, before one
+  /// confirming resume.
+  static const _wsOwnerAbsentConfirm = 3;
+
+  /// Refusals core itself asks the client to retry (session_controls.py:72-76).
+  static const _wsRetryableRefusals = {'storage_unavailable'};
+
+  /// The live-list states that mean a turn runs (gateway/session_active_list.py).
+  static const _wsLiveStatuses = {'working', 'waiting', 'starting'};
+
+  /// Only a resume answer or a definite refusal sets this: the poll and the
+  /// events never do, so B1 keeps asking until the owner itself has spoken.
+  bool _wsResumeAnswered = false, _wsPageAttached = false;
+  bool _wsPollFlight = false, _wsPollStopped = false;
+
+  /// The last resume's `pending` count; null until an answer says. `unknown`
+  /// admissions list as idle, so an idle poll alone may not lower the flag.
+  int? _wsResumePending;
+  int _wsRetryStep = 0, _wsAbsent = 0, _wsPollEpoch = 0;
+  Timer? _wsPollTimer, _wsRetryTimer;
+  DateTime? _wsLastConfirm;
+
   /// The owner reports a turn in flight. It may be a Discord message, another
   /// device, or this page's own turn from before a reload.
   bool get wsRemoteRunning => _wsOwnerRunning;
@@ -294,8 +335,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     _wsForeignSource = foreignSource;
     final router = _wsRouter;
     if (_disposed || router == null || !_wsRouted) return;
+    _wsPageAttached = true;
     if (_wsWatching) {
       _askWsOwner(); // a page opening again on a live link
+      _armWsPoll();
       return;
     }
     _wsWatching = true;
@@ -309,6 +352,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       ..add(router.ws!.linkChanges.listen(_onWsLink))
       ..add(router.ws!.resumeAnswers.listen(_onWsResumeAnswer));
     _askWsOwner();
+    _armWsPoll();
   }
 
   /// Always a real resume, never `ensureResumed`: its cached answer is as old
@@ -323,11 +367,22 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
           .then<void>(
             (_) {},
             onError: (Object e) {
-              // A refusal is an answer without evidence: the session keeps the
-              // HTTP-side reads it had. A lost answer stays unknown.
-              if (e is GatewayRpcError && !e.outcomeUnknown) {
+              if (_disposed) return;
+              if (e is GatewayRpcError &&
+                  !e.outcomeUnknown &&
+                  !_wsRetryableRefusals.contains(e.reason)) {
+                // A refusal is an answer without evidence: the session keeps
+                // the HTTP-side reads it had. Nothing the owner holds is
+                // known, so the poll may lower the flag again.
                 _wsOwnerAnswered = true;
+                _wsResumeAnswered = true;
+                _wsResumePending = 0;
+                _wsRetryTimer?.cancel();
+                _wsRetryTimer = null;
+                _wsRetryStep = 0;
+                return;
               }
+              _scheduleWsRetry(); // lost, or the owner asked for a retry
             },
           ),
     );
@@ -335,10 +390,17 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
 
   void _onWsLink(bool usable) {
     if (usable) {
+      _wsPollStopped = false; // an old bridge may have been upgraded
       // A reconnect has already replayed this session's resume.
-      if (!_wsOwnerAnswered) _askWsOwner();
+      if (!_wsResumeAnswered) _askWsOwner();
+      _armWsPoll();
       return;
     }
+    _stopWsOwnerWatch();
+    _wsRetryStep = 0;
+    _wsAbsent = 0;
+    _wsResumeAnswered = false;
+    _wsResumePending = null;
     _wsOwnerAnswered = false;
     _setWsOwnerRunning(false); // no link, no evidence either way
   }
@@ -346,6 +408,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   void _onWsResumeAnswer(ResumeState state) {
     if (state.requestedId != sid && state.sessionId != sid) return;
     _wsOwnerAnswered = true;
+    _wsResumeAnswered = true;
+    _wsResumePending = state.pending;
+    _wsAbsent = 0;
+    _wsRetryStep = 0;
+    _wsRetryTimer?.cancel();
+    _wsRetryTimer = null;
     // `running` alone misses an admission the owner holds as `unknown`.
     _setWsOwnerRunning(state.running || state.pending > 0);
   }
@@ -383,6 +451,127 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   /// the same history read as any other idle refresh. The owner's state moves
   /// here too: a page's own live turn never raises it, so its stream stays
   /// the only owner of that turn's end.
+  // ---- TASK-RUNLIVENESS: the retry and the poll ---------------------------
+
+  /// Watched only while the page that opened the session is on screen: a
+  /// popped page must not keep dialing for a session nobody looks at.
+  bool get _wsWatchAllowed =>
+      !_disposed &&
+      _wsWatching &&
+      _wsPageAttached &&
+      !backgrounded &&
+      _wsRouted;
+
+  void _stopWsOwnerWatch() {
+    _wsPollTimer?.cancel();
+    _wsPollTimer = null;
+    _wsRetryTimer?.cancel();
+    _wsRetryTimer = null;
+    _wsPollEpoch++; // in-flight polls land into a dead epoch
+  }
+
+  /// B1: one lost answer is asked again, counted from the failure itself.
+  /// The shared in-flight map inside `resume()` (gateway_ws.dart) makes a
+  /// re-ask while the previous one is pending pointless, and 30 s of silence
+  /// IS a pending ask: the first delay starts where the timeout ends.
+  void _scheduleWsRetry() {
+    if (!_wsWatchAllowed ||
+        _wsRetryTimer != null ||
+        !(_wsRouter?.ws?.connected ?? false)) {
+      return;
+    }
+    final delays = wsOwnerRetryDelays;
+    final delay = delays[_wsRetryStep < delays.length ? _wsRetryStep : delays.length - 1];
+    // M14 (main-agent ruling): silence is not evidence. The first time the
+    // ladder settles into its ceiling (one ask per five minutes after six
+    // failures), lower a flag the owner never answered: events may light it
+    // again, and the asking itself never stops.
+    final entersCeiling = _wsRetryStep == delays.length - 1;
+    _wsRetryStep++;
+    _wsRetryTimer = Timer(delay, () {
+      _wsRetryTimer = null;
+      if (_wsWatchAllowed) _askWsOwner();
+    });
+    if (entersCeiling && !_wsResumeAnswered && _wsOwnerRunning) {
+      _setWsOwnerRunning(false);
+    }
+  }
+
+  void _armWsPoll() {
+    final every = wsOwnerPollInterval;
+    if (every == null || _wsPollTimer != null || _wsPollStopped) return;
+    if (!_wsWatchAllowed || !(_wsRouter?.ws?.connected ?? false)) return;
+    _wsPollTimer = Timer.periodic(every, (_) => unawaited(_pollWsOwner()));
+    unawaited(_pollWsOwner()); // the first 10 s window should not wait it out
+  }
+
+  Future<void> _pollWsOwner() async {
+    if (_wsPollFlight || !_wsWatchAllowed) return;
+    final ws = _wsRouter?.ws;
+    if (ws == null || !ws.connected) return;
+    _wsPollFlight = true;
+    final epoch = _wsPollEpoch;
+    try {
+      final answer = await ws.liveness(sid);
+      if (epoch == _wsPollEpoch && !_disposed && live == null) {
+        _applyWsLiveness(answer);
+      }
+    } on GatewayRpcError catch (e) {
+      if (e.code == -32601) {
+        // An older bridge logs a warning per ask: stay quiet until the next
+        // link up (B1 keeps working without the poll).
+        _wsPollStopped = true;
+        _wsPollTimer?.cancel();
+        _wsPollTimer = null;
+      } else if (epoch == _wsPollEpoch && !_disposed && live == null) {
+        _noteWsAbsent();
+      }
+    } catch (_) {
+      if (epoch == _wsPollEpoch && !_disposed && live == null) _noteWsAbsent();
+    } finally {
+      _wsPollFlight = false;
+    }
+  }
+
+  /// Never touches [_wsOwnerAnswered]: only the owner's resume may open the
+  /// settle at the bootstrap tick (`_bootstrapInspect` consults it).
+  void _applyWsLiveness(WsLiveness a) {
+    final status = a.status;
+    if (!a.listed || status == null) return _noteWsAbsent();
+    if (_wsLiveStatuses.contains(status)) {
+      _wsAbsent = 0;
+      return _setWsOwnerRunning(true);
+    }
+    if (status != 'idle') return _noteWsAbsent();
+    _wsAbsent = 0;
+    if (!_wsOwnerRunning) return;
+    final pending = _wsResumePending;
+    if (pending == 0) {
+      _setWsOwnerRunning(false);
+    } else if (pending != null) {
+      _confirmWsOwner(); // an `unknown` admission lists as idle
+    }
+    // pending == null: no answer yet on this link, and B1 is still asking.
+  }
+
+  void _noteWsAbsent() {
+    if (!_wsOwnerRunning) {
+      _wsAbsent = 0;
+      return;
+    }
+    if (++_wsAbsent < _wsOwnerAbsentConfirm) return;
+    _wsAbsent = 0;
+    _confirmWsOwner();
+  }
+
+  void _confirmWsOwner() {
+    final now = _clock();
+    final last = _wsLastConfirm;
+    if (last != null && now.difference(last) < wsOwnerConfirmGap) return;
+    _wsLastConfirm = now;
+    _askWsOwner();
+  }
+
   void _onWsEvent(WsEvent e) {
     final ws = _wsRouter!.ws!;
     if (e.sessionId != sid && e.sessionId != ws.resolvedId(sid)) return;
@@ -1503,6 +1692,9 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       _activityTimer?.cancel();
       _activityTimer = null;
       _activityEpoch++;
+      // TASK-RUNLIVENESS: a hidden app asks the owner NOTHING as well; the
+      // link watches itself, and the watch re-arms on return.
+      _stopWsOwnerWatch();
       notifyListeners();
     } else if (state == AppLifecycleState.resumed && backgrounded) {
       backgrounded = false;
@@ -1519,6 +1711,12 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
       if (phase == ChatPhase.recovering &&
           (_bootDeadline ?? _budgetDeadline) != null) {
         _armCountdownTicker(); // hidden pages skip repaints; re-arm on return
+      }
+      // TASK-RUNLIVENESS: back on screen the page asks once more (only if the
+      // owner has not answered on this link yet) and the poll starts again.
+      if (_wsWatchAllowed) {
+        if (!_wsResumeAnswered) _askWsOwner();
+        _armWsPoll();
       }
       unawaited(reconcileForeground());
       // APPWAKE: resume is a dispatch trigger (plan §4) — but only for an
@@ -2240,6 +2438,10 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     // purely from fresh activity — never a re-POST).
     _remoteStopTimer?.cancel();
     _remoteStopTimer = null;
+    // TASK-RUNLIVENESS: the page is gone, so the retry and the poll stop with
+    // it — before the early returns below, which own other timers.
+    _wsPageAttached = false;
+    _stopWsOwnerWatch();
     if (_pendingStart) {
       _detachArmed = true;
       return;
@@ -3276,6 +3478,7 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
     }
     _wsSubs.clear();
     if (_wsWatching) _wsRouter?.outbox?.removeListener(notifyListeners);
+    _stopWsOwnerWatch();
     _watchTimer?.cancel();
     _deadlineTimer?.cancel();
     _countdownTicker?.cancel();
