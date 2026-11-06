@@ -81,6 +81,19 @@ class FakeBridge {
   List<Json> resumePending = const [];
   String? refuseResume;
 
+  /// TASK-RUNLIVENESS: the first N resumes go unanswered, the way a lost or
+  /// timed-out answer looks to the page.
+  int loseResumes = 0;
+
+  /// `session.liveness` asks seen, and the one row the owner's live list holds
+  /// (null: no row, so every poll says `listed: false`). Never mirrors
+  /// [resumeRunning]: a test that only works because the poll answers needs the
+  /// two to disagree at least once.
+  int lists = 0;
+  String? liveStatus;
+  bool livenessMissing = false;
+  String? refuseLiveness;
+
   /// The bridge's own replay of a resume (wsbridge.py `replay`).
   void replayResume(String session) {
     socket?.push({
@@ -135,10 +148,10 @@ class FakeBridge {
     final method = frame['method'] as String;
     final params = Map<String, dynamic>.from(frame['params'] as Map);
     void ok(Json result) => s.push({'id': id, 'result': result});
-    void err(String reason, [Json data = const {}]) => s.push({
+    void err(String reason, [Json data = const {}, int code = 4001]) => s.push({
       'id': id,
       'error': {
-        'code': 4001,
+        'code': code,
         'message': reason,
         'data': {'reason': reason, ...data},
       },
@@ -146,6 +159,10 @@ class FakeBridge {
     switch (method) {
       case 'session.resume':
         resumes.add(params['session_id'] as String);
+        if (loseResumes > 0) {
+          loseResumes--; // the answer is simply never sent: a lost one
+          return;
+        }
         if (refuseResume != null) {
           err(refuseResume!);
           return;
@@ -193,6 +210,19 @@ class FakeBridge {
       case 'session.interrupt':
         interrupts.add(params);
         ok({'status': 'interrupted'});
+      case 'session.liveness':
+        lists++;
+        if (livenessMissing) {
+          err('method_not_found', const {}, -32601);
+        } else if (refuseLiveness != null) {
+          err(refuseLiveness!);
+        } else {
+          ok({
+            'session_id': params['session_id'],
+            'listed': liveStatus != null,
+            'status': liveStatus,
+          });
+        }
       default:
         err('method_not_found');
     }
@@ -247,10 +277,14 @@ Future<void> until(bool Function() condition, {String? reason}) async {
   }
 }
 
-GatewayWs newWs(FakeBridge bridge) => GatewayWs(
+GatewayWs newWs(
+  FakeBridge bridge, {
+  Duration callTimeout = const Duration(seconds: 30),
+}) => GatewayWs(
   url: Uri.parse('ws://test.invalid/bridge/api/bridge/ws'),
   apiKey: 'test-only',
   connector: bridge.connect,
+  callTimeout: callTimeout,
   wait: (_) => Future<void>.delayed(const Duration(milliseconds: 1)),
 );
 
@@ -967,7 +1001,13 @@ void main() {
     group('a turn the page did not send', () {
       const foreign = 'discord-adm';
 
-      ChatController reopen({DateTime Function()? now}) {
+      ChatController reopen({
+        DateTime Function()? now,
+        Duration? poll,
+        bool noPoll = false,
+        List<Duration>? retry,
+        Duration? gap,
+      }) {
         final next = ChatController(
           repo,
           store,
@@ -978,10 +1018,353 @@ void main() {
           watchInterval: const Duration(milliseconds: 5),
           connectivity: () => ConnectivityHint.unknown,
           wsRouter: router,
+          wsOwnerPollInterval: noPoll ? null : (poll ?? const Duration(seconds: 10)),
+          wsOwnerRetryDelays: retry ?? const [
+            Duration(seconds: 2),
+            Duration(seconds: 5),
+            Duration(seconds: 10),
+            Duration(seconds: 30),
+            Duration(seconds: 30),
+            Duration(seconds: 30),
+            Duration(minutes: 5),
+          ],
+          wsOwnerConfirmGap: gap ?? const Duration(minutes: 2),
         );
         addTearDown(next.dispose);
         return next;
       }
+
+      /// A controller on its own link, with the RUNLIVENESS seams at test
+      /// speed: a 5 ms poll unless `noPoll`, millisecond retry steps, and an
+      /// explicit confirm gap — every default a written number (EGM M2/M3),
+      /// because the production ladder is longer than `until`'s patience.
+      /// The link the last seamed controller opened: a test that must watch a
+      /// frame land subscribes here before the frame is sent.
+      late GatewayWs lastSeamedWs;
+
+      ChatController seamed({
+        bool noPoll = false,
+        Duration poll = const Duration(milliseconds: 5),
+        List<Duration>? retry,
+        Duration gap = const Duration(milliseconds: 1),
+        Duration callTimeout = const Duration(seconds: 30),
+      }) {
+        final ws2 = newWs(bridge, callTimeout: callTimeout);
+        lastSeamedWs = ws2; // so a test can subscribe before a frame lands
+        final router2 = WsRouter(
+          ws: ws2,
+          outbox: WsOutbox(ws2, MapPersistence()),
+          allow: const [WsDirectEntry('thread-1', sid)],
+          supported: true,
+        );
+        final next = ChatController(
+          repo,
+          store,
+          sid,
+          serverUrl: url,
+          wait: (_) => Future<void>.delayed(const Duration(milliseconds: 1)),
+          watchInterval: const Duration(milliseconds: 5),
+          connectivity: () => ConnectivityHint.unknown,
+          wsRouter: router2,
+          wsOwnerPollInterval: noPoll ? null : poll,
+          wsOwnerRetryDelays: retry ?? const [
+            Duration(milliseconds: 1),
+            Duration(milliseconds: 1),
+            Duration(milliseconds: 1),
+            Duration(milliseconds: 1),
+          ],
+          wsOwnerConfirmGap: gap,
+        );
+        addTearDown(() {
+          next.dispose();
+          router2.dispose();
+        });
+        return next;
+      }
+
+      Future<void> up(ChatController c2) async {
+        c2.attachSessionSource('discord');
+        await until(() => bridge.socket != null, reason: 'seamed link up');
+      }
+
+      group('RUNLIVENESS', () {
+        // T1: B1's core claim, with the poll switched off so B2 cannot fake-green it.
+        test('first resume answer lost', () async {
+          bridge
+            ..loseResumes = 1
+            ..resumeRunning = true;
+          final c2 = seamed(
+            noPoll: true,
+            callTimeout: const Duration(milliseconds: 20),
+          );
+          await up(c2);
+          await until(() => c2.wsRemoteRunning, reason: 'the second ask answered');
+          expect(bridge.resumes.length, greaterThanOrEqualTo(2));
+          expect(bridge.lists, 0, reason: 'the poll was off: the retry alone lit it');
+        });
+
+        // T2: the completion frame that is NOT a turn (EGM fact 6's shape) may
+        // not strand the flag down while the owner runs: the poll relights it.
+        test('owner running survives a completion frame', () async {
+          bridge
+            ..resumeRunning = true
+            ..liveStatus = 'working';
+          final c2 = seamed(poll: const Duration(milliseconds: 20));
+          final completed = lastSeamedWs.events.firstWhere(
+            (e) => e.type == 'message.complete',
+          );
+          await up(c2);
+          await until(() => c2.wsRemoteRunning, reason: 'running shown');
+          final base = bridge.lists;
+          bridge.event('message.complete', {
+            'text': '',
+            'content': '',
+            'admission_id': 'adm-x',
+            'outcome': 'cancelled',
+          }, admission: foreign);
+          await completed; // the frame must reach the controller before asserting
+          await until(
+            () => bridge.lists > base && c2.wsRemoteRunning,
+            reason: 'the next poll says working again',
+          );
+        });
+
+        // T3: an idle page pays polls, not resumes.
+        test('the poll carries an idle page', () async {
+          final c2 = seamed();
+          await up(c2);
+          await until(() => bridge.lists >= 5, reason: 'the poll runs on its own');
+          expect(bridge.resumes, [sid], reason: 'one resume, never a growing one');
+        });
+
+        // T4 (guard, naturally green): an unrouted session sends nothing.
+        test('unrouted session sends nothing', () async {
+          c.attachSessionSource('api_server');
+          unawaited(c.send('hi').catchError((_) {}));
+          await until(() => repo.httpSends == 1, reason: 'HTTP route');
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          expect(bridge.lists, 0);
+          expect(bridge.dials, 0);
+        });
+
+        // T5: the poll raises on working and lowers on idle (pending 0).
+        test('lost completion frame, idle poll lowers', () async {
+          bridge.liveStatus = 'working';
+          final c2 = seamed();
+          await up(c2);
+          await until(
+            () => c2.wsRemoteRunning && bridge.lists > 0,
+            reason: 'the poll says working',
+          );
+          bridge.liveStatus = 'idle';
+          await until(
+            () => !c2.wsRemoteRunning && bridge.lists > 0,
+            reason: 'an idle poll with pending 0 lowers',
+          );
+        });
+
+        // T6: a turn of our own outranks the list (set working only after the
+        // turn is admitted, so the raise cannot come before live exists).
+        test('own live turn ignores the poll', () async {
+          bridge.autoTurn = false;
+          final c2 = seamed();
+          await up(c2);
+          unawaited(c2.send('hi'));
+          await until(() => c2.canControl, reason: 'turn admitted');
+          bridge.liveStatus = 'working';
+          final base = bridge.lists;
+          await until(() => bridge.lists > base + 3, reason: 'polls ran');
+          expect(
+            c2.wsRemoteRunning,
+            isFalse,
+            reason: 'our own live turn is not the owner running',
+          );
+          bridge.event('message.complete', {'text': 'ok', 'status': 'complete'});
+          await until(() => !c2.busy, reason: 'turn settled');
+        });
+
+        // T7: absence is no evidence; two absent polls change neither flag nor resumes.
+        test('an absent row leaves the flag', () async {
+          bridge.resumeRunning = true;
+          final c2 = seamed(poll: const Duration(milliseconds: 50));
+          await up(c2);
+          await until(() => c2.wsRemoteRunning, reason: 'running shown');
+          final base = bridge.lists;
+          // One absent poll lands before the resume answer settles the flag,
+          // so base+1 is at most the second absence: below the confirm line.
+          await until(() => bridge.lists >= base + 1, reason: 'an absent poll');
+          await Future<void>.delayed(const Duration(milliseconds: 30));
+          expect(c2.wsRemoteRunning, isTrue, reason: 'absence is no evidence');
+          expect(bridge.resumes, [sid], reason: 'below three, no confirming ask');
+        });
+
+        // T8: the third absence asks once; the gap throttles every ask after.
+        test('absent three times asks once', () async {
+          bridge.resumeRunning = true;
+          final c2 = seamed(
+            poll: const Duration(milliseconds: 10),
+            gap: const Duration(minutes: 5),
+          );
+          await up(c2);
+          await until(() => c2.wsRemoteRunning, reason: 'running shown');
+          final base = bridge.lists;
+          await until(
+            () => bridge.lists - base >= 3,
+            reason: 'three absent polls',
+          );
+          expect(
+            bridge.resumes,
+            [sid, sid],
+            reason: 'absent three times asks exactly once',
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          expect(bridge.resumes, hasLength(2), reason: 'the gap throttles the rest');
+        });
+
+        // T9: idle with pending>0 never lowers directly; the confirming resume decides.
+        test('idle with pending never lowers directly', () async {
+          bridge
+            ..resumeRunning = true
+            ..resumePending = const [
+              {'admission_id': foreign, 'status': 'unknown'},
+            ]
+            ..liveStatus = 'idle';
+          final c2 = seamed(gap: const Duration(milliseconds: 1));
+          await up(c2);
+          await until(
+            () => c2.wsRemoteRunning && bridge.lists > 0,
+            reason: 'pending shows, polls ran',
+          );
+          expect(
+            c2.wsRemoteRunning,
+            isTrue,
+            reason: 'idle lists an `unknown` admission, it did not end',
+          );
+          await until(
+            () => bridge.resumes.length >= 3,
+            reason: 'the polls kept confirming with the owner',
+          );
+          bridge.resumePending = const [];
+          final base = bridge.lists;
+          await until(
+            () => bridge.lists > base && !c2.wsRemoteRunning,
+            reason: 'idle with a pending-0 answer lowers',
+          );
+        });
+
+        // T10: an old bridge quiets the poll until the next link; B1 stands alone.
+        test('old bridge stops the poll till next link', () async {
+          bridge.livenessMissing = true;
+          final c2 = seamed(callTimeout: const Duration(milliseconds: 20));
+          await up(c2);
+          await until(() => bridge.lists > 0, reason: 'asked once');
+          final stopped = bridge.lists;
+          await Future<void>.delayed(const Duration(milliseconds: 80));
+          expect(bridge.lists, stopped, reason: '-32601 quiets the poll');
+          bridge
+            ..loseResumes = 1
+            ..resumeRunning = true;
+          bridge.drop();
+          await until(
+            () => bridge.resumes.length >= 2,
+            reason: 'the reconnect replay was asked (and lost)',
+          );
+          await until(
+            () => c2.wsRemoteRunning,
+            reason: 'B1 asks again with no poll to help',
+          );
+          expect(bridge.lists, stopped + 1, reason: 'one probe per link up, then quiet');
+        });
+
+        // T11: a refusal core asks to retry is not an answer.
+        test('storage_unavailable is asked again', () async {
+          bridge.refuseResume = 'storage_unavailable';
+          final c2 = seamed(noPoll: true);
+          await up(c2);
+          await until(() => bridge.resumes.isNotEmpty, reason: 'the refusal landed');
+          bridge.refuseResume = null;
+          await until(
+            () => bridge.resumes.length >= 2,
+            reason: 'a retryable refusal re-enters the queue',
+          );
+          expect(c2.wsRemoteRunning, isFalse, reason: 'an idle answer settled it');
+          expect(bridge.lists, 0);
+        });
+
+        // X3: an unavailable owner is the same kind of non-answer.
+        test('upstream_unavailable is asked again', () async {
+          bridge.refuseResume = 'upstream_unavailable';
+          final c2 = seamed(noPoll: true);
+          await up(c2);
+          await until(
+            () => bridge.resumes.length >= 3,
+            reason: 'outcome-unknown keeps asking',
+          );
+          bridge.refuseResume = null;
+          bridge.resumeRunning = true;
+          await until(() => c2.wsRemoteRunning, reason: 'and stops when answered');
+          expect(bridge.resumes.length, greaterThanOrEqualTo(4));
+        });
+
+        // X4 (guard): a definite refusal is an answer; nothing asks again.
+        test('a definite refusal asks no second time', () async {
+          bridge.refuseResume = 'session_superseded';
+          final c2 = seamed(noPoll: true);
+          await up(c2);
+          await Future<void>.delayed(const Duration(milliseconds: 60));
+          expect(bridge.resumes, [sid], reason: 'no retry storm behind a refusal');
+        });
+
+        // T13: an event lighting the flag does not retire the retry.
+        test('events alone keep the retry going', () async {
+          bridge.loseResumes = 1;
+          final c2 = seamed(
+            noPoll: true,
+            callTimeout: const Duration(milliseconds: 20),
+          );
+          await up(c2);
+          bridge.event('tool.start', {'tool_name': 'x'}, admission: foreign);
+          await until(() => c2.wsRemoteRunning, reason: 'the event lights it');
+          await until(
+            () => bridge.resumes.length >= 2,
+            reason: 'the lost answer is still asked again',
+          );
+          await Future<void>.delayed(const Duration(milliseconds: 60));
+          expect(
+            bridge.resumes.where((s) => s == sid).length,
+            greaterThanOrEqualTo(2),
+          );
+          expect(bridge.resumes.length, lessThanOrEqualTo(3), reason: 'it stops on the answer');
+        });
+
+        // T14: popped pages and hidden apps send nothing at all.
+        test('detach and background stop every timer', () async {
+          bridge.liveStatus = 'working';
+          final c2 = seamed();
+          await up(c2);
+          await until(() => bridge.lists > 2, reason: 'polling');
+          c2.detach();
+          final base = bridge.lists;
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          expect(bridge.lists, base, reason: 'a popped page asks nothing');
+          c2.attachSessionSource('discord');
+          await until(() => bridge.lists > base, reason: 'a reopened page asks again');
+          c2.dispose(); // its 5 ms poll would keep counting against c3's phase
+
+          final c3 = seamed();
+          await up(c3);
+          await until(() => bridge.lists > base + 2, reason: 'polling again');
+          final base3 = bridge.lists;
+          c3.didChangeAppLifecycleState(AppLifecycleState.paused);
+          await Future<void>.delayed(const Duration(milliseconds: 100));
+          expect(bridge.lists, base3, reason: 'a hidden app asks nothing');
+          c3.didChangeAppLifecycleState(AppLifecycleState.resumed);
+          await until(
+            () => bridge.lists > base3,
+            reason: 'back on screen the poll re-arms',
+          );
+        });
+      });
 
       test(
         'resume says running: in progress, the composer stays open',
@@ -1289,6 +1672,28 @@ void main() {
           await until(() => !next.busy, reason: 'not stuck on the owner');
           expect((next.error! as UiLocal).key, MessageKey.chatTurnIncomplete);
           expect(next.displayBusy, isFalse);
+        });
+
+        // T12 (RUNLIVENESS, lives here for sendThenReload — EGM B5): the poll
+        // answers all day and never opens the settle at the bootstrap tick:
+        // only the owner's resume may (`_wsOwnerAnswered`, chat_controller.dart).
+        test('the poll never sets answered', () async {
+          await sendThenReload();
+          bridge.liveStatus = 'idle'; // M4: working would hold the gate by itself
+          final base = bridge.lists;
+          bridge.loseResumes = 99; // every ask after this goes unanswered (M4)
+          final next = seamed(
+            poll: const Duration(milliseconds: 10),
+            retry: const [Duration(seconds: 5)], // B1 stays asleep: the poll alone runs
+            gap: const Duration(minutes: 5),
+          );
+          next.attachSessionSource('discord');
+          await next.bootstrap();
+          await until(() => bridge.lists > base + 5, reason: 'the poll is answering');
+          await Future<void>.delayed(const Duration(milliseconds: 50));
+          expect(next.busy, isTrue, reason: 'quiet polls prove nothing about a WS turn');
+          expect(next.error, isNull, reason: 'never settled as incomplete');
+          expect(store.loadPending(url, sid), isNotNull);
         });
 
         test(
