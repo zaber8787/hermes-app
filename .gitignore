@@ -149,3 +149,8 @@ web/cjk-mirror/
 .statusctx-evidence/
 .wakefix4-evidence/
 .done-wakefix4
+
+.runliveness-evidence/
+
+# TASK-RUNLIVENESS-02 scratch (never commit)
+.runliveness-scratch/

@@ -258,8 +258,13 @@ Each app connection gets its own upstream connection, dialed through core's
 `connect_gateway(endpoint=...)` with an endpoint discovered right before the dial
 (never `None`, which could start a gateway) and a freshly minted ticket for one
 fixed subject. Only `session.resume`, `prompt.submit`, `session.steer`,
-`session.interrupt`, `approval.respond`, `clarify.respond` and `session.create`
-are relayed; anything else answers `-32601 method_not_found` and is logged.
+`session.interrupt`, `approval.respond`, `clarify.respond`, `session.create`
+and `session.liveness` are relayed; anything else answers `-32601
+method_not_found` and is logged. `session.liveness` is read-only: it answers
+exactly `{session_id, listed, status}` for one session (one collapsed row of
+`session.active_list`, no history, nothing about other sessions) and is served
+on its own upstream connection, so it answers even while a resume on the app's
+own connection is still held open.
 Writes reach only sessions whose `thread_id` is listed in `test_thread_ids` of
 `$HERMES_HOME/app-wsbridge.json` (or `$HERMES_APP_WSBRIDGE_CONFIG`), or sessions
 created on the same connection; every other session may only be resumed. After an

@@ -11,6 +11,9 @@ Steps, each printed with its raw request/answer (message bodies are reduced to c
   2. ``shell.exec``                 -> expect method_not_found (allowlist)
   3. ``prompt.submit`` pre-resume   -> expect permission_denied
   4. ``session.resume --session``   -> the owner's answer through the ticketed path
+     with ``--liveness``: ``session.liveness`` once before that resume and once after,
+     each expected to answer exactly the keys ``session_id``, ``listed``, ``status``
+     (the cheap read-only verb: one row, no history, own upstream connection)
   5. with ``--submit TEXT`` (only for a session whose thread is in ``--test-thread``):
      ``prompt.submit`` -> receipt, wait for an assistant event, then check ``messages`` in
      state.db for the user row
@@ -57,7 +60,8 @@ class Probe:
     async def open(self):
         from websockets.asyncio.client import connect
         self.ws = await connect(self.url, additional_headers={"Authorization": f"Bearer {self.key}",
-                                                              "Origin": "https://probe.invalid"}, proxy=None)
+                                                              "Origin": "https://probe.invalid"}, proxy=None,
+                                max_size=None)  # a big resume must not be cut at 1009
 
     async def close(self):
         await self.ws.close()
@@ -113,12 +117,21 @@ async def probe(args, url, key):
     p.expect("submit before resume is permission_denied",
              (await p.call("prompt.submit", session_id=args.session, submission_id="probe-pre",
                            text="x")).get("error", {}).get("message") == "permission_denied")
+    if args.liveness:
+        # Before resume: the verb must not need a resume on this connection.
+        alive = await p.call("session.liveness", session_id=args.session)
+        p.expect("liveness before resume answers one row",
+                 set(alive.get("result", {})) == {"session_id", "listed", "status"})
     resumed = await p.call("session.resume", session_id=args.session)
     if args.expect_resume_error:
         p.expect(f"resume reaches the authority and answers {args.expect_resume_error}",
                  resumed.get("error", {}).get("message") == args.expect_resume_error)
     else:
         p.expect("resume answers a snapshot", "result" in resumed)
+    if args.liveness:
+        after = await p.call("session.liveness", session_id=args.session)
+        p.expect("liveness after resume answers one row",
+                 set(after.get("result", {})) == {"session_id", "listed", "status"})
     if args.submit and "result" in resumed:
         sid = resumed["result"]["session_id"]   # lineage root, not necessarily --session
         marker = f"{args.submit} [{uuid.uuid4().hex[:8]}]"
@@ -174,6 +187,7 @@ def main():
     parser.add_argument("--wait", type=float, default=180)
     parser.add_argument("--reconnect-after", type=float, default=0)
     parser.add_argument("--state-db", default=str(Path.home() / ".hermes" / "state.db"))
+    parser.add_argument("--liveness", action="store_true")
     args = parser.parse_args()
     import logging
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")

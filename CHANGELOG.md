@@ -4,6 +4,13 @@
 `CHANGELOG-PRIVATE.md`（不入版本庫）。`<SERVER_ORIGIN>` 代表部署者自設的
 伺服器位址。
 
+## 2026-11-06 — WS 連線的「正在執行」不再會靜默（RUNLIVENESS）
+
+- App：`session.resume` 的回答遺失時依 2／5／10／30 秒階梯重問（連續失敗退避到 5 分鐘一次），連線上來、回前台、回頁面都會補問；確定性拒絕不再無限重問，但可重試的儲存類拒絕會再問。
+- App：新增週期性存活輪詢兜底——遗失完成幀後旗標不會永遠亮著；自己那一回合在跑時無視輪詢；閒置但佇列仍有等待的 session 不會被輪詢單獨降旗。
+- 橋：新增唯讀方法 `session.liveness`，只回單一 session 的 `{session_id, listed, status}`（橋端即收斂，不帶其他 session 資料），走獨立上游連線並在讀取迴圈直接回答，resume 還在路上的輪詢照樣有答案。舊橋回 `-32601` 時新 app 自動停輪詢、其餘行為不變。
+- 探針：`tools/wsbridge_probe.py` 加 `--liveness` 與 `max_size=None`。
+
 ## 2026-10-14 — /status 上下文視圖與自我喚醒去重（SELFWAKE4/STATUSCTX）
 
 - `/status` 對話框新增上下文區塊：模型、context 已用／上限 token、上次壓縮時刻。資料源為 gateway 的 last-prompt 測量（反代新增唯讀端點 `GET /api/sessions/{id}/context`），取不到的欄位顯示「不確定」，不用累計 throughput 充數。
