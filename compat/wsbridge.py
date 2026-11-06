@@ -5,7 +5,9 @@ The owner's session WebSocket is loopback-only, refuses any ``Origin`` header
 ``gateway.sock`` mints (gateway/run_api.py:322-341, gateway/runtime_bootstrap.py).
 A remote app can reach none of that, so this standalone service (its own port,
 API_SERVER_KEY bearer auth, never mounted on 8642) holds one upstream
-connection per app connection and relays JSON-RPC between them:
+connection per app connection and relays JSON-RPC between them (a
+``session.liveness`` read aside: it goes over a read-only upstream of its own,
+so it can never queue behind the link's own resume):
 
 * upstream is dialed only through core's ``connect_gateway(endpoint=...)`` with
   an endpoint discovered right before each dial; ``endpoint=None`` would let
@@ -75,7 +77,7 @@ CONFIG_NAME = "app-wsbridge.json"
 
 ALLOWED_METHODS = frozenset({
     "session.resume", "prompt.submit", "session.steer", "session.interrupt",
-    "approval.respond", "clarify.respond", "session.create",
+    "approval.respond", "clarify.respond", "session.create", "session.liveness",
 })
 # Verbs that change a session: only foreign sessions (or sessions this
 # connection created) may receive them.
@@ -88,6 +90,12 @@ HTTP_OWNED_SOURCES = frozenset({"api_server", "bot_room"})
 GENERATION_METHODS = frozenset({"session.steer", "session.interrupt"})
 # ``GatewayClient.rpc`` keyword that never goes on the wire.
 RESERVED_PARAMS = frozenset({"_timeout"})
+# TASK-RUNLIVENESS B2: the one cheap read the bridge answers itself, collapsing
+# core's ``session.active_list`` to a single session's row (and deliberately NOT
+# allowlisting active_list itself: it would hand the app every other session's
+# id and title, and its 200-row cap truncates by started_at).
+LIVENESS_METHOD = "session.liveness"
+LIVENESS_RPC_TIMEOUT = 10
 
 METHOD_NOT_FOUND = -32601
 INVALID_PARAMS = -32602
@@ -277,6 +285,7 @@ class Bridge:
         self.connect = connect
         self.reconnect_delays = tuple(reconnect_delays)
         self.request_wait = request_wait
+        self.live_read = None   # the one in-flight liveness read, shared by every link
 
     def dial(self, endpoint):
         if endpoint is None:
@@ -295,6 +304,26 @@ class Bridge:
             return True
         thread = await asyncio.to_thread(self.thread_of, session_id)
         return thread is not None and str(thread) in self.test_thread_ids
+
+    async def live_rows(self):
+        """The owner's live rows over a read-only upstream of its own: core dispatches a
+        connection serially (tui_gateway/ws.py), so sharing an app link would queue the scan
+        behind that link's resume and hold up its next submit. One read at a time, shared."""
+        if self.live_read is None:
+            self.live_read = asyncio.create_task(self._read_live_rows())
+            self.live_read.add_done_callback(self._live_read_done)
+        return await asyncio.shield(self.live_read)
+
+    def _live_read_done(self, task):
+        self.live_read = None
+        if not task.cancelled():
+            task.exception()   # every waiter may be gone; retrieved here so it is never unretrieved
+
+    async def _read_live_rows(self):
+        endpoint = await asyncio.to_thread(self.discover)
+        async with self.dial(endpoint) as client:
+            result = await client.rpc("session.active_list", _timeout=LIVENESS_RPC_TIMEOUT)
+        return result.get("sessions") or []
 
     def bearer_ok(self, authorization):
         scheme, _, token = authorization.partition(" ")
@@ -333,7 +362,8 @@ class Bridge:
 
 class AppLink:
     """One app connection and the single upstream connection it owns (subscriptions are per
-    connection, so app connections never share an upstream)."""
+    connection, so app connections never share an upstream); the liveness read is the one
+    exception (``Bridge.live_rows``), because it must answer while that upstream is busy."""
 
     def __init__(self, bridge, ws):
         self.bridge = bridge
@@ -355,15 +385,42 @@ class AppLink:
     async def run(self):
         from websockets.exceptions import ConnectionClosed
         upstream = asyncio.create_task(self.upstream())
+        # Everything but the liveness read keeps arrival order through one serial
+        # worker (EGM B1: awaiting request() in the read loop would let a held
+        # resume hide the very poll meant to outlive it); the poll is answered
+        # concurrently, off that queue, the moment its frame is read.
+        inbox = asyncio.Queue(256)
+
+        async def drain():
+            while True:
+                await self.request(await inbox.get())
+
+        worker = asyncio.create_task(drain())
+        self.background.add(worker)
         try:
             async for raw in self.ws:
-                await self.request(raw)
+                if not self.liveness_frame(raw):
+                    await inbox.put(raw)
         except ConnectionClosed:
             pass
         finally:
             for task in (upstream, *self.background):
                 task.cancel()
             await asyncio.gather(upstream, *self.background, return_exceptions=True)
+
+    def liveness_frame(self, raw):
+        """True (and answered in the background) when this is a liveness ask; anything
+        else belongs to the ordered lane."""
+        try:
+            frame = json.loads(raw)
+        except ValueError:
+            return False
+        if not isinstance(frame, dict) or frame.get("method") != LIVENESS_METHOD or frame.get("id") is None:
+            return False
+        task = asyncio.create_task(self.answer_liveness(frame["id"], frame.get("params", {})))
+        self.background.add(task)
+        task.add_done_callback(self.background.discard)
+        return True
 
     # -- upstream state machine: discover -> mint+dial -> replay resumes -> ready -> pump --
     async def upstream(self):
@@ -498,6 +555,31 @@ class AppLink:
                 if resumed not in self.attached:
                     self.attached.append(resumed)
         return {"jsonrpc": "2.0", "id": rid, "result": result}
+
+    async def answer_liveness(self, rid, params):
+        await self.send(await self.liveness(rid, params))
+
+    async def liveness(self, rid, params):
+        from hermes_cli.gateway_client import GatewayRPCError
+        session_id = params.get("session_id") if isinstance(params, dict) else None
+        if not isinstance(session_id, str) or not session_id or set(params) != {"session_id"}:
+            return _error(rid, INVALID_PARAMS, "invalid_params", {"reason": "invalid_params", "field": "session_id"})
+        # A read, like resume: no attach needed, and a continuation id maps to the
+        # root the live row names. A continuation with no alias yet (the resume that
+        # would have named it is exactly what went missing) stays listed=false.
+        target = self.aliases.get(session_id, session_id)
+        try:
+            rows = await self.bridge.live_rows()
+        except GatewayRPCError as exc:
+            return _error(rid, exc.code if exc.code is not None else UPSTREAM, str(exc), exc.data)
+        except Exception as exc:
+            # A handshake failure that connect_gateway never converts must still be
+            # answered; the client treats it as an unknown outcome and asks again.
+            log.warning("bridge liveness read failed: %s", exc)
+            return _error(rid, UPSTREAM, "upstream_unavailable")
+        row = next((r for r in rows if r.get("id") == target), None)
+        return {"jsonrpc": "2.0", "id": rid, "result": {
+            "session_id": target, "listed": row is not None, "status": row.get("status") if row else None}}
 
 
 def _api_server_key(home):

@@ -68,6 +68,12 @@ class FakeGateway:
         self.conns = []
         self.server = None
         self.port = None
+        # TASK-RUNLIVENESS: what `session.active_list` answers, and ways to stall or
+        # poison it (the liveness branch tests).
+        self.live_rows = []
+        self.hold_resume = None          # set to an Event: resume answers only once set
+        self.hold_active_list = None     # ... same for the live read
+        self.refuse_active_list = None   # answer the live read with this refusal instead
 
     # -- ticket store with core's rules (gateway/runtime_bootstrap.py) --
     def mint(self, home, endpoint, *, purpose="interactive", scope=None, subject=None):
@@ -130,6 +136,14 @@ class FakeGateway:
                     return {"jsonrpc": "2.0", "id": rid, "error": {"code": code, "message": message,
                                                                    "data": {"reason": message}}}
                 sid = params.get("session_id")
+
+                def hold(reply, event):
+                    """Answer later (the reply is composed now: no late-bound rid)."""
+                    async def answer_later(reply=reply, event=event, ws=ws):
+                        await event.wait()
+                        with contextlib.suppress(Exception):   # the link may be gone
+                            await ws.send(json.dumps(reply))
+                    asyncio.create_task(answer_later())
                 if method == "session.resume":
                     root = ROOT if sid == ALIAS else sid
                     subscriptions.add(root)
@@ -137,6 +151,9 @@ class FakeGateway:
                                 "messages": list(self.messages.get(root, [])), "running": False,
                                 "execution_generation": self.generation, "replay_epoch": "e1",
                                 "last_sequence": seq, "prompts": [], "pending": []})
+                    if self.hold_resume is not None:
+                        hold(reply, self.hold_resume)
+                        continue
                 elif method == "session.create":
                     sid = f"local-new{number}"
                     subscriptions.add(sid)
@@ -166,6 +183,13 @@ class FakeGateway:
                         reply = err(4001, "invalid_params")
                     else:
                         reply = ok({"status": "queued", "delivered": True})
+                elif method == "session.active_list":
+                    reply = ok({"sessions": list(self.live_rows)})
+                    if self.refuse_active_list is not None:
+                        reply = err(4001, self.refuse_active_list)
+                    elif self.hold_active_list is not None:
+                        hold(reply, self.hold_active_list)
+                        continue
                 else:
                     reply = err(-32601, "unknown method")
                 await ws.send(json.dumps(reply))
@@ -314,7 +338,7 @@ class MethodAllowlist(unittest.TestCase):
     def test_allowlist_is_exactly_the_task_set(self):
         self.assertEqual(wsbridge.ALLOWED_METHODS, frozenset({
             "session.resume", "prompt.submit", "session.steer", "session.interrupt",
-            "approval.respond", "clarify.respond", "session.create"}))
+            "approval.respond", "clarify.respond", "session.create", "session.liveness"}))
 
 
 class UpstreamHandshake(unittest.TestCase):
@@ -671,6 +695,148 @@ class MayWriteBySource(unittest.TestCase):
                 done = await app.until_event(lambda f: f.get("method") == "event"
                                              and f["params"]["type"] == "message.complete")
                 self.assertEqual(done["params"]["payload"], CRON_REFUSAL)
+        run(main())
+
+
+class Liveness(unittest.TestCase):
+    """TASK-RUNLIVENESS B2: ``session.liveness`` answers one session's state cheaply,
+    over its own read-only upstream, while that app link's resume is still held."""
+
+    @staticmethod
+    def row(sid, status, title):
+        return {"id": sid, "status": status, "title": title, "source": "discord"}
+
+    async def ask(self, app, **params):
+        """One liveness frame, answered however long the frames before it take."""
+        app.n += 1
+        rid = app.n
+        await app.ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": "session.liveness",
+                                      "params": params}))
+        return await app.reply(rid)
+
+    def test_answers_one_session_only(self):
+        async def main():
+            async with BridgeHarness() as h, h.app() as app:
+                h.gateway.live_rows = [self.row(ROOT, "working", "科目筆記"),
+                                       self.row(PROD, "idle", "另一份")]
+                reply = await self.ask(app, session_id=ROOT)
+                self.assertEqual(reply["result"], {"session_id": ROOT, "listed": True, "status": "working"})
+                self.assertEqual(set(reply["result"]), {"session_id", "listed", "status"})
+                self.assertNotIn("另一份", json.dumps(reply, ensure_ascii=False))
+                self.assertNotIn(PROD, json.dumps(reply, ensure_ascii=False))
+        run(main())
+
+    def test_needs_no_resume(self):
+        async def main():
+            async with BridgeHarness() as h, h.app() as app:
+                h.gateway.live_rows = [self.row(ROOT, "working", "t")]
+                reply = await self.ask(app, session_id=ROOT)   # never resumed: this is the lost case
+                self.assertEqual(reply["result"]["status"], "working")
+        run(main())
+
+    def test_alias_resolves_to_root(self):
+        async def main():
+            async with BridgeHarness() as h, h.app() as app:
+                await app.call("session.resume", session_id=ALIAS)   # names ROOT
+                h.gateway.live_rows = [self.row(ROOT, "working", "t")]
+                reply = await self.ask(app, session_id=ALIAS)
+                self.assertEqual(reply["result"], {"session_id": ROOT, "listed": True, "status": "working"})
+        run(main())
+
+    def test_continuation_without_an_alias_is_not_listed(self):
+        """M15: nothing named the root yet (the resume that would has gone missing), so the
+        poll says nothing -- B1 keeps asking rather than the poll guessing a lineage."""
+        async def main():
+            async with BridgeHarness() as h, h.app() as app:
+                h.gateway.live_rows = [self.row(ROOT, "working", "t")]
+                reply = await self.ask(app, session_id=ALIAS)
+                self.assertEqual(reply["result"], {"session_id": ALIAS, "listed": False, "status": None})
+        run(main())
+
+    def test_absent_row(self):
+        async def main():
+            async with BridgeHarness() as h, h.app() as app:
+                h.gateway.live_rows = [self.row(PROD, "idle", "t")]
+                reply = await self.ask(app, session_id=ROOT)
+                self.assertEqual(reply["result"], {"session_id": ROOT, "listed": False, "status": None})
+        run(main())
+
+    def test_invalid_params(self):
+        async def main():
+            async with BridgeHarness() as h, h.app() as app:
+                for bad in ({}, {"session_id": ROOT, "extra": 1}, {"session_id": ""}, {"_timeout": 1}):
+                    reply = await self.ask(app, **bad)
+                    self.assertEqual(reply["error"]["code"], -32602, bad)
+        run(main())
+
+    def test_active_list_stays_refused(self):
+        """Guard (M8): the collapse is the whole point -- the raw listing never crosses."""
+        async def main():
+            async with BridgeHarness() as h, h.app() as app:
+                reply = await app.call("session.active_list")
+                self.assertEqual(reply["error"]["code"], -32601)
+                self.assertEqual(reply["error"]["message"], "method_not_found")
+        run(main())
+
+    def test_answers_while_resume_held(self):
+        """The frame B1 depends on: a resume the owner never answers must not hide the poll."""
+        async def main():
+            async with BridgeHarness() as h, h.app() as app:
+                h.gateway.live_rows = [self.row(ROOT, "working", "t")]
+                h.gateway.hold_resume = asyncio.Event()
+                app.n += 1
+                held = app.n
+                await app.ws.send(json.dumps({"jsonrpc": "2.0", "id": held, "method": "session.resume",
+                                              "params": {"session_id": ROOT}}))
+                reply = await self.ask(app, session_id=ROOT)   # the resume is still unanswered
+                self.assertEqual(reply["result"]["status"], "working")
+                h.gateway.hold_resume.set()
+                self.assertIn("result", await app.reply(held), "the held resume lands after it")
+        run(main())
+
+    def test_runs_on_its_own_upstream(self):
+        async def main():
+            async with BridgeHarness() as h, h.app() as app:
+                h.gateway.live_rows = [self.row(ROOT, "working", "t")]
+                await app.call("session.resume", session_id=ROOT)
+                await self.ask(app, session_id=ROOT)
+                link = next(n for n, m, _ in h.gateway.seen if m == "session.resume")
+                read = {n for n, m, _ in h.gateway.seen if m == "session.active_list"}
+                self.assertEqual(len(read), 1)
+                self.assertNotIn(link, read, "a serial lane may be holding a whole turn")
+        run(main())
+
+    def test_one_read_for_every_link(self):
+        """A poll per open link is the same read: one scan, every waiter."""
+        async def main():
+            async with BridgeHarness() as h:
+                h.gateway.live_rows = [self.row(ROOT, "working", "t")]
+                h.gateway.hold_active_list = asyncio.Event()
+                async with h.app() as first, h.app() as second:
+                    asked = [asyncio.create_task(self.ask(first, session_id=ROOT)),
+                             asyncio.create_task(self.ask(second, session_id=ROOT))]
+                    await asyncio.sleep(0.05)
+                    h.gateway.hold_active_list.set()
+                    for reply in await asyncio.gather(*asked):
+                        self.assertEqual(reply["result"]["status"], "working")
+                scans = {n for n, m, _ in h.gateway.seen if m == "session.active_list"}
+                self.assertEqual(len(scans), 1, scans)
+        run(main())
+
+    def test_core_refusal_passes_through(self):
+        async def main():
+            async with BridgeHarness() as h, h.app() as app:
+                h.gateway.refuse_active_list = "permission_denied"
+                reply = await self.ask(app, session_id=ROOT)
+                self.assertEqual(reply["error"]["code"], 4001)
+        run(main())
+
+    def test_upstream_down_is_unavailable(self):
+        async def main():
+            async with BridgeHarness() as h, h.app() as app:
+                h.discover_ok = False
+                reply = await self.ask(app, session_id=ROOT)
+                self.assertEqual(reply["error"]["message"], "upstream_unavailable")
         run(main())
 
 
