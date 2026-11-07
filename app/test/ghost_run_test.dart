@@ -110,7 +110,12 @@ void main() {
     test('after_id watermark (last row before the user row) folds the tail', () {
       expect(
         fold([runOf(runId: 'r1', userText: q, afterId: 1)]),
-        {'s#3#c0'},
+        // RUNORDER: the fold's authority moved to the LIVE side — the
+        // durable card (s#3#c0) keeps its slot and the live row's FIRST
+        // k tools drop instead (live#$0 covers the one durable tool here).
+        // Visible behaviour is unchanged: GHOSTRUN R1 below still proves
+        // each tool renders exactly once.
+        {'s#live-tools#c0'},
         reason: 'activity lists the run with after_id=1, user row is 2',
       );
     });
@@ -127,9 +132,9 @@ void main() {
     });
 
     test('no after_id keeps the text rule; own-anchor path untouched', () {
-      expect(fold([runOf(runId: 'r1', userText: q)]), {'s#3#c0'});
+      expect(fold([runOf(runId: 'r1', userText: q)]), {'s#live-tools#c0'});
       expect(fold([runOf(runId: 'r1', userText: 'other')]), isEmpty);
-      expect(fold(const [], own: durable[1]), {'s#3#c0'});
+      expect(fold(const [], own: durable[1]), {'s#live-tools#c0'});
     });
   });
 
