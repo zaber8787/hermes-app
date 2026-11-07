@@ -34,7 +34,7 @@ EXTRA_MIMES = frozenset({
 UNITS = ("limits", "upload", "media", "history", "approval", "skills", "activity", "push",
          "approval_inbox", "cron_bridge", "wake", "selfwake", "steer_inbox",
          "notification_events", "messages_timing", "media_persist", "clarify",
-         "injected_rows", "api_turn_display", "session_list", "crosssource")
+         "injected_rows", "api_turn_display", "runroute", "session_list", "crosssource")
 log = logging.getLogger("hermes-app-compat")
 _STATE = "_hermes_app_compat_state_v1"
 _MISSING = object()
@@ -850,6 +850,98 @@ def _install_api_turn_display(tx):
         log.error("DISPLAYKIND DISABLED: core seam drifted (%s); HTTP user rows keep the "
                   "internal_notification stamp until compat is reviewed against this core", exc)
         raise
+
+
+def _runroute_adoption_key(authority, session_id):
+    """Pure-read predicate behind the runroute wrapper: the row's stamped route
+    key when this request may adopt it, None to leave the request exactly as
+    core would answer it (see _install_runroute for the six conditions)."""
+    from gateway.config import Platform
+    from gateway.session import SessionSource
+    from gateway.session_api import _served_profile
+    from hermes_state_local import API_BINDING_PREFIX
+    if not isinstance(session_id, str) or not session_id:
+        return None
+    if authority.logical_owner(session_id) != session_id:  # admission binds the lineage root
+        return None
+    source = SessionSource(platform=Platform.API_SERVER, chat_id=session_id, user_id="api",
+                           chat_type="dm", profile=_served_profile(authority))
+    route = authority.runner.session_store._generate_session_key(source)
+    with authority.db._read_ctx() as conn:
+        row = conn.execute("SELECT source,session_key FROM sessions WHERE id=?", (session_id,)).fetchone()
+        if row is None or row[0] != "api_server":
+            return None
+        stamped = row[1]
+        if not stamped or stamped == route:
+            return None
+        if conn.execute("SELECT 1 FROM state_meta WHERE key=?", (API_BINDING_PREFIX + session_id,)).fetchone():
+            return None
+        ids = set()
+        for (entry_json,) in conn.execute("SELECT entry_json FROM gateway_routing WHERE session_key=?",
+                                          (stamped,)):
+            try:
+                ids.add(json.loads(entry_json).get("session_id"))
+            except Exception:
+                return None
+        if session_id not in ids:
+            return None
+        for other in ids - {session_id}:
+            if other is None:
+                return None  # an unaddressable owner under the key: leave core to refuse
+            ended = conn.execute("SELECT ended_at FROM sessions WHERE id=?", (other,)).fetchone()
+            if ended is None or ended[0] is None:
+                return None  # the key still names a live conversation elsewhere
+    return stamped
+
+
+def _install_runroute(tx):
+    """TASK-RUNROUTE: a continuation row an earlier release stamped with another
+    conversation's route key fails every session chat at session_api.py:238-240,
+    because the app never sends X-Hermes-Session-Key and core's legacy adoption
+    only fires for a caller presenting the stamped key. This wrapper hands core
+    that key as caller_key when ALL hold: (1) the request carried no session-key
+    header (both ctx positions falsy, api_server.py:3306-3359); (2) the row's
+    source is api_server; (3) it has no gateway.api.binding.v1 receipt; (4) its
+    stamped key differs from the route computed from its own id; (5) some scope
+    of gateway_routing points the stamped key at this id; (6) every OTHER id the
+    same key points at is an ended row. Only run_kwargs['gateway_session_key']
+    is set, never the ctx copy, so no X-Hermes-Session-Key echo appears. The
+    binding, the declared-owner refusal and the live-elsewhere conflict stay
+    core's (session_api.py:236-249); this unit never writes state."""
+    if _BACKEND not in TARGET_LIKE:
+        raise RuntimeError("runroute backend not reviewed for this source")
+    from gateway import session_api
+    from gateway.session import SessionStore
+    from gateway.session_api_turn import _admit_api_payload
+    from gateway.session_authorities import active_authority
+    cls = api.APIServerAdapter
+    _require(cls, "_prepare_session_chat")
+    _signature(cls, "_prepare_session_chat", "self", "request")
+    _require(session_api, "bind_api_steps", "_served_profile")
+    _signature(session_api, "bind_api_steps", "authority", "session_id", "caller_key")
+    _require(SessionStore, "_generate_session_key")
+    if "caller_key=kwargs.get('gateway_session_key')" not in inspect.getsource(_admit_api_payload):
+        raise RuntimeError("core caller_key source changed")
+    old = cls._prepare_session_chat
+
+    @wraps(old)
+    async def prep(self, request, *args, **kwargs):
+        ctx, err = await old(self, request, *args, **kwargs)
+        if err is None and ctx is not None:
+            try:
+                runner = getattr(self, "gateway_runner", None)
+                if (not ctx.get("gateway_session_key") and not ctx["run_kwargs"].get("gateway_session_key")
+                        and runner is not None and getattr(runner, "session_authority", None) is not None):
+                    authority = active_authority(runner)
+                    if authority is not None:
+                        key = await asyncio.to_thread(_runroute_adoption_key, authority, ctx.get("session_id"))
+                        if key is not None:
+                            ctx["run_kwargs"]["gateway_session_key"] = key
+                            log.info("runroute: session %s adopts its stamped route key", ctx.get("session_id"))
+            except Exception as exc:
+                log.warning("runroute: lookup failed (%s); request left unchanged", type(exc).__name__)
+        return ctx, err
+    tx.set(cls, "_prepare_session_chat", prep)
 
 
 def _install_crosssource(tx):

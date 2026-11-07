@@ -152,5 +152,8 @@ web/cjk-mirror/
 
 .runliveness-evidence/
 
+# TASK-RUNROUTE evidence (never commit)
+.runroute-evidence/
+
 # TASK-RUNLIVENESS-02 scratch (never commit)
 .runliveness-scratch/

@@ -19,7 +19,7 @@ import time
 CASES = ("upload", "limits", "artifact_quota", "media", "history", "approval", "skills", "activity", "push",
          "approval_inbox", "approval_push", "approval_central", "cron_bridge", "wake",
          "wakecap", "wake_report_race", "selfwake", "selfwake_reload", "selfwake_batch", "selfwake_checkpoint", "wakelatch", "steer_inbox",
-         "notification_events", "messages_timing")
+         "notification_events", "messages_timing", "runroute")
 REPO = Path(__file__).resolve().parents[1]
 
 
@@ -203,6 +203,7 @@ def offline(args):
                 "steer_inbox": "durable run-scoped steer inbox: auth/epoch gates, idempotent admission, receipts, seal, capability fail-closed",
                 "notification_events": "notification ledger: stable event ids, single publish, read-gated reminders, browser claim, terminals never replayed",
                 "messages_timing": "messages page stage timing: SQL/decode/MEDIA/JSON segments, cold/warm, debug line + manifest stats (numbers only)",
+                "runroute": "session chat: continuation row's stamped route key adopted via core legacy adoption (caller_key)",
                 "control": "clean HEAD without plugin", "lifecycle": "register/on_unload transactions",
             }[case]
             result["expected"] = "all selected behavior assertions pass"

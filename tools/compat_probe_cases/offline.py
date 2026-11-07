@@ -532,6 +532,9 @@ async def run(args):
         elif args.worker == 'wakelatch':
             from .wakelatch import case_wakelatch
             outcome = await case_wakelatch(args, server, check)
+        elif args.worker == "runroute":
+            from .runroute import case_runroute
+            outcome = await case_runroute(args, server, check)
         else:
             outcome = await globals()["case_"+args.worker](args)
         status, detail = outcome or ("PASS", f"{len(DETAILS)} assertions")
