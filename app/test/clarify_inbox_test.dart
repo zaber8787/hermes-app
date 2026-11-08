@@ -187,4 +187,60 @@ void main() {
     inbox.request(request());
     expect(inbox.pending, isEmpty);
   });
+
+  // CLARIFY-PILE: what the page shows. An answered form must not stay parked
+  // above the composer (zaber: 「問完會留下一堆問問題的紀錄」), while a form that
+  // ended with no user action still surfaces — exactly one receipt, never a
+  // pile. Replay safety lives in `_resolved` and is NOT this getter's job.
+  group('visible: settled forms leave the composer area', () {
+    Map<String, dynamic> form(String id) => {
+      'clarify_id': id, 'session_id': 's1', 'run_id': null,
+      'questions': [{'qid': id, 'question': '問題 $id', 'choices': ['甲', '乙'],
+        'multi_select': false}],
+      'timeout_seconds': 30, 'issued_at': 100.0,
+    };
+
+    test('answered and cancelled forms leave no row; pending stays', () {
+      final inbox = ClarifyInbox();
+      for (final id in ['a', 'b', 'c']) {
+        inbox.request(form(id));
+      }
+      inbox.resolve({'clarify_id': 'a', 'outcome': 'answered',
+        'answers': {'a': '甲'}});
+      inbox.resolve({'clarify_id': 'b', 'outcome': 'cancelled'});
+      expect(inbox.visible.map((e) => e.id), ['c']);
+    });
+
+    test('a timeout nobody saw keeps ONE receipt, older ones do not pile', () {
+      final inbox = ClarifyInbox();
+      for (final id in ['a', 'b']) {
+        inbox.request(form(id));
+        inbox.resolve({'clarify_id': id, 'outcome': 'timed_out'});
+      }
+      inbox.request(form('c'));
+      inbox.resolve({'clarify_id': 'c', 'outcome': 'undelivered'});
+      expect(inbox.visible.map((e) => e.id), ['c']); // newest attention wins
+    });
+
+    test('reconciled (server settled it silently) is not an alert', () {
+      final inbox = ClarifyInbox()..request(form('a'));
+      inbox.mergeSnapshot({'pending': []});
+      expect(inbox.visible, isEmpty);
+      expect(inbox.entries.single.outcome, 'reconciled');
+    });
+
+    testWidgets('the page renders no row for a form the user already answered',
+        (tester) async {
+      final inbox = ClarifyInbox();
+      for (final id in ['a', 'b']) {
+        inbox.request(form(id));
+        inbox.resolve({'clarify_id': id, 'outcome': 'answered',
+          'answers': {id: '甲'}});
+      }
+      await tester.pumpWidget(MaterialApp(home: ClarifyInboxView(
+        requests: inbox.visible, onAnswer: (_, _) async {})));
+      expect(find.textContaining('問題'), findsNothing);
+      expect(find.byType(Card), findsNothing);
+    });
+  });
 }

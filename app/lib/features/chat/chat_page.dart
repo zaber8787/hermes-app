@@ -2286,7 +2286,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                               // every pending approval in this session (local OR
                               // remote — never a fake turn row).
                               _padded(ClarifyInboxView(
-                                requests: c.clarifyInbox.entries,
+                                // CLARIFY-PILE: `visible`, not `entries` — an
+                                // answered form must not stay parked above the
+                                // composer looking like an open question.
+                                requests: c.clarifyInbox.visible,
                                 onAnswer: c.answerClarify,
                               )),
                               if (c.approvalInboxSupported)

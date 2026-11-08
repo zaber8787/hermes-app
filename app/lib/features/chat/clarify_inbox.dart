@@ -69,6 +69,30 @@ class ClarifyInbox {
     entry.invalidQids.clear();
   }
 
+  /// What the page may show above the composer.
+  ///
+  /// A settled form leaves NO row once the user acted on it: the record of
+  /// what was asked and answered lives in the turn itself (the clarify tool
+  /// call), while a receipt parked above the composer reads as an unanswered
+  /// backlog and just accumulates — zaber's「問完會留下一堆問問題的紀錄」.
+  /// Replay safety is untouched: `_resolved` still remembers every settled
+  /// id, so a reconnect cannot resurrect a question nobody is looking at.
+  ///
+  /// A form that ended with NO user action (`timed_out` / `undelivered`) is a
+  /// different case — nobody saw it end — so the NEWEST such form keeps one
+  /// receipt. Older ones never pile.
+  List<ClarifyRequest> get visible {
+    final shown = pending.toList();
+    ClarifyRequest? attention;
+    for (final entry in entries) {
+      if (entry.pending) continue;
+      final outcome = entry.outcome;
+      if (outcome == 'timed_out' || outcome == 'undelivered') attention = entry;
+    }
+    if (attention != null) shown.add(attention);
+    return shown;
+  }
+
   void mergeSnapshot(Map snapshot) {
     // Missing pending rows are settled with an unknown outcome. Only an
     // exact server event may claim answered or timed_out.
