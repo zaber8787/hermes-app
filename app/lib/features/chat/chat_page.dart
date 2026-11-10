@@ -2108,9 +2108,10 @@ class _ChatPageState extends ConsumerState<ChatPage> {
                                 _padded(
                                   Center(
                                     child: TextButton(
-                                      onPressed: c.loadingOlder || c.busy
-                                          ? null
-                                          : older,
+                                      // HISTOLD: `busy` must not disable this —
+                                      // reading older history during a long run
+                                      // is the normal case.
+                                      onPressed: c.loadingOlder ? null : older,
                                       child: Text(
                                         strings.resolve(
                                           c.loadingOlder

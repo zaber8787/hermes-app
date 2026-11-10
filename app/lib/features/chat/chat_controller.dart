@@ -4251,7 +4251,13 @@ class ChatController extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> loadOlder() async {
-    if (loadingOlder || !hasOlder || busy || _bootstrapping) return;
+    // HISTOLD: NO `busy` gate. Paging backwards through history is a
+    // read-only GET of rows the live turn cannot touch, and a long run is
+    // exactly when a reader wants the older context (zaber: 「載入較早訊息
+    // 好像無法使用」— while a run streamed, the button was disabled and the
+    // auto-load silently could not fire). Turn state is protected by the
+    // _turnToken identity check below, not by refusing the fetch.
+    if (loadingOlder || !hasOlder || _bootstrapping) return;
     loadingOlder = true;
     error = null;
     notifyListeners();
