@@ -102,6 +102,13 @@ _drainers = set()  # strong refs: asyncio only keeps weak refs to tasks
 big_streams: asyncio.Semaphore | None = None
 log = logging.getLogger("hermes-web")
 
+# STATION-LANE D4：自觀測。開關直讀 os.environ（刻意不進 _ALLOW）。
+HEARTBEAT_EVERY = 30.0
+_hb_on = True                      # build_app() 依 HERMES_WEB_HEARTBEAT 設定
+_hb_task: asyncio.Task | None = None
+_hb_lag: float | None = None
+_inflight = 0
+
 
 def _client() -> ClientSession:
     assert session is not None, "session created in on_startup"
@@ -710,14 +717,62 @@ async def healthz(_: web.Request) -> web.Response:
     return web.json_response({"ok": True, "root": str(ROOT), "api": API})
 
 
+def _heartbeat_enabled() -> bool:
+    return os.environ.get("HERMES_WEB_HEARTBEAT", "1").strip() != "0"
+
+
+def _gauges() -> dict:
+    slots = None if big_streams is None else BIG_STREAM_SLOTS - big_streams._value
+    return {"lag": None if _hb_lag is None else round(_hb_lag, 3),
+            "inflight": _inflight, "drainers": len(_drainers), "bigslots": slots}
+
+
+async def _heartbeat() -> None:
+    global _hb_lag
+    loop = asyncio.get_running_loop()
+    while True:
+        t0 = loop.time()
+        await asyncio.sleep(1.0)
+        _hb_lag = loop.time() - t0 - 1.0
+        g = _gauges()
+        log.info("heartbeat lag=%.3f inflight=%d drainers=%d bigslots=%s",
+                 _hb_lag, g["inflight"], g["drainers"],
+                 "null" if g["bigslots"] is None else g["bigslots"])
+        await asyncio.sleep(HEARTBEAT_EVERY - 1.0)
+
+
+@web.middleware
+async def _inflight_mw(request: web.Request, handler):
+    global _inflight
+    _inflight += 1
+    try:
+        return await handler(request)
+    finally:
+        _inflight -= 1
+
+
+async def metricsz(_: web.Request) -> web.Response:
+    if not _hb_on:
+        raise web.HTTPNotFound()
+    return web.json_response(_gauges(), headers={"Cache-Control": "no-store"})
+
+
 async def on_startup(app: web.Application) -> None:
     global session, big_streams
+    global _hb_task
     # total=None：SSE 長連線不能掐表；連線失敗快速回饋。
     session = ClientSession(timeout=ClientTimeout(total=None, connect=10))
     big_streams = asyncio.Semaphore(BIG_STREAM_SLOTS)
+    if _hb_on:
+        _hb_task = asyncio.get_running_loop().create_task(_heartbeat())
 
 
 async def on_cleanup(_: web.Application) -> None:
+    global _hb_task
+    if _hb_task is not None:
+        _hb_task.cancel()
+        await asyncio.gather(_hb_task, return_exceptions=True)
+        _hb_task = None
     if session is not None:
         await session.close()
 
@@ -867,7 +922,12 @@ def build_app() -> web.Application:
     app = web.Application(client_max_size=0)
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
+    global _hb_on
+    _hb_on = _heartbeat_enabled()
+    if _hb_on:
+        app.middlewares.append(_inflight_mw)
     app.router.add_get("/healthz", healthz)
+    app.router.add_get("/metricsz", metricsz)
     # App Links 驗證檔優先於靜態回退（见 assetlinks handler 註解）
     app.router.add_get("/.well-known/assetlinks.json", assetlinks)
     # R3: management endpoints are matched BEFORE the catch-all proxy.
