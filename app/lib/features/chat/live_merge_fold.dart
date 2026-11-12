@@ -26,8 +26,13 @@ import 'tool_timeline_projection.dart';
 /// (L) the durable names are an ordered subsequence of the live names —
 ///     the LIVE-MERGE whole-tail fold is still justified (a live row owns
 ///     every durable card; timeline_dup's [skill_view, terminal] case).
-/// (c) anything else — an INTENTIONAL change from folding anyway: stand
-///     down and show both, rather than hide steps over a mismatch.
+/// (S) LATEATTACH: no name evidence (mismatched names, a nameless durable
+///     tool, or a live list SHORTER than the durable tail because this client
+///     attached mid-run) — hand back min(durable tools, COMPLETED live rows)
+///     live slots from the head instead of standing down. Standing down here
+///     is what made "已完成過的幽靈執行紀錄" pile up at the bottom of the
+///     initiating client after a mid-run refresh.
+/// (c) only if even (S) has nothing to hand back — show BOTH.
 Set<String> liveMergeFoldExclusions({
   required LiveTurn? live,
   required List<ActivityRun> activeRuns,
@@ -83,14 +88,35 @@ Set<String> liveMergeFoldExclusions({
   }
   final k = tools.length;
   // (a) R12: the live list is SHORTER than the durable tail it would own —
-  // folding would swallow the steps it never carried.
-  if (k > live.tools.length) return const {};
+  // folding the DURABLE side would swallow steps the stream never carried.
+  // LATEATTACH: this no longer exits the fold. A client that attached mid-run
+  // has a live list that is a suffix of the turn, which is exactly the k > L
+  // shape, and standing down there is what painted the ghost pile under the
+  // real one. It only disqualifies the durable-hiding paths; the live-side
+  // count hand-back (S) below still applies.
+  final shorterThanDurable = k > live.tools.length;
   final durableNames = [
     for (final e in tools) e.call?.name ?? e.message.toolName,
   ];
-  // (n) a nameless durable tool cannot be checked against the live side.
-  if (durableNames.contains(null)) return const {};
+  // (n) a nameless durable tool cannot be checked against the live side —
+  // same narrowing as (a): it disqualifies the name paths, not (S).
+  final nameless = durableNames.contains(null);
   final liveNames = [for (final t in live.tools) t.name];
+  // (S) LATEATTACH: the count hand-back, shared by every case the name
+  // evidence cannot take. Frames arrive in order, so the COMPLETED prefix of
+  // the live list is the landed prefix; up to min(durable tools in this turn,
+  // completed live rows) live slots go back from the head. Durable cards are
+  // never hidden here, so what can disappear is bounded by the durable cards
+  // already on screen — the worst case is a step that goes invisible for one
+  // poll until its own durable row lands, never a lost record.
+  var completedLive = 0;
+  for (final t in live.tools) {
+    if (t.completed) completedLive++;
+  }
+  final handBack = completedLive < k ? completedLive : k;
+  Set<String> countHandBack() =>
+      _handBackFirstLive(liveTail, projection, handBack);
+  if (shorterThanDurable || nameless) return countHandBack();
   var prefix = true;
   for (var i = 0; i < k; i++) {
     if (durableNames[i] != liveNames[i]) {
@@ -102,22 +128,37 @@ Set<String> liveMergeFoldExclusions({
   // back so the durable cards keep their interleaved positions and only
   // the not-yet-durable live rows (k..) render at the end.
   if (prefix) {
-    return {
-      for (final e in projectMessages(liveTail))
-        if (e.kind == EntryKind.tool &&
-            e.call != null &&
-            e.call!.id.startsWith('live#') &&
-            (int.tryParse(e.call!.id.substring(5)) ?? k) < k)
-          toolSlotKeyFor(e, projection.scope),
-    };
+    return _handBackFirstLive(liveTail, projection, k);
   }
   // (L) LIVE-MERGE: every durable step has a same-name live successor —
   // the live row still legitimately owns the whole tail.
   if (_inOrderSubsequence(durableNames.cast<String>(), liveNames)) {
     return {for (final e in tools) toolSlotKeyFor(e, projection.scope)};
   }
-  // (c) no evidence either way: show BOTH (intentional change, see header).
-  return const {};
+  // (c) no name evidence either way: hand back what is provably landed (S)
+  // and show the rest. Durable cards still never hide; a live-only step is
+  // never swallowed, because (S) hides no more than `k` rows and only the
+  // completed ones.
+  return countHandBack();
+}
+
+/// RUNORDER path (b) and LATEATTACH path (S) share one shape: live slots
+/// `0..m-1` are covered by durable cards already on screen, so they leave the
+/// provisional row and everything from `m` on stays at the end of the timeline.
+Set<String> _handBackFirstLive(
+  List<Message> liveTail,
+  ToolOverlapProjection projection,
+  int m,
+) {
+  if (m <= 0) return const {};
+  return {
+    for (final e in projectMessages(liveTail))
+      if (e.kind == EntryKind.tool &&
+          e.call != null &&
+          e.call!.id.startsWith('live#') &&
+          (int.tryParse(e.call!.id.substring(5)) ?? m) < m)
+        toolSlotKeyFor(e, projection.scope),
+  };
 }
 
 /// [sub] appears in [seq] in order (not necessarily contiguously).
