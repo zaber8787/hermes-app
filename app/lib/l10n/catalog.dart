@@ -510,6 +510,8 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.timelineM014:
       'This approval event has no run_id and cannot be answered here; use the CLI instead.',
   MessageKey.timelineM015: 'Answered: {choice}',
+  MessageKey.timelineWindowEarlier: 'Show {count} earlier',
+  MessageKey.timelineWindowLater: 'Show {count} later',
   MessageKey.approvalOnce: 'Allow once',
   MessageKey.approvalSession: 'Allow for this conversation',
   MessageKey.approvalAlways: 'Always allow',
@@ -1077,6 +1079,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.timelineM013: '這個動作被標記為敏感操作',
   MessageKey.timelineM014: '此審核事件缺少 run_id，無法在此回覆；請改用 CLI 處理。',
   MessageKey.timelineM015: '已回覆：{choice}',
+  MessageKey.timelineWindowEarlier: '顯示較早的 {count} 項',
+  MessageKey.timelineWindowLater: '顯示較新的 {count} 項',
   MessageKey.approvalOnce: '允許一次',
   MessageKey.approvalSession: '本次對話都允許',
   MessageKey.approvalAlways: '一律允許',

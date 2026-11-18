@@ -157,3 +157,6 @@ web/cjk-mirror/
 
 # TASK-RUNLIVENESS-02 scratch (never commit)
 .runliveness-scratch/
+
+# TASK-STEPSRENDER evidence/scratch (never commit)
+.stepsrender-evidence/

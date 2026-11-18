@@ -326,6 +326,8 @@ enum MessageKey {
   timelineReasoning,
   timelineM001Plural,
   timelineM010Plural,
+  timelineWindowEarlier,
+  timelineWindowLater,
   approvalOnce,
   approvalSession,
   approvalAlways,

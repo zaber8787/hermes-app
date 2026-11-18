@@ -54,6 +54,25 @@ void main() {
     expect(t(MessageKey.languageTraditionalChinese), '繁體中文');
     expect(t(MessageKey.settingsLanguage, locale: AppLocale.zhHant), '語言');
     expect(t(MessageKey.chatRemoteBusy, locale: AppLocale.zhHant), '其他裝置進行中');
+    // STEPSRENDER window controls: exact reviewed values (added keys).
+    expect(
+      t(MessageKey.timelineWindowEarlier, args: {'count': 360}),
+      'Show 360 earlier',
+    );
+    expect(
+      t(MessageKey.timelineWindowEarlier,
+          args: {'count': 360}, locale: AppLocale.zhHant),
+      '顯示較早的 360 項',
+    );
+    expect(
+      t(MessageKey.timelineWindowLater, args: {'count': 40}),
+      'Show 40 later',
+    );
+    expect(
+      t(MessageKey.timelineWindowLater,
+          args: {'count': 40}, locale: AppLocale.zhHant),
+      '顯示較新的 40 項',
+    );
   });
 
   test('count rules: 0 and >1 plural, 1 singular (zh invariant)', () {

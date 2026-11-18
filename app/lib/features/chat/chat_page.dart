@@ -1087,6 +1087,20 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     }
   }
 
+  /// STEPSRENDER: the box/sliver gate counts what the projection can emit:
+  /// one content entry per message plus one per tool call, live tail
+  /// included. A live N-step turn must leave the eager box path at once.
+  static int _timelineWeight(List<Message> messages, List<Message> liveTail) {
+    var n = messages.length + liveTail.length;
+    for (final m in messages) {
+      n += m.toolCalls.length;
+    }
+    for (final m in liveTail) {
+      n += m.toolCalls.length;
+    }
+    return n;
+  }
+
   /// OPENPERF P1: small histories stay a single box sliver — exactly the
   /// pre-virtualization ListView item, onstage semantics included; the
   /// lazy sliver only takes over where viewport culling pays off.
@@ -1103,7 +1117,7 @@ class _ChatPageState extends ConsumerState<ChatPage> {
     required int? revealFocus,
     int? realFrom,
   }) {
-    if (messages.length <= 40) {
+    if (_timelineWeight(messages, liveTail) <= 40) {
       return SliverPadding(
         padding: const EdgeInsets.fromLTRB(16, 0, 16, 0),
         sliver: SliverToBoxAdapter(

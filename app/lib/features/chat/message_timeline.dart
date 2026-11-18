@@ -56,6 +56,7 @@ class MessageTimeline extends StatelessWidget {
     this.toolOverrides = const {},
     this.toolExclusions = const {},
     this.slotScope = '',
+    this.windowed = false,
   });
   final List<Message> messages;
   final List<Message> liveTail;
@@ -79,6 +80,12 @@ class MessageTimeline extends StatelessWidget {
   final Map<String, ToolViewPayload> toolOverrides;
   final Set<String> toolExclusions;
   final String slotScope;
+
+  /// STEPSRENDER: bound eager rows (LiveTurn transcript only) — more than
+  /// [_rowWindow] projected rows render through a paged [_RowWindow]
+  /// instead of one eager Column child per row.
+  final bool windowed;
+
   @override
   Widget build(BuildContext context) {
     final hints = {for (final r in remoteRows) r.message.id: r.hint};
@@ -105,7 +112,9 @@ class MessageTimeline extends StatelessWidget {
     );
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
-      children: [for (final row in rows) row.build(context, null)],
+      children: windowed && rows.length > _rowWindow
+          ? [_RowWindow(rows: rows, crossAxisAlignment: CrossAxisAlignment.stretch)]
+          : [for (final row in rows) row.build(context, null)],
     );
   }
 }
@@ -229,6 +238,12 @@ List<TimelineRow> _timelineRows(
     if (details.isEmpty) return;
     final frozen = List<DisplayEntry>.of(details);
     details = [];
+    // STEPSRENDER (H2): child rows are built HERE, while seenKeys is still
+    // the projection's own first pass. Building them inside the group's
+    // Builder re-consumed seenKeys on every later build, which flipped
+    // `unique` to false and stripped every step's slot key (expanded state
+    // lost on a re-scroll; keys are the anchor that state rides on).
+    final childRows = [for (final e in frozen) view(e)];
     rows.add(
       TimelineRow(
         keyValue: 'group:${frozen.first.message.id}',
@@ -248,7 +263,14 @@ List<TimelineRow> _timelineRows(
                       ).resolve(MessageKey.timelineM001, count: steps)
                     : AppStrings.of(context).resolve(MessageKey.timelineM002),
               ),
-              children: [for (final e in frozen) view(e).build(context, null)],
+              children: childRows.length <= _rowWindow
+                  ? [for (final r in childRows) r.build(context, null)]
+                  : [
+                      _RowWindow(
+                        rows: childRows,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                      ),
+                    ],
             );
           },
         ),
@@ -273,6 +295,14 @@ List<TimelineRow> _timelineRows(
 /// viewport (ListView.builder / SliverList semantics) instead of one eager
 /// Column of every message in the page.
 const int _lazyThreshold = 40;
+
+/// STEPSRENDER (decision D2): cap for the two EAGER row surfaces a lazy
+/// sliver cannot reach — an expanded brief-mode group (all children live
+/// inside ONE sliver child) and the LiveTurn transcript box. The number
+/// comes from the openperf structural pin (EntryView ≤ 60,
+/// openperf_regression_test.dart:137): a 40-row window leaves 20 rows of
+/// headroom for the surrounding viewport rows.
+const int _rowWindow = 40;
 
 class MessageTimelineSliver extends StatelessWidget {
   const MessageTimelineSliver({
@@ -566,6 +596,66 @@ class _LazyRowState extends State<_LazyRow> {
       );
     }
     return SizedBox(height: widget.extent);
+  }
+}
+
+/// STEPSRENDER: paged window over an EAGER row list (expanded group,
+/// LiveTurn transcript). Only [_rowWindow] rows are ever built; the two
+/// controls page the window. The default view FOLLOWS THE TAIL, so new
+/// live steps stay visible and a freshly expanded 400-step group shows
+/// exactly one "earlier" control (cap + 1, per the task's gate).
+class _RowWindow extends StatefulWidget {
+  const _RowWindow({required this.rows, required this.crossAxisAlignment});
+  final List<TimelineRow> rows;
+  final CrossAxisAlignment crossAxisAlignment;
+  @override
+  State<_RowWindow> createState() => _RowWindowState();
+}
+
+class _RowWindowState extends State<_RowWindow> {
+  /// Null = follow the tail (new live steps stay visible).
+  int? _end;
+
+  @override
+  Widget build(BuildContext context) {
+    final strings = AppStrings.of(context);
+    final len = widget.rows.length;
+    final end = _end == null || _end! > len ? len : _end!;
+    final start = end - _rowWindow < 0 ? 0 : end - _rowWindow;
+    return Column(
+      mainAxisSize: MainAxisSize.min,
+      crossAxisAlignment: widget.crossAxisAlignment,
+      children: [
+        if (start > 0)
+          TextButton(
+            key: const ValueKey('timeline.window.earlier'),
+            onPressed: () => setState(
+              () => _end = start < _rowWindow ? _rowWindow : start,
+            ),
+            child: Text(
+              strings.resolve(
+                MessageKey.timelineWindowEarlier,
+                args: {'count': start},
+              ),
+            ),
+          ),
+        for (var i = start; i < end; i++) widget.rows[i].build(context, null),
+        if (end < len)
+          TextButton(
+            key: const ValueKey('timeline.window.later'),
+            onPressed: () => setState(() {
+              final next = end + _rowWindow;
+              _end = next >= len ? null : next;
+            }),
+            child: Text(
+              strings.resolve(
+                MessageKey.timelineWindowLater,
+                args: {'count': len - end},
+              ),
+            ),
+          ),
+      ],
+    );
   }
 }
 
@@ -876,6 +966,10 @@ class LiveTurnView extends StatelessWidget {
         detailed: detailed,
         toolExclusions: toolProjection?.transcriptExcluded ?? const {},
         slotScope: toolProjection?.scope ?? '',
+        // STEPSRENDER: this box sits inside the page's eager tail Column —
+        // a terminal transcript of N steps would rebuild N eager cards on
+        // every page build.
+        windowed: true,
       );
     }
     return Column(
