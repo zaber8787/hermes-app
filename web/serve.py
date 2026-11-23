@@ -466,14 +466,16 @@ def _too_large() -> web.Response:
                         headers={"Connection": "close"})
 
 
-async def _json_body(request: web.Request):
+async def _json_body(request: web.Request, limit: int = MAX_BODY_BYTES):
     """01413 M2/m6: management JSON is small BY CONTRACT (memory content,
     skill flags) — read it under the proxy's own MAX_BODY_BYTES instead of
     request.json()'s unbounded read inside the client_max_size=0 app. The
     MEMORY_FILES char limits stay a separate POLICY (force-save allowed);
-    this is the OOM guard. Returns (body, error_response)."""
+    this is the OOM guard. Returns (body, error_response). WEBUX3: `limit`
+    lets /clientlog keep its own small cap; existing callers stay on
+    MAX_BODY_BYTES."""
     declared = request.content_length
-    if declared is not None and declared > MAX_BODY_BYTES:
+    if declared is not None and declared > limit:
         return None, _too_large()
     if declared == 0:
         return None, web.json_response(
@@ -482,7 +484,7 @@ async def _json_body(request: web.Request):
     try:
         async for chunk in request.content.iter_any():
             buf.extend(chunk)
-            if len(buf) > MAX_BODY_BYTES:
+            if len(buf) > limit:
                 return None, _too_large()
     except Exception:
         return None, web.json_response(
@@ -555,6 +557,111 @@ async def memories_put(request: web.Request) -> web.Response:
         return web.json_response(
             {"error": {"message": f"write failed: {exc}"}}, status=500)
     return web.json_response(_memory_item(name))
+
+
+# ---- WEBUX3: POST /clientlog (browser entry self-reports) -------------------
+# Passive evidence for the 'entry page dies silently' failure. The payload
+# is small BY CONTRACT, so the read gate is a 64 KiB copy of the same
+# AUDIT-18 shape (client_max_size=0 means aiohttp itself gates nothing).
+# Privacy: records are re-serialized from a field whitelist, and every
+# retained value must itself pass a token-shaped regex — 'token=' inside
+# a value would otherwise land in the file anyway.
+
+CLIENTLOG_MAX_BODY = 64 * 1024
+CLIENTLOG_MAX_RECORD = 4 * 1024
+CLIENTLOG_ROTATE_AT = 2 * 1024 * 1024
+CLIENTLOG_ROTATE_TO = 1 * 1024 * 1024
+# ts/kind/build (and the optional cls/status the client does not send yet)
+# are machine-made ids; anything looser is smuggled content, not a report.
+_CLIENTLOG_VALUE = re.compile(r"^[A-Za-z0-9._+-]{1,64}$")
+
+
+def _clientlog_path() -> pathlib.Path:
+    # Resolved PER CALL, like _memories_dir: media-archive computes its
+    # path at import time, which would send a test that sets
+    # HERMES_WEB_HOME after importing straight into the real ~/.hermes.
+    return pathlib.Path(_cfg(
+        "HERMES_WEB_HOME", str(pathlib.Path.home() / ".hermes"))) / "logs"
+
+
+def _clientlog_clean(raw) -> dict | None:
+    """Per-FIELD privacy (ticket §1.3): a value that fails its shape check
+    loses that FIELD, and only a record left with no fields at all is
+    dropped whole — that is what keeps 'token=' inside one value from
+    ever reaching the file while a partly-dirty record still reports."""
+    if not isinstance(raw, dict):
+        return None
+    out = {}
+    for key in ("ts", "status"):
+        val = raw.get(key)
+        if isinstance(val, int) and not isinstance(val, bool):
+            out[key] = val
+    for key in ("kind", "cls", "build"):
+        val = raw.get(key)
+        if isinstance(val, str) and _CLIENTLOG_VALUE.match(val):
+            out[key] = val
+    return out or None  # every field dropped => the record is dropped
+
+
+async def clientlog_post(request: web.Request) -> web.Response:
+    # Auth BEFORE the body read (same order as memories_put): an
+    # unauthenticated oversized POST is a 401, not a 413.
+    if not _authorized(request):
+        return _unauthorized()
+    body, err = await _json_body(request, CLIENTLOG_MAX_BODY)
+    if err is not None:
+        return err
+    records = body.get("records")
+    if not isinstance(records, list):
+        return web.json_response(
+            {"error": {"message": "records must be a list"}}, status=400)
+    lines, dropped = [], 0
+    for raw in records:
+        try:
+            size = len(json.dumps(raw, ensure_ascii=False,
+                                  separators=(",", ":")).encode("utf-8"))
+        except (TypeError, ValueError):
+            size = CLIENTLOG_MAX_RECORD + 1
+        clean = _clientlog_clean(raw)
+        if size > CLIENTLOG_MAX_RECORD or clean is None:
+            dropped += 1
+            continue
+        lines.append(json.dumps(clean, ensure_ascii=False,
+                                separators=(",", ":")) + "\n")
+    if lines:
+        path = _clientlog_path() / "web-client-log.jsonl"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Append + rotation run as ONE synchronous section: the event loop
+        # is single-threaded, so no await here means concurrent reports
+        # can never interleave inside the file.
+        try:
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.writelines(lines)
+            if path.stat().st_size > CLIENTLOG_ROTATE_AT:
+                # BYTE arithmetic on a binary read (str char counts would
+                # under-count non-ASCII); drop the oldest whole LINES.
+                data = path.read_bytes()
+                rows = data.splitlines(keepends=True)
+                cut, kept = 0, len(data)
+                while cut < len(rows) and kept > CLIENTLOG_ROTATE_TO:
+                    kept -= len(rows[cut])
+                    cut += 1
+                data = b"".join(rows[cut:])
+                tmp = path.with_name(f"{path.name}.tmp-{os.getpid()}")
+                try:
+                    with open(tmp, "wb") as fh:
+                        fh.write(data)
+                    os.replace(tmp, path)  # atomic, same-directory
+                except OSError:
+                    try:
+                        os.unlink(tmp)  # never leave a tmp file behind
+                    except OSError:
+                        pass
+                    raise
+        except OSError as exc:
+            return web.json_response(
+                {"error": {"message": f"write failed: {exc}"}}, status=500)
+    return web.json_response({"accepted": len(lines), "dropped": dropped})
 
 
 async def skills_patch(request: web.Request) -> web.Response:
@@ -935,6 +1042,9 @@ def build_app() -> web.Application:
     app.router.add_get("/api/memories", memories_get)
     app.router.add_get("/api/sessions/{session_id}/context", session_context_get)
     app.router.add_put("/api/memories/{name}", memories_put)
+    # WEBUX3: POST-only — add_route("*") would pull even GET away from
+    # the SPA fallback below.
+    app.router.add_post("/clientlog", clientlog_post)
     app.router.add_route("*", "/health", api_proxy)  # app 的 health 探測走反代
     # ARTIFACT-PERSIST：專用路由必須註冊在 /v1/* 泛Route之前
     app.router.add_post("/v1/artifacts/upload", artifact_upload)

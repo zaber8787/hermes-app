@@ -65,6 +65,95 @@
       }
     })();
   </script>
+  <script id="hermes-entry-log">
+    // TASK-WEBUX3-01: entry self-reporting. The 'only a fresh Chrome
+    // instance gets in' failure left no evidence anyone could capture,
+    // so the entry page records its own death to the server instead.
+    // Two record points, both inside this block:
+    //   A: our own 20000ms deadline before 'flutter-first-frame'
+    //      (the watchdog keeps its own independent timer and notice;
+    //      the two constants may drift apart — known, documented).
+    //   B: the service-worker ACTIVATION timeout, which flutter.js
+    //      swallows into console.warn — a window error/unhandledrejection
+    //      listener can never see it. Non-timeout SW errors are out of
+    //      scope. Fields are whitelisted to {ts, kind, build}: never a
+    //      URL, hash, query, header value, stored value or error text.
+    // Nothing here navigates; a failing report never changes the page.
+    // If localStorage is unavailable (private mode, quota) the whole
+    // block degrades silently.
+    (function () {
+      var KEY = 'hermes.entrylog.v1', MAX = 50, REC_MAX = 1024,
+        BOOT_MS = 20000, booted = false, flushed = false, swSeen = false;
+      function lsGet(k) {
+        try { return window.localStorage.getItem(k); } catch (e) { return null; }
+      }
+      function lsSet(k, v) {
+        try { window.localStorage.setItem(k, v); } catch (e) {}
+      }
+      function load() {
+        var v = lsGet(KEY);
+        if (!v) return [];
+        try {
+          var arr = JSON.parse(v);
+          return Array.isArray(arr) ? arr : [];
+        } catch (e) { return []; }
+      }
+      function send() {
+        var k = lsGet('hermes.vault.server.key');
+        if (!k) return;
+        var batch = load();
+        if (batch.length === 0) return;
+        fetch('/clientlog', {
+          method: 'POST', keepalive: true,
+          headers: {'Content-Type': 'application/json',
+                    'Authorization': 'Bearer ' + k},
+          body: JSON.stringify({records: batch})
+        }).then(function (r) {
+          if (!r.ok) return;
+          var sent = {}, i;
+          for (i = 0; i < batch.length; i++) sent[JSON.stringify(batch[i])] = 1;
+          var rest = load().filter(function (rec) {
+            return !sent[JSON.stringify(rec)];
+          });
+          lsSet(KEY, JSON.stringify(rest));
+        }, function () {});
+      }
+      function record(kind) {
+        var rec = {ts: Date.now(), kind: kind,
+                   build: window.HERMES_BUILD || 'unknown'};
+        var line = JSON.stringify(rec);
+        if (unescape(encodeURIComponent(line)).length > REC_MAX) return;
+        var arr = load();
+        arr.push(rec);
+        if (arr.length > MAX) arr.splice(0, arr.length - MAX);
+        lsSet(KEY, JSON.stringify(arr));
+        send();  // same event loop: the page may be dying
+      }
+      var warn = console.warn;
+      console.warn = function () {
+        if (!swSeen && typeof arguments[0] === 'string'
+            && arguments[0].indexOf(
+              'Exception while loading service worker') === 0
+            && arguments[1]
+            && String(arguments[1].message).indexOf(
+              'prepareServiceWorker') >= 0) {
+          swSeen = true;
+          record('sw-timeout');
+        }
+        return warn.apply(console, arguments);
+      };
+      window.addEventListener('flutter-first-frame', function () {
+        booted = true;
+        if (!flushed) {
+          flushed = true;
+          if (load().length > 0) send();  // deferred retry, once per page
+        }
+      });
+      setTimeout(function () {
+        if (!booted) record('boot-timeout');
+      }, BOOT_MS);
+    })();
+  </script>
 </head>
 <body>
   <!--
@@ -90,6 +179,7 @@
     (function () {
       var mine = {build: '__HERMES_BUILD_ID__'}, CHECK_MS = 300000,
         FIRST_MS = 15000, chip = null;
+      window.HERMES_BUILD = mine.build;
       function zh() {
         return (document.documentElement.lang || navigator.language || '')
           .toLowerCase().indexOf('zh') === 0;
@@ -155,11 +245,9 @@
         notice.id = 'hermes-boot-watchdog-notice';
         notice.setAttribute('role', 'status');
         notice.textContent = zh()
-          ? '網頁載入逾時：請手動重新整理；若仍失敗，請截圖 console 與 ' +
-            'chrome://serviceworker-internals 回報。'
-          : 'The page took too long to load: reload it manually; if it ' +
-            'still fails, capture the console and ' +
-            'chrome://serviceworker-internals and report them.';
+          ? '網頁載入逾時：請手動重新整理。異常已自動記錄回報。'
+          : 'The page took too long to load: reload it manually. The ' +
+            'failure was recorded and reported automatically.';
         notice.style.cssText = 'position:fixed;left:50%;top:14px;' +
           'transform:translateX(-50%);z-index:2147483647;' +
           'padding:8px 14px;border-radius:8px;font:13px/1.4 system-ui;' +
