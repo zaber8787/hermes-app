@@ -69,6 +69,9 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.apiM028: 'Failed to create the conversation',
   MessageKey.apiM029:
       'The Discord bridge is unavailable; the message was kept on the server but not delivered.',
+  MessageKey.apiM030:
+      'The web relay reached the gateway but it did not answer in time '
+      '(HTTP 504). Retry shortly.',
   MessageKey.diagnosticsM001: 'The diagnostics file could not be written',
   MessageKey.attachmentM001:
       'The attachment receipt is missing a valid artifact_id; retry the upload.',
@@ -740,6 +743,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.apiM027: '伺服器未接受插話',
   MessageKey.apiM028: '建立對話失敗',
   MessageKey.apiM029: 'Discord 通道暫時無法使用，訊息已保留在伺服器但尚未送達。',
+  MessageKey.apiM030:
+      '網頁中繼連到 gateway，但它沒有及時回應（HTTP 504），請稍後重試。',
   MessageKey.diagnosticsM001: '診斷檔寫入失敗',
   MessageKey.attachmentM001: '附件收據缺少有效 artifact_id，請重試上傳。',
   MessageKey.attachmentM002: '附件尚未上傳完成。',

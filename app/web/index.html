@@ -31,6 +31,40 @@
 
   <title>hermes_app</title>
   <link rel="manifest" href="manifest.json">
+  <script id="hermes-share-entry">
+    // TASK-WEBUX2 B-B: a shared entry carries the pair in the FRAGMENT only
+    // (#token=..&server=..) — a query string would land in serve.py's access
+    // log (ticket §6: no token in logs). Fragments are never sent to the
+    // server at all. The values are written straight into the storage the
+    // app itself reads (key_vault_web.dart prefix + shared_preferences_web
+    // prefix/json encoding), then the fragment is dropped before any code
+    // can observe it. A '#/chat?..' launch link is NOT an entry: never
+    // touch it (run_link.dart owns that shape and rejects secrets anyway).
+    (function () {
+      var h = location.hash;
+      if (!h || h.indexOf('token=') < 0 || h.indexOf('#/') === 0) return;
+      history.replaceState(history.state, '',
+        location.pathname + location.search);
+      var q = new URLSearchParams(h.replace(/^#/, ''));
+      var token = (q.get('token') || '').trim();
+      var server = (q.get('server') || '').trim();
+      if (!token || /\s/.test(token)) return;
+      try {
+        window.localStorage.setItem('hermes.vault.server.key', token);
+        if (/^https?:\/\//.test(server)) {
+          // shared_preferences_web stores JSON-encoded values under
+          // 'flutter.<key>' (shared_preferences_web.dart:26,93,265).
+          window.localStorage.setItem('flutter.server.url',
+            JSON.stringify(server));
+        }
+      } catch (e) {
+        // Quota/private-mode failure: the manual form still works. The
+        // token itself is never logged.
+        console.warn('hermes-web: shared entry could not be stored',
+          e && e.name);
+      }
+    })();
+  </script>
 </head>
 <body>
   <!--
@@ -97,6 +131,41 @@
       }
       if (document.readyState === 'complete') start();
       else window.addEventListener('load', start);
+    })();
+  </script>
+  <script id="hermes-boot-watchdog">
+    // TASK-WEBUX2 B: if main.dart.js (or the service-worker activation wait
+    // in front of it) never produces a first frame, no Dart-side timeout
+    // exists that could report it — the user just stares at a blank page.
+    // This watchdog only shows a visible notice; it never navigates or
+    // reloads on its own ("No silent navigation" above applies to it too).
+    (function () {
+      var BOOT_MS = 20000, booted = false, notice = null;
+      function zh() {
+        return (document.documentElement.lang || navigator.language || '')
+          .toLowerCase().indexOf('zh') === 0;
+      }
+      window.addEventListener('flutter-first-frame', function () {
+        booted = true;
+        if (notice) notice.remove();
+      });
+      setTimeout(function () {
+        if (booted || notice || !document.body) return;
+        notice = document.createElement('div');
+        notice.id = 'hermes-boot-watchdog-notice';
+        notice.setAttribute('role', 'status');
+        notice.textContent = zh()
+          ? '網頁載入逾時：請手動重新整理；若仍失敗，請截圖 console 與 ' +
+            'chrome://serviceworker-internals 回報。'
+          : 'The page took too long to load: reload it manually; if it ' +
+            'still fails, capture the console and ' +
+            'chrome://serviceworker-internals and report them.';
+        notice.style.cssText = 'position:fixed;left:50%;top:14px;' +
+          'transform:translateX(-50%);z-index:2147483647;' +
+          'padding:8px 14px;border-radius:8px;font:13px/1.4 system-ui;' +
+          'background:#1b1b1bee;color:#fff;box-shadow:0 2px 10px #0006';
+        document.body.appendChild(notice);
+      }, BOOT_MS);
     })();
   </script>
 </body>

@@ -36,6 +36,10 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
   // A descriptor, never a translated string: it re-renders when the UI
   // language changes while this page stays open (I18N-PLAN §4.5).
   UiMessage? feedback;
+  // TASK-WEBUX2 B: the ticket-fixed failure class ('err-unreachable' /
+  // 'err-upstream' / 'err-token') of the CURRENT feedback, read from
+  // ApiException.connectErrorKey. Drives the retry affordance's presence.
+  String? _feedbackKey;
 
   @override
   void initState() {
@@ -143,6 +147,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     setState(() {
       busy = true;
       feedback = null;
+      _feedbackKey = null;
     });
     HermesRepository? repo;
     try {
@@ -150,8 +155,11 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
       repo =
           widget.repositoryFactory?.call(s.url, s.key) ??
           HermesRepository(s.url, s.key);
-      await repo.checkCapabilities();
-      final alive = await repo.health();
+      // TASK-WEBUX2 B: the ticket's bounded retry (3 retries, 1s/2s/4s)
+      // lives in the repository and covers ONLY these two metadata probes —
+      // never a chat/SSE path.
+      await repo.checkCapabilitiesWithRetry();
+      final alive = await repo.healthWithRetry();
       if (mounted) {
         setState(
           () => feedback = alive
@@ -164,7 +172,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     } on FormatException catch (e) {
       if (mounted) setState(() => feedback = UiRaw(e.message));
     } on ApiException catch (e) {
-      if (mounted) setState(() => feedback = e.uiMessage);
+      // TASK-WEBUX2 B: carry the failure class so the typed affordance
+      // (retry button for reachability/upstream) can render next to it.
+      if (mounted) {
+        setState(() {
+          feedback = e.uiMessage;
+          _feedbackKey = e.connectErrorKey;
+        });
+      }
     } catch (_) {
       if (mounted) {
         setState(
@@ -181,6 +196,7 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     setState(() {
       busy = true;
       feedback = null;
+      _feedbackKey = null;
     });
     try {
       final next = validated();
@@ -332,6 +348,9 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 enabled: !busy,
                 keyboardType: TextInputType.url,
                 autocorrect: false,
+                // TASK-WEBUX2 B-B: a re-filled token must cost nothing —
+                // Tab/Enter walks URL -> key -> save instead of the mouse.
+                textInputAction: TextInputAction.next,
                 decoration: InputDecoration(
                   labelText: strings.resolve(MessageKey.settingsServerUrl),
                   border: const OutlineInputBorder(),
@@ -344,6 +363,14 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
                 obscureText: obscure,
                 autocorrect: false,
                 enableSuggestions: false,
+                // TASK-WEBUX2 B-B: a fresh profile lands with an empty key —
+                // focus it straight away; Enter submits (save was always the
+                // primary action, this only removes the click).
+                autofocus: key.text.isEmpty,
+                textInputAction: TextInputAction.done,
+                onSubmitted: (_) {
+                  if (!busy) save();
+                },
                 decoration: InputDecoration(
                   labelText: strings.resolve(MessageKey.settingsApiKey),
                   border: const OutlineInputBorder(),
@@ -435,7 +462,29 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
               if (feedback != null)
                 Padding(
                   padding: const EdgeInsets.only(bottom: 16),
-                  child: LocalizedText(feedback!),
+                  // TASK-WEBUX2 B: a connection-class failure carries its
+                  // ticket-fixed ValueKey so the outcome is identifiable.
+                  // The local keeps the key ValueKey<String>: an unpromoted
+                  // String? field would build ValueKey<String?>, and
+                  // ValueKey equality is runtime-type-sensitive.
+                  child: () {
+                    final fk = _feedbackKey;
+                    return fk == null
+                        ? LocalizedText(feedback!)
+                        : KeyedSubtree(
+                            key: ValueKey(fk),
+                            child: LocalizedText(feedback!),
+                          );
+                  }(),
+                ),
+              // Reachability and relay timeouts are worth a second click;
+              // a rejected key is not (re-typing is the fix there).
+              if (_feedbackKey == 'err-unreachable' ||
+                  _feedbackKey == 'err-upstream')
+                TextButton(
+                  key: const ValueKey('retry-button'),
+                  onPressed: busy ? null : test,
+                  child: Text(strings.resolve(MessageKey.sessionsM011)),
                 ),
               OutlinedButton.icon(
                 onPressed: busy ? null : test,

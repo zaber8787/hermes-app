@@ -48,6 +48,10 @@ enum MessageKey {
   apiM027,
   apiM028,
   apiM029,
+
+  /// TASK-WEBUX2 B: the web relay reached the gateway but no response
+  /// headers arrived in time (relayed HTTP 504) — retry-able.
+  apiM030,
   settingsM001,
   settingsM002,
   settingsM003,

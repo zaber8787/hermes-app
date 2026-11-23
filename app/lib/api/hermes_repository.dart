@@ -78,6 +78,34 @@ class ApiException implements Exception, UiCarriesMessage {
   String get message =>
       _rawMessage ?? AppStrings(AppLocale.en).render(uiMessage);
 
+  /// TASK-WEBUX2 B: connection-failure class for the UI (the ValueKey names
+  /// the ticket fixes). Null for everything that is not a reachability,
+  /// gateway or credential problem.
+  String? get connectErrorKey {
+    if (status == 401 || _key == MessageKey.apiM006) return 'err-token';
+    if (status == 504 || _key == MessageKey.apiM030) return 'err-upstream';
+    const unreachable = {
+      MessageKey.apiM001,
+      MessageKey.apiM002,
+      MessageKey.apiM003,
+      MessageKey.apiM004,
+      MessageKey.apiM005,
+      MessageKey.apiM008,
+    };
+    return unreachable.contains(_key) ? 'err-unreachable' : null;
+  }
+
+  /// TASK-WEBUX2 B: worth retrying with a bounded backoff. A rejected key
+  /// (401) and a broken handshake/certificate never heal by retrying.
+  bool get isTransient => const {
+        MessageKey.apiM001,
+        MessageKey.apiM002,
+        MessageKey.apiM004,
+        MessageKey.apiM005,
+        MessageKey.apiM008,
+        MessageKey.apiM030,
+      }.contains(_key);
+
   @override
   String toString() => _key != null
       ? 'ApiException(${_key.name}${status != null ? ', HTTP $status' : ''})'
@@ -282,8 +310,15 @@ class HermesRepository {
       }
       await response.stream.drain<void>().timeout(budget);
       // Do not expose reflected key or private server body in the UI/logs.
+      // TASK-WEBUX2 B: a gateway that answered no headers within the relay's
+      // window arrives as 504 and gets its own retry-able descriptor — but
+      // only on the short-metadata path; SSE keeps apiM007 (SSE exemption).
       throw ApiException.local(
-        response.statusCode == 401 ? MessageKey.apiM006 : MessageKey.apiM007,
+        response.statusCode == 401
+            ? MessageKey.apiM006
+            : (response.statusCode == 504 && !sse
+                  ? MessageKey.apiM030
+                  : MessageKey.apiM007),
         status: response.statusCode,
       );
     }
@@ -338,6 +373,41 @@ class HermesRepository {
       return true;
     } catch (_) {
       return false;
+    }
+  }
+
+  /// TASK-WEBUX2 B: the ticket-fixed bounded backoff (3 retries, 1s/2s/4s).
+  /// Deliberately NOT folded into [checkCapabilities]/[health] themselves:
+  /// the boot path already retries through riverpod's defaultRetry, and
+  /// nesting would multiply attempts to 44 per boot. Only the Settings
+  /// connection test (token submit) calls these; SSE/chat never do.
+  static const connectRetryDelays = <Duration>[
+    Duration(seconds: 1),
+    Duration(seconds: 2),
+    Duration(seconds: 4),
+  ];
+
+  /// [checkCapabilities] with the bounded connect retry. Transient failures
+  /// (timeout, unreachable, relayed 504) retry; 401 and parse errors raise
+  /// immediately with their typed descriptor.
+  Future<void> checkCapabilitiesWithRetry() async {
+    for (var attempt = 0;; attempt++) {
+      try {
+        return await checkCapabilities();
+      } on ApiException catch (e) {
+        if (!e.isTransient || attempt >= connectRetryDelays.length) rethrow;
+        await Future<void>.delayed(connectRetryDelays[attempt]);
+      }
+    }
+  }
+
+  /// [health] with the bounded connect retry; false only after the full
+  /// ladder (health swallows its own errors, so re-probe rather than catch).
+  Future<bool> healthWithRetry() async {
+    for (var attempt = 0;; attempt++) {
+      if (await health()) return true;
+      if (attempt >= connectRetryDelays.length) return false;
+      await Future<void>.delayed(connectRetryDelays[attempt]);
     }
   }
 
