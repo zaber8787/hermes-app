@@ -160,3 +160,9 @@ web/cjk-mirror/
 
 # TASK-STEPSRENDER evidence/scratch (never commit)
 .stepsrender-evidence/
+
+# TASK-WEBUX2 evidence/scratch (never commit)
+.webux2-evidence/
+
+# TASK-WEBUX3 evidence/scratch (never commit)
+.webux3-evidence/

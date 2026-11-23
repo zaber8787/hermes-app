@@ -365,8 +365,19 @@ class HermesRepository {
         all[s.id] = s;
       }
       sessionsPreview.value = _sortSessions(all.values);
-      offset += page.length;
-      if (page.length < 500) break;
+      final more = json['has_more'];
+      if (more is bool) {
+        // TASK-WEBUX2 A: gateway clamps limit (api_server.py:3019) and
+        // back-fills pins past the window (hermes_state_sessions.py:1416+),
+        // so page.length would over-advance the offset and drop rows.
+        // Advance by the echoed window instead; stop exactly on has_more.
+        final window = (json['limit'] as num?)?.toInt() ?? page.length;
+        if (!more || page.isEmpty || window <= 0) break;
+        offset += window;
+      } else {
+        offset += page.length; // legacy server without has_more: unchanged
+        if (page.length < 500) break;
+      }
     }
     // Contract only guarantees started_at on session rows. OPENPERF P3:
     // a row that carries its own last-activity needs NO per-session

@@ -902,6 +902,15 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                 final hiddenCount = rows
                     .where((s) => _effHidden(s, server, store))
                     .length;
+                // TASK-WEBUX2 A: hidden ids the mirror/legacy freeze knows
+                // but the returned list never carried — the gateway withholds
+                // them (policy api_server.py:3023-3027). Same key
+                // LocalStore._hiddenSet reads (local_store.dart:1226).
+                final returnedIds = {for (final s in rows) s.id};
+                final withheld = <String>{
+                  ...?store.prefs.getStringList('hidden.$server'),
+                  ..._legacy,
+                }.difference(returnedIds).length;
                 final pinnedCount = rows.where((s) => s.pinned).length;
                 final visible = rows.where((s) {
                   if (onlyPinned && !s.pinned) return false;
@@ -1022,6 +1031,19 @@ class _SessionsPageState extends ConsumerState<SessionsPage> {
                                 ),
                               ],
                             ),
+                            // TASK-WEBUX2 A: an honest note replaces the
+                            // silent missing rows while NEEDS_CORE holds.
+                            if (showHidden && withheld > 0)
+                              Padding(
+                                key: const ValueKey('hidden-not-returned'),
+                                padding: const EdgeInsets.only(top: 4),
+                                child: LocalizedText(
+                                  UiMessage.local(
+                                    MessageKey.sessionsHiddenNotReturned,
+                                    args: {'count': withheld},
+                                  ),
+                                ),
+                              ),
                             const SizedBox(height: 4),
                             // BULK-HIDE B4 selection toolbar: count (+ outside
                             // note), union-select-all, clear — never a silent

@@ -361,6 +361,10 @@ enum MessageKey {
   sessionsM014,
   sessionsM015,
   sessionsM016,
+
+  /// TASK-WEBUX2 A: hidden ids the local mirror knows but the gateway
+  /// withheld from the list (policy api_server.py:3023-3027).
+  sessionsHiddenNotReturned,
   sessionsM017,
   sessionsM018,
   sessionsM019,

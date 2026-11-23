@@ -552,6 +552,9 @@ const Map<MessageKey, String> catalogEn = {
   MessageKey.sessionsM014: 'All',
   MessageKey.sessionsM015: 'Favorites ({count})',
   MessageKey.sessionsM016: 'Show hidden ({count})',
+  MessageKey.sessionsHiddenNotReturned:
+      '{count} hidden conversations were not returned by the server: the '
+      'gateway policy does not list hidden conversations to this client.',
   MessageKey.sessionsM017: 'There are no conversations to browse.',
   MessageKey.sessionsM018: 'No conversations match “{query}”.',
   MessageKey.sessionsM019: '{count} conversation · most recent activity first',
@@ -1117,6 +1120,8 @@ const Map<MessageKey, String> catalogZhHant = {
   MessageKey.sessionsM014: '全部',
   MessageKey.sessionsM015: '最愛（{count}）',
   MessageKey.sessionsM016: '顯示已隱藏（{count}）',
+  MessageKey.sessionsHiddenNotReturned:
+      '有 {count} 個已隱藏的對話未由伺服器回傳：gateway 政策不對此用戶端列出已隱藏的對話。',
   MessageKey.sessionsM017: '目前沒有可瀏覽的對話。',
   MessageKey.sessionsM018: '找不到符合「{query}」的對話。',
   MessageKey.sessionsM019: '{count} 段對話 · 最近活躍優先',
