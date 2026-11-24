@@ -263,6 +263,8 @@ enum MessageKey {
   commandsM028,
   commandsM029,
   commandsM030,
+  commandsM031,
+  commandsM032,
   commandsContextHeader,
   commandsContextUnknown,
   commandsContextModel,

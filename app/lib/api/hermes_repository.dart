@@ -606,6 +606,16 @@ class HermesRepository {
     }
   }
 
+  /// CMD-ROUTE: manual context compression for the slash command. Servers
+  /// without the compat route answer 404/405; the caller renders the catalog
+  /// notice rather than pretending it worked.
+  Future<Json> compressContext(String sid) => _json(
+    'POST',
+    '/api/sessions/${Uri.encodeComponent(sid)}/compress',
+    body: const {},
+    deadline: metadataTimeout,
+  );
+
   /// Reserve a batch: dedup (already-consumed rows report `already`), quota,
   /// busy, causal-suspect checks all happen in ONE server transaction.
   Future<Json> wakeAdmit(String sid, List<String> deliveryKeys) async {

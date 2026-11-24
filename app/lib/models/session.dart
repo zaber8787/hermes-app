@@ -132,12 +132,14 @@ const essentialSkillNames = {'hermes-agent'};
 /// 攔截，模型看得到 slash 語意會解釋/代辦）。列進清單與放行，避免指令
 /// 「看不到也不能用」。Descriptions are catalog keys (I18N-PLAN §4.4): the
 /// slash names stay literal; each description resolves at render time.
+///
+/// CMD-ROUTE: `sessions` 與 `compress` 不在此列。它們的語意是「做一件事」，
+/// 直通給模型只會換來一段解釋文（實測：/compress 被當成聊天），所以改由
+/// clientCommandsProvider 落地執行。
 const gatewayPassthroughCommands = <(String, MessageKey)>[
   ('help', MessageKey.sessionM001),
-  ('sessions', MessageKey.sessionM002),
   ('resume', MessageKey.sessionM003),
   ('title', MessageKey.sessionM004),
-  ('compress', MessageKey.sessionM005),
   ('retry', MessageKey.sessionM006),
   ('usage', MessageKey.sessionM007),
   ('memory', MessageKey.sessionM008),
@@ -159,6 +161,9 @@ const appHandledCommands = {
   // /status 已改由 client 落地（clientCommandsProvider）；再進 rewrite
   // 就是繞過本地 handler，必須擋掉。
   'status',
+  // CMD-ROUTE: /sessions 開列表、/compress 打壓縮端點，都是動作不是提問。
+  'sessions',
+  'compress',
 };
 
 /// Contract §5. Core commands are handled by the UI and must NEVER become prompts.

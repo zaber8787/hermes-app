@@ -34,6 +34,11 @@ void main() {
       // app 端攔下執行的指令若落到 rewrite（如被堆疊），也不能當訊息送出
       '/reset',
       '/reset /grill-me x',
+      // CMD-ROUTE: /sessions 與 /compress 是動作，直通就會換來模型的一段
+      // 解釋文（實測缺陷），所以它們必須走 client handler，不落 rewrite。
+      '/sessions',
+      '/compress',
+      '/compress /grill-me x',
     ]) {
       expect(() => rewriteSkills(input, skills), throwsFormatException);
     }

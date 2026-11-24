@@ -10,6 +10,7 @@ import '../../l10n/message_key.dart';
 import '../../l10n/ui_message.dart';
 import '../../providers.dart';
 import '../../models/session_activity.dart';
+import '../sessions/sessions_page.dart';
 import 'chat_controller.dart';
 import 'chat_page.dart';
 import 'viewers.dart';
@@ -392,6 +393,51 @@ final clientCommandsProvider = Provider<List<ClientCommand>>((ref) {
     return true;
   }
 
+  /// CMD-ROUTE: /sessions — the list is a screen, not a question for the
+  /// model. Push (not replace) so the back gesture returns to the chat.
+  Future<bool> showSessions(
+    BuildContext context,
+    WidgetRef ref,
+    ChatController chat,
+    _,
+  ) async {
+    if (!context.mounted) return true;
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(builder: (_) => const SessionsPage()),
+    );
+    return true;
+  }
+
+  /// CMD-ROUTE: /compress — an action, so it must either do the work or say
+  /// it could not. A server without the route fails the call, and the notice
+  /// says so; we never forward the slash text to the model as a prompt.
+  Future<bool> compressContext(
+    BuildContext context,
+    WidgetRef ref,
+    ChatController chat,
+    _,
+  ) async {
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    var ok = false;
+    try {
+      await ref.read(repositoryProvider).compressContext(chat.sid);
+      ok = true;
+    } catch (_) {
+      /* rendered as the catalog notice below */
+    }
+    if (!context.mounted) return true;
+    messenger?.showSnackBar(
+      SnackBar(
+        content: LocalizedText(
+          UiMessage.local(
+            ok ? MessageKey.commandsM031 : MessageKey.commandsM032,
+          ),
+        ),
+      ),
+    );
+    return true;
+  }
+
   return [
     ClientCommand(
       'reset',
@@ -411,5 +457,12 @@ final clientCommandsProvider = Provider<List<ClientCommand>>((ref) {
       worksWhileBusy: true,
       run: showStatus,
     ),
+    ClientCommand(
+      'sessions',
+      MessageKey.sessionM002,
+      worksWhileBusy: true,
+      run: showSessions,
+    ),
+    ClientCommand('compress', MessageKey.sessionM005, run: compressContext),
   ];
 });
